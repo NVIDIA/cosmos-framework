@@ -264,7 +264,7 @@ def parse_jsonl_annotations(annotation_path, data_root=None):
                 annotations.append({
                     'image': image_path,  # Relative path
                     'image_path': full_image_path,  # Full path
-                    'image_id': f"{line_num}",  # TODO(yuw): add category? _{category}
+                    'image_id': f"{line_num}",  # TODO: add category? _{category}
                     'bboxes': bboxes,  # List of bboxes in xyxy format
                     'sentence': category,  # Category name as the grounding query
                     'category': category,
@@ -539,8 +539,8 @@ class Metropolis2DGroundingDataset(ImageBaseDataset):
                 print(f"copying dataset from {self.data_root} to {dataset_dir_path}")
                 s3 = S3FileSystem(
                     anon=False,
-                    profile='team-cosmos',
-                    client_kwargs={'endpoint_url': 'https://pdx.s8k.io'}
+                    profile=os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE'),
+                    client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
                 )
                 s3.get(self.data_root, str(dataset_dir_path), recursive=True)
                 print(f"Successfully downloaded dataset from S3")
@@ -555,8 +555,8 @@ class Metropolis2DGroundingDataset(ImageBaseDataset):
                 if s3 is None:
                     s3 = S3FileSystem(
                         anon=False,
-                        profile='team-cosmos',
-                        client_kwargs={'endpoint_url': 'https://pdx.s8k.io'}
+                        profile=os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE'),
+                        client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
                     )
                 local_anno_path.parent.mkdir(parents=True, exist_ok=True)
                 s3.get(s3_anno_url, str(local_anno_path))

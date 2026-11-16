@@ -56,7 +56,7 @@ class Topology:
 
 
 def _rack(host: str) -> str:
-    """``nvl72D167-T15`` -> ``nvl72D167``; hosts without a tray suffix are their own rack."""
+    """``rack07-T15`` -> ``rack07``; hosts without a tray suffix are their own rack."""
     match = re.match(r"^(.*?)-T\d+", host)
     return match.group(1) if match else host
 

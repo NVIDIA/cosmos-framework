@@ -1,4 +1,4 @@
-# `roles/env/` is the Env-as-source subpackage (DESIGN §1.3), not a virtualenv.
+# `roles/env/` is the Env-as-source subpackage, not a virtualenv.
 # Override the repo-root `env/` ignore so its sources are tracked.
 !roles/env/
 !roles/env/**

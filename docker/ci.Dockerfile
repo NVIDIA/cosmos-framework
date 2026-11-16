@@ -1,15 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# This Dockerfile is used in the cosmos3.yml pipeline.
+# CI image.
 #
 # Build:
-#   docker build --build-arg CUDA_VERSION=12.8.1 -f packages/cosmos3/docker/ci.Dockerfile -t nvcr.io/nvidian/cosmos3-ci:v0.1.0 .
-#   docker build --build-arg CUDA_VERSION=13.0.2 -f packages/cosmos3/docker/ci.Dockerfile -t nvcr.io/nvidian/cosmos3-ci:v0.1.0_arm .
-#
-# **Latest container tags:**
-# * x86_64: nvcr.io/nvidian/cosmos3-ci:v0.1.0
-# * arm64:  nvcr.io/nvidian/cosmos3-ci:v0.1.0_arm
+#   docker build --build-arg CUDA_VERSION=12.8.1 -f docker/ci.Dockerfile -t cosmos3-ci:v0.1.0 .
+#   docker build --build-arg CUDA_VERSION=13.0.2 -f docker/ci.Dockerfile -t cosmos3-ci:v0.1.0_arm .
 
 ARG CUDA_VERSION=13.0.2
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04

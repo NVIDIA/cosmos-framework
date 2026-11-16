@@ -161,8 +161,7 @@ const uint CAMERA_TYPE_BEV     = 1u;
 // Hardcoded Primitive Styles (matching wm-render colorscheme v3)
 //=============================================================================
 
-// Colors (RGB normalized) - matching imaginaire4 v3 colorscheme
-// Source: imaginaire4/imaginaire/auxiliary/world_scenario/color_scheme/config_color_hdmap.json
+// Colors (RGB normalized) - matching the renderer colorscheme
 const vec3 COLOR_ROAD_BOUNDARY   = vec3(253.0/255.0, 1.0/255.0, 232.0/255.0);   // Magenta (253, 1, 232)
 const vec3 COLOR_LANE_LINE       = vec3(98.0/255.0, 183.0/255.0, 249.0/255.0);  // Cyan (98, 183, 249) - "lanelines" (legacy)
 const vec3 COLOR_CROSSWALK       = vec3(139.0/255.0, 93.0/255.0, 255.0/255.0);  // Purple (139, 93, 255)

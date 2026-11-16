@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""NIXL weight transport over Ray Direct Transport (design 2026-08-12-nixl-transport).
+"""NIXL weight transport over Ray Direct Transport.
 
-EVERY ray / nixl / cuda-python / cupy import is FUNCTION-SCOPED: the i4 container ships none
+EVERY ray / nixl / cuda-python / cupy import is FUNCTION-SCOPED: the training container ships none
 of them, and this module is reachable from `workers/`, so a module-scope import would break
 every posttrain run with a failure far from its cause. `nixl_available()` reports;
 `NixlTransport.get()` raises.
@@ -91,7 +91,7 @@ def _fabric_buffer(nbytes: int):
 
     Plain cudaMalloc memory — what `torch.empty` returns — exports only LEGACY node-local CUDA
     IPC handles, so cross-node `cuda_ipc` SILENTLY falls back to RDMA: measured 143 GB/s vs
-    1686 GB/s, with no error and no warning (design §2.3). Cross-node NVLink requires
+    1686 GB/s, with no error and no warning. Cross-node NVLink requires
     CU_MEM_HANDLE_TYPE_FABRIC + gpuDirectRDMACapable. Mirrors nixlbench's `--enable_vmm` path.
 
     Args:
@@ -189,7 +189,7 @@ class NixlTransport:
 
     Shared across movers because Ray's `get_tensor_transport_manager("NIXL")` is itself a
     lock-guarded per-process singleton (`ray/experimental/rdt/util.py:125`) — two movers cannot
-    each own one (design §2). Owns no per-plane state beyond the staging buffer.
+    each own one. Owns no per-plane state beyond the staging buffer.
     """
 
     def __init__(self):
@@ -229,7 +229,7 @@ class NixlTransport:
 
         RDT runs transfers on the actor's `_ray_system` thread, which has no CUDA context
         bound, so without this the FIRST transfer in a fresh cluster dies with
-        `NIXL_ERR_BACKEND` (design §2). Idempotent.
+        `NIXL_ERR_BACKEND`. Idempotent.
         """
         # Under _lock: reading self._warm outside it is a check-then-act, so two callers could
         # both observe False and both run the body. Harmless while the body is idempotent, and
@@ -249,7 +249,7 @@ class NixlTransport:
     def reserve(self, nbytes: int) -> None:
         """Record the staging-buffer size movers in this process should allocate.
 
-        Called at bind with `max(bucket bytes)` over the WHOLE plan (design §2.2). A buffer is
+        Called at bind with `max(bucket bytes)` over the WHOLE plan. A buffer is
         registered and pinned once allocated and cannot grow, so sizing from the first bucket
         rather than the plan maximum would fail on any later, larger bucket.
         """
@@ -318,7 +318,7 @@ class NixlTransport:
 
 
 class NixlWeightMover:
-    """Weight-plane mover over Ray RDT (design §3).
+    """Weight-plane mover over Ray RDT.
 
     STAGED because NIXL is one-sided: `pull_stream_from_peer` takes the same synchronous
     per-bucket branch as Copy/Ipc (`weight_transfer.py:409-421`) and never enters the COLLECTIVE
@@ -326,9 +326,9 @@ class NixlWeightMover:
     producer inside a broadcast until the 300 s timeout.
 
     Publishes ONE flat tensor per bucket rather than one per parameter: `ray.put` is
-    per-descriptor (~0.31 ms/tensor measured) and a real 512 MiB bucket holds 100-200 tensors
-    (design §3.2). The layout rides `handle.meta["plan"]`, which is also exactly what a
-    TP-sharded sink needs — so there is no separate `recv_plan` seam (design §3.4).
+    per-descriptor (~0.31 ms/tensor measured) and a real 512 MiB bucket holds 100-200 tensors.
+    The layout rides `handle.meta["plan"]`, which is also exactly what a
+    TP-sharded sink needs — so there is no separate `recv_plan` seam.
     """
 
     lifetime = "staged"
@@ -336,7 +336,7 @@ class NixlWeightMover:
 
     def __init__(self):
         # PERSISTENT across syncs: `wait_tensor_freed` keys on id(tensor), and `_wait_free`
-        # must target the object published LAST sync (design §4.1).
+        # must target the object published LAST sync.
         self._views: list = []
         # This mover's OWN staging buffer — not shared with any other mover in the process, so
         # `_wait_free()` reasoning over `self._views` covers every publication that can touch
@@ -367,7 +367,7 @@ class NixlWeightMover:
 
         # MUST precede the self._views reassignment below: it waits on the PREVIOUS sync's
         # published object, and nothing else bounds the window in which a one-sided peer may
-        # still be reading the buffer we are about to overwrite (design §4).
+        # still be reading the buffer we are about to overwrite.
         self._wait_free()
 
         plan = flat_plan(obj)
@@ -382,7 +382,7 @@ class NixlWeightMover:
             raise RuntimeError(
                 f"staging buffer is {self._buf.numel()} bytes but this bucket needs {need}; it is "
                 f"registered and pinned for the process lifetime, so it cannot grow. Size it from "
-                f"max(bucket bytes) over the WHOLE plan at bind, not the first bucket (design §2.2)."
+                f"max(bucket bytes) over the WHOLE plan at bind, not the first bucket."
             )
         buf = self._buf
         flat = pack(obj, plan, buf)
@@ -390,7 +390,7 @@ class NixlWeightMover:
             # Guards a refactor that publishes a live parameter instead of a view of the
             # registered buffer. The peer reads the source directly (no pool copy), so that
             # would expose live weights to one-sided reads while the trainer mutates them —
-            # silently (design §3.3).
+            # silently.
             raise RuntimeError(
                 "staged tensor is not a view of the registered staging buffer; publishing a "
                 "live parameter would expose it to one-sided reads during training"
@@ -521,7 +521,7 @@ class NixlWeightMover:
 
         NIXL is one-sided and the sender is passive — `send_multiple_tensors` raises
         `NotImplementedError` and the producer never learns its data was read — so overwriting
-        the staging buffer mid-read corrupts weights with no error on either side (design §4.3).
+        the staging buffer mid-read corrupts weights with no error on either side.
         Under the sequential stream this is nearly always already satisfied (~1 ms measured).
         """
         if not self._views:

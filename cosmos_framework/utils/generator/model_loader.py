@@ -37,15 +37,15 @@ except ImportError:  # Older filelock versions in some inference containers.
 
 from torch.distributed.checkpoint.filesystem import FileSystemReader, FileSystemWriter
 
+from cosmos_framework.checkpoint.dcp import CustomLoadPlanner, CustomSavePlanner, ModelWrapper
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader
-from cosmos_framework.utils.lazy_config import instantiate
+from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
+from cosmos_framework.model.generator.utils.safetensors_loader import load_vfm_model
 from cosmos_framework.utils import log, misc
 from cosmos_framework.utils.config_helper import get_config_module, override
 from cosmos_framework.utils.easy_io import easy_io
-from cosmos_framework.checkpoint.dcp import CustomLoadPlanner, CustomSavePlanner, ModelWrapper
-from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
-from cosmos_framework.model.generator.utils.safetensors_loader import load_vfm_model
 from cosmos_framework.utils.generator.quantization import apply_quantization_inplace
+from cosmos_framework.utils.lazy_config import instantiate
 
 ###################################################
 # below are the load_model function for inference #
@@ -59,7 +59,7 @@ def checkpoint_path_to_cached_path(
     """Cache S3 checkpoints by bucket, object key and the selected weight set."""
     if cache_rootdir is None:
         homedir = os.getenv("HOME") or ""
-        cache_rootdir = osp.join(homedir, ".cache/imaginaire4/checkpoints/")
+        cache_rootdir = osp.join(homedir, ".cache/cosmos-framework/checkpoints/")
 
     if path.startswith("s3://"):
         return osp.join(cache_rootdir, "ema" if load_ema_to_reg else "regular", path.removeprefix("s3://"))
@@ -363,7 +363,7 @@ def load_model_from_checkpoint(
         seed: Random seed used for initialization (if applicable).
         experiment_opts: Extra experiment/config override options.
         use_cache_checkpoint: If True, locally save & read remote checkpoints to speed up repeated loads.
-            The default cache path is $HOME/.cache/imaginaire4/checkpoints/<regular|ema>/<bucket>/<object key>.
+            The default cache path is $HOME/.cache/cosmos-framework/checkpoints/<regular|ema>/<bucket>/<object key>.
             Legacy caches without weight-set and bucket identity are left intact but not reused.
             Applies to the DCP path only; for safetensors checkpoints a warning is logged
             and caching is skipped (the DCP write cache is not a meaningful round-trip for
@@ -374,7 +374,7 @@ def load_model_from_checkpoint(
             For DCP this is forwarded as-is to ``CustomLoadPlanner`` (substring match).  For
             safetensors each substring is escaped and wrapped as ``.*<substring>.*`` so that
             ``load_vfm_model``'s ``re.fullmatch``-based ``skip_patterns`` reproduces the
-            substring semantics one-for-one. This option is incompatible with FSDP CPU offload,
+            substring semantics one-for-one. This option is incompatible with CPU offload,
             which requires the checkpoint load to initialize every parameter.
 
         load_lidar_tokenizer: Keep the configured LiDAR tokenizer by default. RGB-only
@@ -413,9 +413,12 @@ def load_model_from_checkpoint(
             else:
                 raise ValueError(f"Key {key} not found in config.model.config.parallelism")
 
-    if getattr(config.model.config.parallelism, "fsdp_cpu_offload", False) and keys_to_skip_loading:
+    preserve_cpu_placement = getattr(config.model.config.parallelism, "fsdp_cpu_offload", False) or getattr(
+        config.model.config.parallelism, "inference_cpu_initialization", False
+    )
+    if preserve_cpu_placement and keys_to_skip_loading:
         raise ValueError(
-            "fsdp_cpu_offload requires the checkpoint load to initialize every parameter; "
+            "CPU offload requires the checkpoint load to initialize every parameter; "
             "keys_to_skip_loading is not supported"
         )
 
@@ -462,9 +465,9 @@ def load_model_from_checkpoint(
 
     with misc.timer("instantiate model"):
         model = instantiate(config.model)
-        # FSDP CPU offload establishes mixed placement during construction;
-        # recursively moving the model would corrupt its CPU-shard DTensor aliases.
-        if not getattr(config.model.config.parallelism, "fsdp_cpu_offload", False):
+        # Preserve CPU initialization for inference offload and FSDP's mixed
+        # placement; a recursive CUDA move defeats both loading strategies.
+        if not preserve_cpu_placement:
             model = model.cuda()  # type: ignore
         model.on_train_start()
 

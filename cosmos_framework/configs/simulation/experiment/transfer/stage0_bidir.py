@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Register the whole-window Sim-Transfer teacher without importing i4."""
+"""Register the whole-window Sim-Transfer teacher without importing the upstream package."""
 
 from hydra.core.config_store import ConfigStore
 

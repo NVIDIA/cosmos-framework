@@ -32,7 +32,7 @@ Three forced deviations from the YAML literal (identical to nano):
      ``L(create_qwen2_tokenizer_with_download)(config_variant="gcp")`` so
      launcher tail overrides (``…config_variant=hf``) reach it.
   3. ``trainer.memory_format`` omitted; YAML literal was the string
-     ``preserve_format`` which the prerelease trainer can't coerce.
+     ``preserve_format`` which the trainer can't coerce.
 
 ``checkpoint.load_path`` is left as ``???``; supply via CLI / a downstream
 experiment that inherits from this one.
@@ -129,7 +129,7 @@ vision_sft_super = LazyDict(
             max_iter=500,
             max_val_iter=None,
             # YAML had `memory_format: preserve_format` as a string, but the
-            # prerelease trainer passes this verbatim to model.to(memory_format=…)
+            # the trainer passes this verbatim to model.to(memory_format=…)
             # which requires a torch.memory_format enum (not a string).
             # Omit and let the framework default apply, matching what
             # vision_sft_nano.py / mixed_modality_sft_nano.py do.

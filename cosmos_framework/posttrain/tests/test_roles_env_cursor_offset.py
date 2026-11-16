@@ -132,7 +132,7 @@ def test_dataset_config_cursor_fields_validate() -> None:
         DatasetConfig(path="/pool.jsonl", prompt_column="messages", cursor_offset=-1)
     with pytest.raises(TypeError, match="rl.data.cursor_shards must be an integer"):
         DatasetConfig(path="/pool.jsonl", prompt_column="messages", cursor_shards=True)  # type: ignore[arg-type]
-    # Review of 983201ea253 (thread 157e699e): an offset without its shard count left the topology check off, so a
+    # An offset without its shard count left the topology check off, so a
     # continuation that changed its replica count served a different sequence unnoticed; the pair is required together.
     with pytest.raises(ValueError, match="rl.data.cursor_offset=5 requires rl.data.cursor_shards"):
         DatasetConfig(path="/pool.jsonl", prompt_column="messages", cursor_offset=5)

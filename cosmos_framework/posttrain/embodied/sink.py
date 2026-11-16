@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""The trajectory sink -- the capability that does not exist on the i4 path today.
+"""The trajectory sink -- the capability that does not exist on the native path today.
 
 The b1k eval path is outcome-only: it records success, steps and metrics, and throws the
 trajectory away. Collection needs every frame. This is the seam where that difference lives.
@@ -105,7 +105,7 @@ def make_frame(
     return Transition(
         obs=ObsBundle(representations=dict(view), modality_tags=("rgb", "proprio"), id=episode_id),
         action=action,
-        # A named component, per DESIGN 1.5. "final" is left for the RL sink to fill from the
+        # A named component. "final" is left for the RL sink to fill from the
         # outcome; the per-step env reward is not a terminal signal and labelling it "final"
         # would make Trajectory.final_reward report the last step's reward as the return.
         reward={"env": float(reward)},

@@ -380,7 +380,7 @@ class ConsoleReporter(Reporter):
                 if value is not None:
                     # Keep the complete canonical stage/key label; train and val loss can coexist.
                     # A magnitude below 1e-3 (a learning rate of 1e-5) prints as +0.0000 at four decimals; show it in
-                    # scientific notation instead (review R121B-01). Zero stays +0.0000.
+                    # scientific notation instead. Zero stays +0.0000.
                     parts.append(f"{k} {value:+.4f}" if value == 0 or abs(value) >= 1e-3 else f"{k} {value:+.3e}")
         logger.info("  ".join(parts))
 
@@ -392,14 +392,14 @@ class JsonlReporter(Reporter):
     protocol merges its train and validation payloads before the commit. Bounded by construction (one line per step,
     no per-iteration files), it is the run directory's record of what the console line only summarises: with W&B off,
     ``train/grad_norm``, ``train/learning_rate``, ``train/valid_token_count`` and the step time were computed every step
-    and recorded nowhere (review R125-B-03), so whether the clip was active on a run could not be read after the fact.
+    and recorded nowhere, so whether the clip was active on a run could not be read after the fact.
 
     Attempts: the run directory is reused across relaunches, and a relaunch resumes from the last checkpoint, which may
     be older than the last committed row (a crash past the last save). ``keep_through`` is the step the attempt resumes
     at: ``start`` keeps the rows with ``step <= keep_through`` and drops the rest, which the attempt re-emits, so the
     file holds one row per step; ``-1`` (a fresh attempt) drops every row. The kept rows' clip record seeds
     ``prior_clip_counts`` = (clipped updates, counted updates) so ``train/grad_clip_fraction`` stays the share of the
-    run's updates rather than the attempt's (review R134-05: the append-only file held step 3 twice after a relaunch
+    run's updates rather than the attempt's (the append-only file held step 3 twice after a relaunch
     from the step-2 checkpoint and the fraction restarted).
     """
 
@@ -482,7 +482,7 @@ class WandbReporter(Reporter):
         self._run_metadata = dict(run_metadata) if run_metadata is not None else None
 
     def _persistent_run_id(self) -> str:
-        # i4 convention first: when the out_dir IS a run-attempt dir (<name>/<RUN_TS>/),
+        # upstream convention first: when the out_dir IS a run-attempt dir (<name>/<RUN_TS>/),
         # the directory name is the run identity — same string as the eval $RUN_TS, no
         # state file needed, and a fresh attempt is a fresh id (tombstone-proof).
         ts = os.path.basename(os.path.normpath(self._out_dir))

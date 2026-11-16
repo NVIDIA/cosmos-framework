@@ -91,7 +91,7 @@ def infer_data_api(model, work_dir, model_name, dataset, samples_dict={}, api_np
     structs = [dict(message=struct, dataset=dataset_name) for struct in structs]
 
     if len(structs):
-        # TODO(tsungyil): Hack. The video eval is more suitable for this new multiproces function.
+        # TODO: Hack. The video eval is more suitable for this new multiproces function.
         track_progress_rich_new(
             gen_func, structs, nproc=api_nproc, chunksize=api_nproc,
             save=out_file, keys=indices, use_process=True)

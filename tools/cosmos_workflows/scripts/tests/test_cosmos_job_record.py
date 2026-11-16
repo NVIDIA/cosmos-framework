@@ -48,7 +48,7 @@ def open_job(capsys, **overrides):
         "--storage-tier",
         "A",
         "--results-root",
-        "/lustre/fsw/users/me/results",
+        "/data/users/me/results",
         "--upload-exclude",
         "inputs/",
     ]
@@ -86,7 +86,7 @@ def test_open_writes_schema_valid_pending_record(state_dir, capsys):
     rec = read_record(state_dir, job_id)
     jsonschema.validate(rec, SCHEMA)  # M0 schema conformance
     assert rec["transitions"][0]["state"] == "PENDING"
-    assert rec["results_dir"] == f"/lustre/fsw/users/me/results/{job_id}"
+    assert rec["results_dir"] == f"/data/users/me/results/{job_id}"
     assert rec["backend_ref"] is None and rec["terminal_state"] is None
     assert rec["redacted"] is True
 
@@ -354,12 +354,12 @@ def test_rt_legit_results_dir_with_credword_segment_untouched(state_dir, capsys)
         "--storage-tier",
         "A",
         "--results-dir",
-        "/lustre/exp/token=v1/keyframes/run",
+        "/data/exp/token=v1/keyframes/run",
     ]
     assert jr.main(argv) == 0
     job_id = capsys.readouterr().out.strip()
     rec = read_record(state_dir, job_id)
-    assert rec["results_dir"] == "/lustre/exp/token=v1/keyframes/run"  # NOT corrupted
+    assert rec["results_dir"] == "/data/exp/token=v1/keyframes/run"  # NOT corrupted
 
 
 def test_rt_empty_required_fields_rejected_before_id(capsys):

@@ -7,8 +7,6 @@ A raw item flows through four independently-swappable roles in a fixed order
 enforced by the loader:
 
     DataDistributor -> RawItemProcessor -> SampleBatcher -> BatchCollator
-
-See docs/superpowers/specs/2026-06-04-modular-dataflow-refactor-design.md.
 """
 
 from __future__ import annotations

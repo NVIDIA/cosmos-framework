@@ -83,7 +83,7 @@ def test_policybody_is_not_a_generate_rollout():
         from cosmos_framework.posttrain.roles.rollout import cosmos3
 
         policy_body = cosmos3.PolicyBody
-    except Exception as exc:  # noqa: BLE001 — heavy i4/OSS policy deps may be absent on CI
+    except Exception as exc:  # noqa: BLE001 — heavy native/OSS policy deps may be absent on CI
         pytest.skip(f"PolicyBody import unavailable: {exc!r}")
 
     assert hasattr(policy_body, "infer_batch")

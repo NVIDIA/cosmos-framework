@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """
-Imaginaire4 Attention Subpackage:
+Attention Subpackage:
 Unit tests for torch.compile-safe lru_cache.
 """
 

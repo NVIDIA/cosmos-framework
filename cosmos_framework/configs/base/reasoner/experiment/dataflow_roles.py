@@ -119,12 +119,12 @@ class VLMCollator(BatchCollator):
     meta (zeros — streaming source has no position)."""
 
     def collate(self, samples: list[dict]) -> dict:
-        # Parity with i4 custom_collate: skip if already collated.
+        # Parity with upstream custom_collate: skip if already collated.
         if samples and samples[0].get("collated"):
             return samples[0]
 
         # All four sequence tensors must be present and 1-D on every sample
-        # before padding/stacking (matches i4 custom_collate). A missing key
+        # before padding/stacking (matches upstream custom_collate). A missing key
         # here would otherwise fall through to default_collate as a ragged list.
         for key in ("input_ids", "token_mask", "attention_mask", "labels"):
             assert all(key in s and s[key].ndim == 1 for s in samples), (

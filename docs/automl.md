@@ -570,10 +570,9 @@ noted above remains unresolved.
 After explicit approval, a new Framework wheel and Docker image containing the
 checkpoint guard fix were built. Only `automl/evaluate_trial.py` and
 `automl/workload.py` differed within the installed Framework package; the core
-0.2.0 wheel and native DCP loader were unchanged. Image:
-`nvcr.io/nvstaging/tao/cosmos-framework:automl-wts-cu128-promotions-20261007`,
-registry digest `sha256:6bc4f17c47ddc27e7b4319a799a2cbf3fc2818987b386aa57df01c366fd4b9a3`.
-CPU conversion job **36105691** completed in 27m11s and verified all 897 installed
+0.2.0 wheel and native DCP loader were unchanged. Image: an internal
+staging build, registry digest `sha256:6bc4f17c47ddc27e7b4319a799a2cbf3fc2818987b386aa57df01c366fd4b9a3`.
+The CPU conversion job completed in 27m11s and verified all 897 installed
 package files. SQSH conversion and GPU startup performed no package installs
 or source patches. The separate CPU controller used the same new Framework wheel.
 
@@ -871,15 +870,15 @@ reviewed wheels, including absence of omitted workflow modules. A separate Pytho
 3.12 CPU controller imported the adapter without Torch. Package versions remain
 Framework **1.2.2** and core **1.0.0.dev0**; no release or version bump occurred.
 
-| Artifact               | Identity                                                                   |
-| ---------------------- | -------------------------------------------------------------------------- |
-| Framework wheel SHA256 | `c600ccb7bcff213fac5d0718eeead0bd1c126c6de0ceecec063bead0340eee34`         |
-| Core wheel SHA256      | `ed279d7329de333380b9d649c541b6b75d30d9500ca42f3b3ee8c35d8ee3305f`         |
-| Validation image       | `nvcr.io/nvstaging/tao/cosmos-framework:automl-wts-cu128-focused-20261012` |
-| Registry digest        | `sha256:a4dd7851d3af16bcc89deb6729ae1417681ed128158a06f5629ea1550595f2a9`  |
-| SQSH SHA256            | `0f162751b85e480a77d99e937ee7c093d7bb4958ff792814b94c0e2ce7e0293a`         |
+| Artifact               | Identity                                                                  |
+| ---------------------- | ------------------------------------------------------------------------- |
+| Framework wheel SHA256 | `c600ccb7bcff213fac5d0718eeead0bd1c126c6de0ceecec063bead0340eee34`        |
+| Core wheel SHA256      | `ed279d7329de333380b9d649c541b6b75d30d9500ca42f3b3ee8c35d8ee3305f`        |
+| Validation image       | Internal staging build                                                    |
+| Registry digest        | `sha256:a4dd7851d3af16bcc89deb6729ae1417681ed128158a06f5629ea1550595f2a9` |
+| SQSH SHA256            | `0f162751b85e480a77d99e937ee7c093d7bb4958ff792814b94c0e2ce7e0293a`        |
 
-CPU conversion job **36427241** completed in 27m59s and verified the installed
+The CPU conversion job completed in 27m59s and verified the installed
 packages inside the SQSH. GPU startup used this immutable image without source
 overlays or package installation. The existing checks passed: **14 adapter tests,
 103 shared-helper tests and 28 core tests**, plus focused Ruff lint/format, skill
@@ -1018,9 +1017,8 @@ H100 GPUs, DCP-to-HF export and single-GPU evaluation. Both scored **8/16 (50%)*
 The approved limits were 30 minutes per trial and two hours for the search, with
 no automatic training retries or paid LLM calls.
 
-The initial source-install receipts identify Framework commit
-`def247af66f22abb45d25c3138bf13d0edcb4496` and core commit
-`bd21cbd3a6aa24e3277c0d232dab1614f935c03e`, with core distribution `0.1.0`.
+The initial source-install receipts identify the Framework and core commits of that build, with core
+distribution `0.1.0`.
 These are historical build-specific results, not a GPU rerun of later PR heads.
 
 This was a **pass after explicit controller recovery**, not an uninterrupted

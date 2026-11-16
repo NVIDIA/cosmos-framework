@@ -46,7 +46,7 @@ class DiffusionExpertConfig:
     # Zero disables physical rig embeddings. When enabled, N >= 2 reserves camera IDs
     # 0..N-2 and LiDAR ID N-1, even for camera-only inputs. N is the sensor vocabulary
     # size for the model, not the number of sensors selected in a sample.
-    # Examples for the MADS rig (N=12, camera IDs 0..10, LiDAR ID 11):
+    # Examples for the multiview rig (N=12, camera IDs 0..10, LiDAR ID 11):
     # - Camera only: selecting camera 8 uses row 8; row 11 is unused.
     # - LiDAR only: uses row 11; no vision_view_ids are needed.
     # - Camera + LiDAR: selected cameras use their physical IDs and LiDAR uses row 11.

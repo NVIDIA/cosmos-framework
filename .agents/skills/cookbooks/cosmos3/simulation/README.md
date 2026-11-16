@@ -22,7 +22,7 @@ they do not run a policy or feed generated frames back into one.
 
 **Transfer-Auto** is driven like a transfer model (control video in, photoreal video
 out) but belongs to the Simulation family, so it lives here rather than under
-[Generator Transfer](../generator/transfer/README.md). **Sim-Auto** is its causal,
+[Generator Transfer](../../../cosmos3-inference-transfer/SKILL.md). **Sim-Auto** is its causal,
 distilled student: a fixed four-step sampler with a rolling key/value cache.
 
 [Cosmos3-Nano-Sim-Bimanual](https://flashdreams.org/main/models/cosmos3_nano_sim_bimanual/) and [Cosmos3-Nano-Sim-Auto](https://flashdreams.org/main/models/cosmos3_nano_sim_auto/) are supported by FlashDreams. Integrate with FlashDreams for accelerated inference ([Sim-Bimanual](https://github.com/NVIDIA/flashdreams/integrations_v2/cosmos3_nano_sim_bimanual), [Sim-Auto](https://github.com/NVIDIA/flashdreams/integrations_v2/cosmos3_nano_sim_auto))

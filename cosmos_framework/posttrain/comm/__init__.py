@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""comm — DATA PLANE (DESIGN §3, §9).
+"""comm — DATA PLANE.
 
 v1+: NCCL/Gloo primitives → transport (Codec / SQ-CQ engine / backends / registry /
 metadata-bulk) → channel semantics + weight_transfer. The controller never touches
@@ -33,12 +33,12 @@ from cosmos_framework.posttrain.comm.weight_transfer import (
 __all__ = [
     "Channel",
     "Plane",
-    # weight plane (§8.2 #4)
+    # weight plane
     "WeightSync",
     "WeightMapper",
     "WeightPayload",
     "make_weight_backend",
-    # metadata/bulk + transfer primitive (§3.2-§3.4)
+    # metadata/bulk + transfer primitive
     "BulkRef",
     "BulkStore",
     "store_for",

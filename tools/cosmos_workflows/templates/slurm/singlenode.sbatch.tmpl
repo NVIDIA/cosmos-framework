@@ -34,7 +34,7 @@ if [ -n "@@ENV_FILE@@" ]; then
   set +a
 fi
 
-# Cluster-specific env (e.g. NCCL_P2P_DISABLE=1 for CS-OCI-ORD multi-GPU nodes,
+# Cluster-specific env (e.g. NCCL_P2P_DISABLE=1 for some multi-GPU clusters,
 # or NCCL_IB_HCA). Empty by default on a single-GPU run; the multi-node NCCL
 # probe (M7) populates this automatically per cluster context.
 @@EXTRA_ENV@@

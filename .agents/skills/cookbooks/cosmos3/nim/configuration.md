@@ -261,6 +261,9 @@ or a BF16 checkpoint (`NIM_PRECISION=bf16`);
 NVFP4 checkpoints are currently not recommended. Refer to
 [Streaming Video](streaming.md).
 
+Currently, when DFlash speculation is enabled (`NIM_STREAMING_SPEC_METHOD=dflash`),
+set `NIM_DFLASH_BF16_KV_CACHE=true` to keep the DFlash KV cache in BF16.
+
 | Name | Default | Use |
 | --- | --- | --- |
 | `NIM_ENABLE_STREAMING` | `false` | Enable stateful video-frame sessions and apply the required engine settings |

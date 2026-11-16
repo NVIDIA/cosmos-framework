@@ -115,7 +115,7 @@ def wfm_first_seed(
 
 
 class WFMDataEnv:
-    """Expose a streaming i4 video batch behind a caller-owned commit boundary.
+    """Expose a streaming video batch behind a caller-owned commit boundary.
 
     ``get_samples`` peeks one row and ``stage`` seals it into the transient
     accumulation window. ``commit_window`` is the only API that advances the durable

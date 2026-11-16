@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Dataset-backed 1-step Envs (DESIGN §1.3, degenerate form).
+"""Dataset-backed 1-step Envs.
 
 v0 implements the 1-step dataset Env for VLM RL plus a synthetic arithmetic Env for
 GRPO. The `step()` hook is kept so multi-step sims slot in later with no interface
@@ -694,11 +694,11 @@ def hf_items(cfg: Any, row_map: Any | None = None) -> _ColumnMapped:
 
 
 class DatasetEnv:
-    """v0: a 1-step Env over a prompt dataset (DESIGN §1.3, degenerate form).
+    """v0: a 1-step Env over a prompt dataset.
 
     `reset()` yields the next prompt as an ObsBundle; `step(completion)` ends the episode
     immediately (done=True). Reward is NOT computed here in v0 (a separate RewardProvider scores
-    the trajectory, §1.5).
+    the trajectory).
 
     Traversal — order, shuffle, epoch wrap, shard stride — is `cursor.IndexedCursor`, shared with
     `DatasetPreferenceEnv`. This class only turns an item into an `ObsBundle`. The two used to

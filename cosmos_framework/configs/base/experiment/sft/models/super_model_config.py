@@ -24,14 +24,12 @@ Two differences from a literal extraction of the legacy inline block:
   ``vlm_config.tokenizer.config_variant="hf"``.
 """
 
-from cosmos_framework.utils.lazy_config import LazyCall as L
-
 from cosmos_framework.configs.base.defaults.reasoner import (
     create_qwen2_tokenizer_with_download,
     create_vlm_config,
 )
 from cosmos_framework.model.generator.mot.unified_mot import Qwen3VLMoTConfig, Qwen3VLTextForCausalLM
-
+from cosmos_framework.utils.lazy_config import LazyCall as L
 
 SUPER_MODEL_CONFIG = dict(
     action_gen=False,
@@ -134,20 +132,14 @@ SUPER_MODEL_CONFIG = dict(
         use_system_prompt=False,
         pretrained_weights=dict(
             enabled=False,
-            backbone_path=(
-                "s3://bucket0/cosmos3/pretrained/huggingface/"
-                "Qwen/Qwen3-VL-32B-Instruct/"
-            ),
+            backbone_path="hf://Qwen/Qwen3-VL-32B-Instruct",
             credentials_path="",
             enable_gcs_patch_in_boto3=True,
         ),
         model_instance=L(Qwen3VLTextForCausalLM)(
             config=L(create_vlm_config)(
                 base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                    json_file=(
-                        "cosmos_framework/model/generator/reasoner/qwen3_vl/configs/"
-                        "Qwen3-VL-32B-Instruct.json"
-                    ),
+                    json_file=("cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"),
                 ),
                 freeze_und=False,
                 layer_module="MoTDecoderLayer",

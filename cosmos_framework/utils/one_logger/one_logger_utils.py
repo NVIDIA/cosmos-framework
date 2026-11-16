@@ -1409,7 +1409,7 @@ def initialize_one_logger(config: dict) -> None:
 
 
 def initialize_one_logger_from_imaginaire_config(config: Any) -> None:
-    """Initialize OneLoggerUtils object from imaginaire4 config"""
+    """Initialize OneLoggerUtils object from the job config"""
 
     try:
         batch_size = config.dataloader_train.batch_size
@@ -1468,7 +1468,7 @@ def initialize_one_logger_from_imaginaire_config(config: Any) -> None:
     one_logger_async = os.environ.get("ONE_LOGGER_ASYNC", "true").lower() == "true"
     one_logger_config = dict(
         enable_for_current_rank=(get_rank() == 0),  # global master rank
-        one_logger_project="imaginaire4",  # wandb project name for OneLogger
+        one_logger_project="cosmos-framework",  # wandb project name for OneLogger
         one_logger_run_name=f"{config.job.project}/{config.job.group}/{config.job.name}",
         one_logger_async=one_logger_async,  # Set ONE_LOGGER_ASYNC=false env var to avoid pipe issues
         log_every_n_train_iterations=config.trainer.logging_iter,

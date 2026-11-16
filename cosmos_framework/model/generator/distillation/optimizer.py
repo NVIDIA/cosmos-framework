@@ -21,7 +21,7 @@ __all__: tuple[str, ...] = (
 
 
 class OptimizerContainerLike(Protocol):
-    """Structural interface shared by i4 and release-mapped optimizer containers."""
+    """Structural interface shared by upstream and release-mapped optimizer containers."""
 
     model: torch.nn.Module
     optimizers: list[torch.optim.Optimizer]

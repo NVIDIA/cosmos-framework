@@ -387,7 +387,7 @@ def test_coordinator_emergency_save_writes_the_run_plan_only_when_asked(tmp_path
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_coordinator_emergency_run_plan_always_covers_the_model(tmp_path: Path) -> None:
-    """Review of e11b239d02 (thread a80f9a71): with `emergency_checkpoint_components=run`, run components `[model]` and
+    """With `emergency_checkpoint_components=run`, run components `[model]` and
     validation components `[training_state]`, a signal during OFF-cadence validation left only the training-state
     artifact -- the step-only dedup of the cadence path answered "already checkpointed" and NO weights were written.
     The emergency plan under "run" is the run's plan UNION {model}, and the skip is decided by the component coverage
@@ -419,7 +419,7 @@ def test_coordinator_emergency_run_plan_always_covers_the_model(tmp_path: Path) 
         coordinator.save(1, components=("training_state",))
     assert saved == [(("training_state",), True)]
     assert not coordinator.save_configured_if_needed(1)  # the cadence path itself still dedups by step
-    # e11b239d02: False ("already checkpointed"), no model. The committed training-state artifact of step 1 can never be
+    # Before the fix: False ("already checkpointed"), no model. The committed training-state artifact of step 1 can never be
     # re-committed (`store.commit_artifact` refuses a second manifest), so the one writable location left for the model
     # is the full checkpoint of the step: the emergency save escalates to the full plan under `checkpoints/iter_000001`.
     assert coordinator.save_emergency(1, components="run")
@@ -444,7 +444,7 @@ def test_coordinator_emergency_run_plan_always_covers_the_model(tmp_path: Path) 
     assert not state_coordinator.save_emergency(3, components="run")
 
     # The run's own model-only cadence save of a step still dedups the emergency save of that step (the cadence call
-    # shape, no override): unchanged from e11b239d02.
+    # shape, no override): unchanged from before the fix.
     saved.clear()
     model_coordinator = CheckpointCoordinator(
         out_dir=str(tmp_path / "model_only"), policy=_Policy(), manager=manager, data=_Data()

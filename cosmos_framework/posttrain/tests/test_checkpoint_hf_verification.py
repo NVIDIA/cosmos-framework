@@ -52,7 +52,7 @@ def test_verify_hf_dense_and_moe(tmp_path: Path, moe: bool) -> None:
     base, out, checkpoint = _fixture(tmp_path, moe=moe)
     report = hf.verify_with_torch(str(out), str(base), str(checkpoint))
     assert report["expert_shape_checks"] == int(moe)
-    # Review R125-D-09 / B-04: every tensor is compared and digested, not one probe.
+    # Every tensor is compared and digested, not one probe.
     assert report["bitwise_probe"] == "all_tensors"
     assert report["bitwise_equal_tensors"] == 2 + int(moe)
     assert set(report["tensor_sha256"]) == {"model.language_model.norm.weight", "lm_head.weight"} | (
@@ -151,7 +151,7 @@ def test_dense_staged_materialization_verifies_and_honors_count_floor(tmp_path: 
 
 
 def test_verify_rejects_a_changed_tensor_the_old_probe_never_read(tmp_path: Path) -> None:
-    """Review R125-D-09: the parent probed ``model.language_model.norm.weight`` alone, so a shard whose ``lm_head.weight``
+    """The parent probed ``model.language_model.norm.weight`` alone, so a shard whose ``lm_head.weight``
     differs from ``model.pt`` passed; now every tensor is compared and a moved tensor is counted against the base."""
     import torch
     from safetensors.torch import load_file, save_file
@@ -176,7 +176,7 @@ def test_verify_rejects_a_changed_tensor_the_old_probe_never_read(tmp_path: Path
 
 
 def test_materializer_writes_the_base_config_and_keeps_the_transformers_one(tmp_path: Path) -> None:
-    """Review R125-D-08: transformers 5 re-serializes the Qwen3-VL-MoE config (``num_local_experts`` for
+    """Transformers 5 re-serializes the Qwen3-VL-MoE config (``num_local_experts`` for
     ``num_experts``, ``rope_parameters`` for ``rope_scaling`` + ``rope_theta``, ``text_config.tie_word_embeddings: true``
     beside the top-level ``false``), unreadable as the same model by the service's transformers 4.57. The export's
     ``config.json`` becomes the base's bytes; the transformers-written one is kept once as ``config.json.trainer.bak``
@@ -220,7 +220,7 @@ def test_materializer_writes_the_base_config_and_keeps_the_transformers_one(tmp_
 
 
 def test_service_processor_config_follows_the_base_sidecars(tmp_path: Path) -> None:
-    """Review R125-D-10: a service ``processor_config.json`` is composed from the base's own image and video sidecars (the
+    """A service ``processor_config.json`` is composed from the base's own image and video sidecars (the
     fast image processor class the trainer used, the base's video defaults), never from a run's per-call kwargs."""
     base, _out, _checkpoint = _fixture(tmp_path)
     config = hf.service_processor_config(str(base))
@@ -277,14 +277,14 @@ def test_service_processor_config_follows_the_base_sidecars(tmp_path: Path) -> N
 def test_default_verification_consumes_the_held_payload_when_the_path_is_replaced(
     tmp_path: Path, scenario: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review thread 524355e746 (fix round T6t): the default verification must compare the staged shards against the payload the
+    """The default verification must compare the staged shards against the payload the
     materializer hashed under its lock and the overlay consumed, not against a reopened path. The reviewer's scenario with the
     SUPPORTED merge tool and the REAL torch verifier: merge -> A; during the overlay a forced merge replaces the path with B
     (os.remove, tmp, os.replace); the staged shards are A (the overlay consumed the held payload; here the real overlay minus the
     HF model: the pre-made export of A is copied into the staging directory). [path_replaced_build_correct]: the build publishes,
-    verified bitwise against A, marker A, the path holds B; on 65fe976387c verification reopened the path and REFUSED the correct
+    verified bitwise against A, marker A, the path holds B; on the parent verification reopened the path and REFUSED the correct
     build ("verify: 2 of 2 tensors differ bitwise"). [shards_follow_the_path]: an overlay that had read the path would have written
-    B; verification against the payload A refuses that wrong build; on 65fe976387c it PASSED (B compared with B at the path).
+    B; verification against the payload A refuses that wrong build; on the parent it PASSED (B compared with B at the path).
     [wrong_shards]: no replacement, one staged tensor corrupted: verification refuses on both (the check keeps its teeth)."""
     import hashlib
     import os
@@ -334,7 +334,7 @@ def test_default_verification_consumes_the_held_payload_when_the_path_is_replace
     err = capsys.readouterr().err
     if scenario == "path_replaced_build_correct":
         assert code == 0, (
-            "a correct build verifies against the held payload (on 65fe976387c: refused, 'verify: 2 of 2 tensors differ "
+            "a correct build verifies against the held payload (on the parent: refused, 'verify: 2 of 2 tensors differ "
             f"bitwise', because verification reopened the path, by then B): {err}"
         )
         marker = json.loads((out / mat.MATERIALIZED_MARKER).read_text())
@@ -347,7 +347,7 @@ def test_default_verification_consumes_the_held_payload_when_the_path_is_replace
         assert all(torch.equal(at_path[k], state_b[k]) for k in state_b)
     else:
         assert code == 1, (
-            "a wrong build is refused (on 65fe976387c the shards-follow-the-path case PASSED: B compared with B at the "
+            "a wrong build is refused (on the parent the shards-follow-the-path case PASSED: B compared with B at the "
             f"path): {err}"
         )
         assert "FATAL: the staged build failed at the verification (torch) stage" in err and "differ bitwise" in err, (

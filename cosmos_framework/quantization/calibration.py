@@ -429,7 +429,9 @@ def _run_framework_denoiser(
         i2v=i2v,
     )
     prediction = mdl.denoise(data_batch_packed=packed_sequence)["preds_vision"]
-    return torch.stack(prediction)
+    # Each vision item already has shape [1, C, T, H, W]. Stacking would
+    # introduce an extra batch axis that grows the fixed-step sampler's latent.
+    return torch.cat(prediction, dim=0)
 
 
 def make_forward_loop(

@@ -17,7 +17,7 @@ Notes:
       ``checkpoint``, ``callbacks``, ``ema``, ``tokenizer``, ``cluster``,
       ``vlm_config``, and ``ckpt_type`` flow from the ``defaults:`` group
       choices, matching the YAML's ``defaults:`` list (``_self_`` is placed
-      LAST per prerelease convention so the experiment overrides the
+      LAST per convention so the experiment overrides the
       defaults, but no setting changes semantically).
     * The YAML's giant ``model_parallel`` block, ``trainer.profiling``,
       ``trainer.straggler_detection`` and ``trainer.type`` are populated by
@@ -129,7 +129,7 @@ vision_sft_edge = LazyDict(
             max_iter=500,
             max_val_iter=None,
             # YAML had `memory_format: preserve_format` as a string, but the
-            # prerelease trainer passes this verbatim to model.to(memory_format=…)
+            # the trainer passes this verbatim to model.to(memory_format=…)
             # which requires a torch.memory_format enum (not a string).
             # Omit and let the framework default apply, matching how
             # mixed_modality_sft_nano.py handles it.

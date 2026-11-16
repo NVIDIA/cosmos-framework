@@ -29,7 +29,6 @@ from torch.utils.checkpoint import (
     create_selective_checkpoint_contexts,
 )
 
-from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import (
@@ -39,6 +38,7 @@ from cosmos_framework.configs.base.defaults.parallelism import (
 from cosmos_framework.model.generator.context_parallel import ContextParallelBatchPolicy, shard_decoder_inputs
 from cosmos_framework.model.generator.hf_model import HFModel
 from cosmos_framework.model.generator.reasoner.qwen35_caption import qwen35_fp32_decay_modules
+from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
 
 # (parent, attribute name, module) — the module currently registered at that slot, plus what
@@ -118,7 +118,7 @@ def _collect_repeated_blocks(inner: nn.Module) -> tuple[list[_BlockSlot], set[st
 
     ``_no_split_modules`` is unioned over the root AND every submodule, mirroring
     ``PreTrainedModel._get_no_split_modules``. Composite VLMs declare it on the sub-model
-    that owns the blocks rather than on the root they are assembled into — Nemotron-3-Dense-VL
+    that owns the blocks rather than on the root they are assembled into — dense vision-language backbone
     declares it only on its nested ``Siglip2VisionTransformer``, so a root-only lookup would
     find nothing for that family.
 

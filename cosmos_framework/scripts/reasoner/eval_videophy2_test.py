@@ -5,9 +5,7 @@
 
 Synthetic-dir tests are pure filesystem checks — no model weights, no hub
 traffic. The tests against the real ``videophy2_sft_edge`` HF export are
-read-only and auto-skip when the export dir is unavailable; the full
-model-load smoke lives in the export-pipeline validation plan
-(``SPEC_edge_export_pipeline_ux.md`` §4.5).
+read-only and auto-skip when the export dir is unavailable.
 """
 
 import json

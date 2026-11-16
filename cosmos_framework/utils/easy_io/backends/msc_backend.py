@@ -251,13 +251,10 @@ class MSCBackend(BaseStorageBackend):
                     # Merge with the existing profile, replacing `storage_provider` and `credentials_provider` completely.
                     msc_config_dict["profiles"][profile] = msc_config_dict["profiles"].get(profile, {})
 
-                    storage_provider_type: str = "s3"
+                    storage_provider_type: str = legacy_boto3_config.get("storage_provider_type", "s3")
                     parsed_endpoint_url = urlparse(legacy_boto3_config["endpoint_url"])
-                    # Handle regional SwiftStack endpoints.
-                    if parsed_endpoint_url.hostname.endswith(".s8k.io"):
-                        storage_provider_type = "s8k"
                     # Handle global and regional GCS endpoints.
-                    elif parsed_endpoint_url.hostname.startswith("storage.") and parsed_endpoint_url.hostname.endswith(
+                    if parsed_endpoint_url.hostname.startswith("storage.") and parsed_endpoint_url.hostname.endswith(
                         ".googleapis.com"
                     ):
                         storage_provider_type = "gcs_s3"
@@ -796,7 +793,7 @@ class MSCBackend(BaseStorageBackend):
 
         Args:
             src (str or Path): A file to be copied.
-            dst (str or Path): Copy file to to local dst.
+            dst (str or Path): Copy file to local dst.
 
         Returns:
             str: If dst specifies a directory, the file will be copied into dst

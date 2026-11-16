@@ -143,7 +143,7 @@ class ContinuationPlan:
             # `rl.dynamic_sampling_refill_mode`; `train/grpo_dynamic_sampling_avoided_prompts` counts the skipped
             # draws), so the shards' draw counts differ and one total split evenly over them is no shard's count:
             # the continuation would re-serve trained prompts on the shards that drew more and skip unseen prompts on
-            # the shards that drew less (LDCR 2026-10-01, mrs-ours V13: per-shard [4, 2] -> offset 3 on both).
+            # the shards that drew less (e.g. per-shard [4, 2] -> offset 3 on both).
             raise ValueError(
                 f"{run_dir}: rl.dynamic_sampling_refill_mode={refill_mode!r} with dynamic sampling enabled: the data "
                 "shards drew UNEQUAL counts (short cells refill alone, idle cells draw 0), so `--consumed` split evenly "

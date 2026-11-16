@@ -12,7 +12,7 @@ The transposed shape is not a workaround. `comm/weight_pairing.py::full_tensor_a
 cells by flat bundle index, so policy cell (0,k) pushes to rollout cell (k,0) on the same GPU, and
 its docstring names transposed meshes as the case it exists for.
 
-FSDP on the policy side is a REQUIREMENT here, not a tuning choice: measured on cw-dfw, an
+FSDP on the policy side is a REQUIREMENT here, not a tuning choice: as measured, an
 unsharded trainer is 54.62 GiB and cannot sit beside the rollout's 20.64 GiB on one 80 GiB card.
 The symmetric alternative — policy (4,1), one full replica per GPU — is arithmetically impossible,
 which is what `test_policy_is_sharded_not_replicated` guards.
@@ -151,7 +151,7 @@ def test_policy_is_sharded_not_replicated():
 def test_helper_shapes_keep_the_loop_free_of_dispatch_markers():
     """`rm`/`replay` MATCH the rollout so no edge needs a call-site `Sharded`.
 
-    This is what keeps the orchestration loop at the altitude DESIGN 2.1 requires -- mesh shapes
+    This is what keeps the orchestration loop at the required altitude -- mesh shapes
     must not appear in it. `rm`/`replay` at (1,1) would leave `rollout -> rm` with mismatched
     replica counts, which the bare-handle path rejects, forcing a marker into the loop. `data` is
     the exception: the scene source is smaller than `gpus`, and its edge is covered by the

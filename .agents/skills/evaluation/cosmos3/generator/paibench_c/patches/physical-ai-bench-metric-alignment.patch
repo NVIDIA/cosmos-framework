@@ -1,0 +1,880 @@
+diff --git a/conditional_generation/benchmark_pipelines/scores/transfer_bench/metrics_canny_blur_depth.py b/conditional_generation/benchmark_pipelines/scores/transfer_bench/metrics_canny_blur_depth.py
+--- a/conditional_generation/benchmark_pipelines/scores/transfer_bench/metrics_canny_blur_depth.py
++++ b/conditional_generation/benchmark_pipelines/scores/transfer_bench/metrics_canny_blur_depth.py
+@@ -259,7 +259,10 @@ def compute_depth_error_video_sirmse(
+                 f"WARNING: Depth metric, shape mismatch, RESHAPING pred_depth: "
+                 f"{pred_depth.shape} to gt shape {gt_depth.shape}"
+             )
+-            pred_depth = safe_resize(pred_depth, W, H, interpolation=cv2.INTER_NEAREST)[:min_frames]
++            # Use INTER_AREA when downsampling (matches the reference pipeline's _resize_to_match),
++            # fall back to INTER_LINEAR when upsampling.
++            interp = cv2.INTER_AREA if pred_depth.shape[1] > H else cv2.INTER_LINEAR
++            pred_depth = safe_resize(pred_depth, W, H, interpolation=interp)[:min_frames]
+ 
+         if mask is None and key == "background":
+             continue
+diff --git a/conditional_generation/benchmark_pipelines/scores/transfer_bench/segmentation_metrics.py b/conditional_generation/benchmark_pipelines/scores/transfer_bench/segmentation_metrics.py
+--- a/conditional_generation/benchmark_pipelines/scores/transfer_bench/segmentation_metrics.py
++++ b/conditional_generation/benchmark_pipelines/scores/transfer_bench/segmentation_metrics.py
+@@ -66,6 +66,7 @@ def calculate_mask_iou_and_recall(
+     res_masks: list[eff_segmentation.SAMV2Detection],
+     matching: str = "max",
+     threshold: float = 0.1,
++    foreground: np.ndarray | None = None,
+     max_frames: int | None = None,
+ ) -> tuple[float, float]:
+     gt_phrase_index_dic = {}
+@@ -123,9 +124,34 @@ def calculate_mask_iou_and_recall(
+             union_res_mask[res_inst_masks == (id + 1)] = 255
+         updated_res_masks.append(union_res_mask)
+ 
+-    # print(f"Calculating iou on {len(updated_gt_masks)} gt masks and {len(updated_res_masks)} pred masks")
+-
+-    foreground = np.ones_like(gt_inst_masks, dtype=np.bool_)
++    if foreground is None:
++        foreground = np.ones_like(gt_inst_masks, dtype=np.bool_)
++
++    # Filter masks that are outside of foreground.  With an all-ones foreground
++    # (the default) this only removes completely empty masks (phrase not tracked
++    # in any frame), matching the reference pipeline's behaviour.
++    def is_mostly_inside(bin_mask: np.ndarray) -> bool:
++        num_pixels_in_foreground = bin_mask[foreground].sum()
++        if num_pixels_in_foreground == 0:
++            return False
++        num_pixels_in_background = bin_mask[~foreground].sum()
++        if num_pixels_in_background == 0:
++            return True
++        return (num_pixels_in_foreground / num_pixels_in_background) >= 0.5
++
++    updated_gt_masks = [m for m in updated_gt_masks if is_mostly_inside(m)]
++    updated_res_masks = [m for m in updated_res_masks if is_mostly_inside(m)]
++
++    print(f"Calculating iou on {len(updated_gt_masks)} gt masks and {len(updated_res_masks)} pred masks")
++
++    if not updated_gt_masks or not updated_res_masks:
++        # Nothing left to match on at least one side (no phrase tracked in any frame):
++        # report an explicit no-match result instead of stacking an empty tensor list.
++        logger.warning(
++            f"No masks left after filtering (gt={len(updated_gt_masks)}, pred={len(updated_res_masks)}); "
++            "reporting mIoU 0.0 and recall 0.0"
++        )
++        return 0.0, 0.0
+ 
+     iou_matrix = get_iou_matrix(updated_gt_masks, updated_res_masks, foreground)
+ 
+diff --git a/conditional_generation/benchmark_pipelines/scores/transfer_bench/video_to_canny_and_blur.py b/conditional_generation/benchmark_pipelines/scores/transfer_bench/video_to_canny_and_blur.py
+--- a/conditional_generation/benchmark_pipelines/scores/transfer_bench/video_to_canny_and_blur.py
++++ b/conditional_generation/benchmark_pipelines/scores/transfer_bench/video_to_canny_and_blur.py
+@@ -59,7 +59,11 @@ def convert_rgb_mp4_to_canny_mp4(
+ 
+     t_lower, t_upper = get_canny_t(preset_strength)
+ 
+-    edge_maps = [cv2.Canny(img, t_lower, t_upper) for img in vid_frames]
++    # Convert RGB→GRAY explicitly to match the reference pipeline (its run_metric.py uses
++    # cv2.cvtColor(f, cv2.COLOR_RGB2GRAY) before Canny).  Without this,
++    # cv2.Canny receives an RGB frame and internally treats it as BGR,
++    # swapping the R/B channel weights in the grayscale conversion.
++    edge_maps = [cv2.Canny(cv2.cvtColor(img, cv2.COLOR_RGB2GRAY), t_lower, t_upper) for img in vid_frames]
+     edge_maps = np.stack(edge_maps)
+ 
+     if should_save_or_overwrite(out_fn_canny_mp4, force_overwrite):
+diff --git a/conditional_generation/compute_metrics.py b/conditional_generation/compute_metrics.py
+--- a/conditional_generation/compute_metrics.py
++++ b/conditional_generation/compute_metrics.py
+@@ -1,3 +1,4 @@
++import gc
+ import json
+ import os
+ import pickle
+@@ -18,7 +19,7 @@ from loguru import logger
+ from tqdm import tqdm
+ 
+ from benchmark_pipelines.scores.transfer_bench.utils import (
+-    numpy_array_to_video_bytes, read_video, safe_resize, should_compute,
++    read_video, safe_resize, should_compute,
+     write_video)
+ from models import dover, grounded_sam_v2, video_depth_anything
+ from schemas import eff_segmentation
+@@ -167,9 +168,13 @@ class Task:
+     pred_segmentation_pkl_file: str = ""
+     pred_segmentation_mp4_file: str = ""
+     pred_depth_mp4_file: str = ""
++    pred_depth_npy_file: str = ""
+     pred_blur_mp4_file: str = ""
+     pred_canny_mp4_file: str = ""
+ 
++    force_recompute_pred_seg: bool = False
++    force_recompute_pred_depth: bool = False
++
+     max_frames: int | None = 121
+     caption: str | None = None
+ 
+@@ -422,10 +427,13 @@ def blur_single_task(task: Task) -> Task:
+     return task
+ 
+ 
+-def compute_and_save_segments(caption: str, frames: np.ndarray, fps: int, pkl_fn: Optional[str], sam_model) -> list:
+-    """Compute and save segmentation using SAM model"""
+-    buffer = numpy_array_to_video_bytes(frames, fps=fps)
+-    seg_list = sam_model.generate_single(buffer, caption)
++def compute_and_save_segments(caption: str, video_path: str, pkl_fn: Optional[str], sam_model) -> list:
++    """Compute and save segmentation using SAM model.
++
++    Passes the video file path directly to the SAM model, avoiding the
++    bytes→/tmp→read roundtrip that caused ffmpeg failures under concurrent load.
++    """
++    seg_list = sam_model.generate_single(video_path, caption)
+     # save the SAM2-inferred segmentation as pkl
+     if pkl_fn:
+         with open(pkl_fn, "wb") as fp:
+@@ -441,8 +449,7 @@ def sam_single_task(task: Task, sam_model) -> Task:
+ 
+     task.pred_seg_dicts = compute_and_save_segments(
+         task.caption,
+-        task.pred_resized_video_array,
+-        task.pred_fps,
++        task.pred_video_file,
+         task.pred_segmentation_pkl_file,
+         sam_model,
+     )
+@@ -450,8 +457,7 @@ def sam_single_task(task: Task, sam_model) -> Task:
+     if should_compute(task.gt_segmentation_pkl_file, task.force_recompute_gt_seg):
+         task.gt_seg_dicts = compute_and_save_segments(
+             task.caption,
+-            task.gt_video_array,
+-            task.fps,
++            task.gt_video_file,
+             task.gt_segmentation_pkl_file,
+             sam_model,
+         )
+@@ -505,14 +511,20 @@ def segmentation_mp4_single_task(task: Task) -> Task:
+         # logger.warning("Skipping saving of pred segments as MP4: no path specified")
+         return task
+ 
+-    assert task.pred_seg_dicts
++    if not task.pred_seg_dicts:
++        logger.warning(f"Skipping MP4 visualization: no predicted segments for {task.pred_video_file}")
++        return task
++    # Derive T/H/W from the actual mask shape — pred masks may be at a different
++    # resolution than task.video_shape (GT res) when the original pred video bytes
++    # are passed to SAM directly (no lossy resize-then-re-encode).
++    seg_t, seg_h, seg_w = task.pred_seg_dicts[0].segmentation_mask_rle.mask_shape
+     tmp_file = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}.mp4")
+     try:
+         sam_pkl_dict_to_mp4(
+             task.pred_seg_dicts,
+-            T=task.video_shape[0],
+-            H=task.video_shape[1],
+-            W=task.video_shape[2],
++            T=seg_t,
++            H=seg_h,
++            W=seg_w,
+             fps=task.pred_fps,
+             mp4_pth=tmp_file,
+             max_frames=task.max_frames,
+@@ -556,9 +568,16 @@ def depth_single_task(task: Task, depth_model) -> Task:
+         compute_depth_error_video_sirmse
+ 
+     try:
+-        assert (task.pred_resized_video_array is not None) and (task.gt_video_array is not None)
+-
+-        pred_depth = depth_model.generate(task.pred_resized_video_array)
++        assert task.gt_video_array is not None
++
++        # Run depth on the original-resolution pred video, matching the reference pipeline's
++        # run_metric.py which calls `self._depth.generate(pred_frames)` on the
++        # decoded pred video at its native resolution (e.g. 720p), then resizes
++        # the resulting depth map to GT resolution.  Using the pre-resized
++        # pred_resized_video_array (GT res ≈ 480p) discards detail before depth
++        # estimation and slightly degrades the depth quality.
++        pred_frames_orig, _ = read_video(task.pred_video_file, task.max_frames)
++        pred_depth = depth_model.generate(pred_frames_orig)
+         pred_depth = pred_depth.astype(np.float64)  # absolute depth values in meters
+ 
+         if should_compute(task.gt_depth_npy_file, task.force_recompute_gt_depth):
+@@ -587,125 +606,128 @@ def depth_single_task(task: Task, depth_model) -> Task:
+     return task
+ 
+ 
+-def process_tasks_with_model(tasks: list[Task]) -> list[Task]:
+-    """Process tasks with outer model loop, inner data loop structure"""
+-    rank = get_rank()
+-    world_size = get_world_size()
+-    print0(f"Processing {len(tasks)} tasks across {world_size} ranks")
+-
+-    # Distribute tasks to this rank
+-    tasks = distribute_list_to_rank(tasks)
+-    print0(f"Rank {rank} processing {len(tasks)} tasks")
+-
+-    if not tasks:
+-        return []
+-
+-    # Step 1: Load videos and captions (no models needed)
+-    print0(f"Rank {rank}: Loading videos with multi-threading...")
+-    tasks = load_videos(tasks, num_workers=8)
+-
+-    print0(f"Rank {rank}: Processing captions...")
+-    tasks = load_captions(tasks)
+-
+-    print0(f"Rank {rank}: Resizing videos with multi-threading...")
+-    tasks = resize_videos(tasks, num_workers=4)
+-
+-    if torch.distributed.is_initialized():
+-        torch.distributed.barrier()
+-    print0("All ranks completed video and caption loading")
+-
+-    # Step 2: SAM Model Processing (load once, process all tasks)
+-    print0(f"Rank {rank}: Processing SAM segmentation...")
+-    sam_model = grounded_sam_v2.GroundedSAMV2()
+-    sam_model.setup()
+-
+-    for i, task in enumerate(tqdm(tasks, desc="SAM segmentation", disable=(rank != 0))):
+-        tasks[i] = sam_single_task(task, sam_model)
+-
+-    # Unload SAM model
+-    del sam_model
+-    torch.cuda.empty_cache()
+-
+-    if torch.distributed.is_initialized():
+-        torch.distributed.barrier()
+-    print0("All ranks completed SAM segmentation")
+-
+-    print0(f"Rank {rank}: Generating segmentation MP4s...")
+-    for i, task in enumerate(tqdm(tasks, desc="Segmentation MP4 generation", disable=(rank != 0))):
+-        tasks[i] = segmentation_mp4_single_task(task)
+-
+-    if torch.distributed.is_initialized():
+-        torch.distributed.barrier()
+-    print0("All ranks completed segmentation MP4 generation")
+-
+-    # Step 3: DOVER Model Processing (load once, process all tasks)
+-    print0(f"Rank {rank}: Computing DOVER scores...")
+-    dover_model = dover.DOVERVideoTechnicalScorer()
+-    dover_model.setup()
+-
+-    for i, task in enumerate(tqdm(tasks, desc="DOVER scoring", disable=(rank != 0))):
+-        tasks[i] = dover_single_task(task, dover_model)
+-
+-    # Unload DOVER model
+-    del dover_model
+-    torch.cuda.empty_cache()
+-
++def _eval_barrier() -> None:
++    """Distributed barrier used between pipeline stages within a batch."""
+     if torch.distributed.is_initialized():
+         torch.distributed.barrier()
+-    print0("All ranks completed DOVER scoring")
+ 
+-    # Step 4: Depth Model Processing (load once, process all tasks)
+-    print0(f"Rank {rank}: Computing depth maps...")
+-    depth_model = video_depth_anything.VideoDepthAnything()
+-    depth_model.setup()
+ 
+-    for i, task in enumerate(tqdm(tasks, desc="Depth estimation", disable=(rank != 0))):
+-        tasks[i] = depth_single_task(task, depth_model)
++def _process_task_batch(batch: list[Task], rank: int, label: str) -> list[Task]:
++    """Run the full metric pipeline on a single batch of this rank's tasks.
+ 
+-    # Unload depth model
+-    del depth_model
+-    torch.cuda.empty_cache()
++    Each task holds ~1 GB of decoded video frames (gt + pred + resized), so
++    loading all ~150 tasks/rank upfront needs ~150 GB of CPU RAM and triggers
++    OOM/swap on large runs. Processing one batch at a time bounds the resident set
++    to BATCH_SIZE tasks. GPU models are loaded once per batch (one at a time, as
++    before) and unloaded before the next, so peak GPU memory is unchanged.
+ 
+-    if torch.distributed.is_initialized():
+-        torch.distributed.barrier()
+-    print0("All ranks completed depth estimation")
++    Barriers are issued unconditionally (even for an empty trailing batch) so that
++    every rank performs the same number of collectives and stays in lockstep.
++    """
++    # Step 1: Load videos and captions (no models needed)
++    if batch:
++        print0(f"Rank {rank}: [{label}] loading {len(batch)} videos ...")
++        batch = load_videos(batch, num_workers=8)
++        batch = load_captions(batch)
++        batch = resize_videos(batch, num_workers=4)
++    _eval_barrier()
++
++    # Step 2: SAM segmentation
++    if batch:
++        sam_model = grounded_sam_v2.GroundedSAMV2()
++        sam_model.setup()
++        for i, task in enumerate(tqdm(batch, desc=f"SAM segmentation [{label}]", disable=(rank != 0))):
++            batch[i] = sam_single_task(task, sam_model)
++        del sam_model
++        torch.cuda.empty_cache()
++    _eval_barrier()
++
++    # Step 3: Segmentation MP4 visualization (uses the in-RAM seg dicts from SAM)
++    if batch:
++        for i, task in enumerate(batch):
++            batch[i] = segmentation_mp4_single_task(task)
++    _eval_barrier()
++
++    # Step 4: DOVER scoring
++    if batch:
++        dover_model = dover.DOVERVideoTechnicalScorer()
++        dover_model.setup()
++        for i, task in enumerate(batch):
++            batch[i] = dover_single_task(task, dover_model)
++        del dover_model
++        torch.cuda.empty_cache()
++    _eval_barrier()
++
++    # Step 5: Depth estimation
++    if batch:
++        depth_model = video_depth_anything.VideoDepthAnything()
++        depth_model.setup()
++        for i, task in enumerate(batch):
++            batch[i] = depth_single_task(task, depth_model)
++        del depth_model
++        torch.cuda.empty_cache()
++    _eval_barrier()
++
++    # Step 6: Canny + blur (no GPU model needed)
++    if batch:
++        for i, task in enumerate(batch):
++            batch[i] = canny_single_task(task)
++        with ThreadPoolExecutor(max_workers=4) as executor:
++            futures = [executor.submit(blur_single_task, task) for task in batch]
++            for i, future in enumerate(futures):
++                batch[i] = future.result()
++    _eval_barrier()
++
++    # Step 7: Mask IoU, then free heavy per-task data (video arrays + seg dicts)
++    # before the batch is accumulated into the rank-level result list, so the final
++    # gather only carries metrics.
++    if batch:
++        for i, task in enumerate(batch):
++            batch[i] = mask_iou_single_task(task)
++        batch = unload_task_data(batch)
++    _eval_barrier()
++
++    return batch
+ 
+-    # Step 5: Non-model processing (no GPU models needed)
+-    print0(f"Rank {rank}: Processing Canny edge detection...")
+-    for i, task in enumerate(tqdm(tasks, desc="Canny edge detection", disable=(rank != 0))):
+-        tasks[i] = canny_single_task(task)
+ 
+-    if torch.distributed.is_initialized():
+-        torch.distributed.barrier()
+-    print0("All ranks completed Canny edge detection")
++def process_tasks_with_model(tasks: list[Task]) -> list[Task]:
++    """Process this rank's tasks in fixed-size batches.
+ 
+-    print0(f"Rank {rank}: Processing blur analysis with 8 processes...")
+-    from concurrent.futures import ProcessPoolExecutor
+-    with ProcessPoolExecutor(max_workers=8) as executor:
+-        futures = [executor.submit(blur_single_task, task) for task in tasks]
+-        for i, future in enumerate(tqdm(futures, desc="Blur analysis", disable=(rank != 0))):
+-            tasks[i] = future.result()
++    Batching keeps peak CPU RAM proportional to BATCH_SIZE rather than the full
++    ~150 tasks/rank, which is what causes OOM/SIGABRT on large (600-task) runs.
++    """
++    rank = get_rank()
++    world_size = get_world_size()
++    print0(f"Processing {len(tasks)} tasks across {world_size} ranks")
+ 
+-    if torch.distributed.is_initialized():
+-        torch.distributed.barrier()
+-    print0("All ranks completed blur analysis")
++    # Distribute tasks to this rank
++    tasks = distribute_list_to_rank(tasks)
++    print0(f"Rank {rank} processing {len(tasks)} tasks")
+ 
+-    print0(f"Rank {rank}: Computing mask IoU...")
+-    for i, task in enumerate(tqdm(tasks, desc="Mask IoU computation", disable=(rank != 0))):
+-        tasks[i] = mask_iou_single_task(task)
++    batch_size = int(os.environ.get("PAIBENCH_C_EVAL_BATCH_SIZE", "30"))
++    batch_size = max(1, batch_size)
+ 
+-    if torch.distributed.is_initialized():
+-        torch.distributed.barrier()
+-    print0("All ranks completed mask IoU computation")
++    # Every rank must run the same number of batches so the per-stage barriers stay
++    # aligned; round-robin can leave ranks with a different task count. Take the
++    # global max so under-full ranks issue empty (barrier-only) batches.
++    local_num_batches = (len(tasks) + batch_size - 1) // batch_size
++    num_batches = local_num_batches
++    if torch.distributed.is_initialized() and world_size > 1:
++        nb = torch.tensor([local_num_batches], device="cuda" if torch.cuda.is_available() else "cpu")
++        torch.distributed.all_reduce(nb, op=torch.distributed.ReduceOp.MAX)
++        num_batches = int(nb.item())
+ 
+-    print0(f"Rank {rank}: Unloading data...")
+-    tasks = unload_task_data(tasks)
++    print0(f"Rank {rank}: processing in {num_batches} batch(es) of up to {batch_size} task(s)")
+ 
+-    if torch.distributed.is_initialized():
+-        torch.distributed.barrier()
+-    print0("All ranks completed data unloading")
++    processed: list[Task] = []
++    for b in range(num_batches):
++        batch = tasks[b * batch_size:(b + 1) * batch_size]
++        label = f"batch {b + 1}/{num_batches}"
++        processed.extend(_process_task_batch(batch, rank, label))
++        gc.collect()
++        torch.cuda.empty_cache()
+ 
+-    return tasks
++    return processed
+ 
+ 
+ def launch_pipeline(
+@@ -813,6 +835,7 @@ def prepare_tasks_from_filesystem(
+         task.pred_canny_mp4_file = (pred_video_file.parent.parent / "canny" / pred_video_file.name).as_posix()
+         task.pred_blur_mp4_file = (pred_video_file.parent.parent / "blur" / pred_video_file.name).as_posix()
+         task.pred_depth_mp4_file = (pred_video_file.parent.parent / "depth" / pred_video_file.name).as_posix()
++        task.pred_depth_npy_file = (pred_video_file.parent.parent / "depth_npzs" / pred_video_file.name.replace(".mp4", ".npz")).as_posix()
+ 
+         assert Path(task.gt_video_file).exists(), f"GT video {task.gt_video_file} not found"
+         assert Path(task.video_caption_file).exists(), f"GT caption {task.video_caption_file} not found"
+@@ -824,8 +847,11 @@ def prepare_tasks_from_filesystem(
+             task.pred_depth_mp4_file,
+             task.pred_segmentation_pkl_file,
+             task.pred_resized_video_file,
++            task.pred_depth_npy_file,
++            task.gt_segmentation_pkl_file,
++            task.gt_depth_npy_file,
+         ]:
+-            if not Path(file).parent.exists():
++            if file and not Path(file).parent.exists():
+                 Path(file).parent.mkdir(parents=True, exist_ok=True)
+         tasks.append(task)
+ 
+diff --git a/conditional_generation/decord.py b/conditional_generation/decord.py
+new file mode 100644
+--- /dev/null
++++ b/conditional_generation/decord.py
+@@ -0,0 +1,174 @@
++"""
++decord compatibility shim for aarch64 (Linux/ARM).
++
++PyPI's `decord` and `eva-decord` only ship x86_64 wheels.
++This module re-implements the subset of the decord API used by PAI-Bench-C
++on top of cv2 (opencv-python-headless), which has proper aarch64 wheels.
++
++Supported API surface
++─────────────────────
++  decord.bridge.set_bridge("torch" | "native")
++  decord.VideoReader(source, width=-1, height=-1)
++    len(reader)                          → int
++    reader.get_avg_fps()                 → float
++    reader[idx]                          → torch.Tensor (H,W,C) or _Frame
++    reader.get_batch(indices)            → _Batch  (.asnumpy() / .numpy() / .shape)
++"""
++
++from __future__ import annotations
++
++import os
++import tempfile
++from typing import Union
++
++import cv2
++import numpy as np
++
++# ── Bridge ─────────────────────────────────────────────────────────────────────
++
++_bridge_mode: str = "native"
++
++
++class _BridgeNamespace:
++    @staticmethod
++    def set_bridge(mode: str) -> None:
++        global _bridge_mode
++        _bridge_mode = mode
++
++
++bridge = _BridgeNamespace()
++
++
++# ── Array wrappers ─────────────────────────────────────────────────────────────
++
++class _Frame:
++    """Single-frame wrapper with .asnumpy() for compatibility."""
++
++    def __init__(self, arr: np.ndarray) -> None:
++        self._arr = arr
++
++    # decord returns NDArray-like objects; callers use .asnumpy() or index .shape
++    def asnumpy(self) -> np.ndarray:
++        return self._arr
++
++    def numpy(self) -> np.ndarray:
++        return self._arr
++
++    @property
++    def shape(self) -> tuple:
++        return self._arr.shape
++
++
++class _Batch:
++    """Multi-frame wrapper returned by get_batch()."""
++
++    def __init__(self, arr: np.ndarray) -> None:
++        # arr shape: (N, H, W, C) uint8 RGB
++        self._arr = arr
++
++    def asnumpy(self) -> np.ndarray:
++        return self._arr
++
++    def numpy(self) -> np.ndarray:
++        return self._arr
++
++    @property
++    def shape(self) -> tuple:
++        return self._arr.shape
++
++    def __iter__(self):
++        return iter(self._arr)
++
++    def __len__(self) -> int:
++        return len(self._arr)
++
++
++# ── VideoReader ────────────────────────────────────────────────────────────────
++
++class VideoReader:
++    """
++    Minimal decord.VideoReader replacement backed by cv2.VideoCapture.
++
++    Eagerly loads all frames into a list of uint8 (H, W, 3) RGB numpy arrays.
++    This is fine for PAI-Bench-C's typical 121-frame clips at 720p.
++    """
++
++    def __init__(
++        self,
++        source: Union[str, os.PathLike, bytes, "io.IOBase"],
++        width: int = -1,
++        height: int = -1,
++        **kwargs,  # absorb any extra decord kwargs silently
++    ) -> None:
++        self._width = width
++        self._height = height
++        self._tmp_path: str | None = None
++
++        # Resolve source to a file path cv2 can open
++        if isinstance(source, (str, os.PathLike)):
++            path = str(source)
++        else:
++            # Bytes or file-like (BytesIO)
++            if hasattr(source, "read"):
++                data: bytes = source.read()
++            else:
++                data = bytes(source)
++            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
++            tmp.write(data)
++            tmp.flush()
++            tmp.close()
++            self._tmp_path = tmp.name
++            path = self._tmp_path
++
++        cap = cv2.VideoCapture(path)
++        if not cap.isOpened():
++            raise IOError(f"decord shim: cv2 could not open video: {path}")
++
++        self._fps: float = cap.get(cv2.CAP_PROP_FPS) or 30.0
++
++        frames: list[np.ndarray] = []
++        while True:
++            ret, bgr = cap.read()
++            if not ret:
++                break
++            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
++            if width > 0 and height > 0:
++                rgb = cv2.resize(rgb, (width, height), interpolation=cv2.INTER_LINEAR)
++            frames.append(rgb)
++        cap.release()
++
++        self._frames = frames
++
++    # ── Public API ──────────────────────────────────────────────────────────
++
++    def get_avg_fps(self) -> float:
++        return self._fps
++
++    def __len__(self) -> int:
++        return len(self._frames)
++
++    def __getitem__(self, idx: int):
++        """Return a single frame.
++
++        With bridge="torch" (DOVER path) → torch.Tensor (H, W, C) uint8.
++        Otherwise → _Frame wrapping a numpy array.
++        """
++        arr = self._frames[int(idx)]
++        if _bridge_mode == "torch":
++            import torch
++            return torch.from_numpy(arr)
++        return _Frame(arr)
++
++    def get_batch(self, indices) -> _Batch:
++        """Return multiple frames as a (N, H, W, C) uint8 ndarray wrapped in _Batch."""
++        batch = np.stack([self._frames[int(i)] for i in indices], axis=0)
++        return _Batch(batch)
++
++    # ── Cleanup ─────────────────────────────────────────────────────────────
++
++    def __del__(self) -> None:
++        if getattr(self, "_tmp_path", None):
++            try:
++                os.unlink(self._tmp_path)
++            except Exception:
++                pass
+diff --git a/conditional_generation/models/grounded_sam_v2.py b/conditional_generation/models/grounded_sam_v2.py
+--- a/conditional_generation/models/grounded_sam_v2.py
++++ b/conditional_generation/models/grounded_sam_v2.py
+@@ -18,15 +18,23 @@ _GROUNDED_SAM2_PATH = PROJECT_ROOT / "third_party/Grounded-SAM-2"
+ 
+ # pyright: reportMissingImports=false
+ # pyright: reportAttributeAccessIssue=false
++import os
+ sys.path.append(_GROUNDED_SAM2_PATH)
+ import hydra
++import sam2 as _sam2_pkg
+ from hydra import initialize_config_dir
+ from sam2.build_sam import build_sam2, build_sam2_video_predictor
+ from sam2.sam2_image_predictor import SAM2ImagePredictor
+ from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+ 
++# Config dir resolution — mirrors the reference pipeline's grounded_sam_v2.py:
++#   1. Prefer <grounded-sam2>/sam2_configs/ (has both sam2 and sam2.1 configs)
++#   2. Fall back to the installed sam2 package root (sam2_hiera_l.yaml is there)
++_sam2_configs_dir = str(_GROUNDED_SAM2_PATH / "sam2_configs")
++if not os.path.isdir(_sam2_configs_dir):
++    _sam2_configs_dir = str(pathlib.Path(_sam2_pkg.__file__).parent)
+ hydra.core.global_hydra.GlobalHydra.instance().clear()
+-initialize_config_dir(f"{_GROUNDED_SAM2_PATH}/sam2/configs/sam2")
++initialize_config_dir(_sam2_configs_dir)
+ 
+ 
+ GROUNDING_DINO_HF_WEIGHTS_NAME = "IDEA-Research/grounding-dino-tiny"
+@@ -69,11 +77,14 @@ def sample_points_from_masks(masks, num_points):
+             points.append(np.array([]))
+             continue
+ 
+-        # resampling if there's not enough points
++        # Deterministic sampling: seed from mask content so same mask → same points.
++        # Using the global np.random is non-deterministic across pipeline runs and
++        # causes recall variance of ~1/N_objects between otherwise identical pipelines.
++        rng = np.random.default_rng(seed=int(indices.sum()) & 0x7FFFFFFF)
+         if len(indices) < num_points:
+-            sampled_indices = np.random.choice(len(indices), num_points, replace=True)
++            sampled_indices = rng.choice(len(indices), num_points, replace=True)
+         else:
+-            sampled_indices = np.random.choice(len(indices), num_points, replace=False)
++            sampled_indices = rng.choice(len(indices), num_points, replace=False)
+ 
+         sampled_points = indices[sampled_indices]
+         points.append(sampled_points)
+@@ -155,6 +166,7 @@ def pack2tensor(
+     # metadata for each tracking frame (e.g. which direction it's tracked)
+     inference_state["tracking_has_started"] = False
+     inference_state["frames_already_tracked"] = {}
++    inference_state["frames_tracked_per_obj"] = {}  # required by sam2>=1.1.0
+     # Warm up the visual backbone and cache the image feature on frame 0
+ 
+     """
+@@ -274,6 +286,8 @@ class GroundedSAMV2(model_utils.ModelInterface):
+         output: dict
+             The predicted objects.
+         """
++        if isinstance(image, np.ndarray) and not image.data.c_contiguous:
++            image = np.ascontiguousarray(image)
+         inputs = self.grounding_dino_processor(
+             images=image,
+             text=caption,
+@@ -287,7 +301,7 @@ class GroundedSAMV2(model_utils.ModelInterface):
+         results = self.grounding_dino_processor.post_process_grounded_object_detection(
+             outputs,
+             inputs.input_ids,
+-            threshold=_BOX_THRESHOLD,
++            box_threshold=_BOX_THRESHOLD,
+             text_threshold=_TEXT_THRESHOLD,
+             target_sizes=[image_shape],
+         )
+@@ -346,7 +360,9 @@ class GroundedSAMV2(model_utils.ModelInterface):
+         frames_torch = torch.from_numpy(frames)
+ 
+         inference_state = pack2tensor(
+-            frames_torch, original_shape[0], original_shape[1]
++            frames_torch,
++            original_shape[0],
++            original_shape[1],
+         )
+         self.video_predictor._get_image_feature(
+             inference_state, frame_idx=0, batch_size=1
+@@ -385,15 +401,15 @@ class GroundedSAMV2(model_utils.ModelInterface):
+         return video_segments
+ 
+     def generate_single(
+-        self, video_bytes: bytes, caption: str
++        self, video_path_or_bytes: "str | bytes", caption: str
+     ) -> list[eff_segmentation.SAMV2Detection]:
+         """
+         Generate segmentation masks for a single video. The video is processed frame by frame.
+         We first run grounding DINO to detect objects in the first frame.
+         Then we run SAMv2 to generate the segmentation masks for the first frame.
+         Finally, we propagate the segmentation masks to the rest of the frames.
+-        video_bytes: bytes
+-            The video to generate the segmentation masks for.
++        video_path_or_bytes: str | bytes
++            Path to the video file on disk (preferred — avoids /tmp roundtrip) or raw video bytes.
+         caption: str
+             The caption to generate the segmentation masks with.
+ 
+@@ -404,10 +420,17 @@ class GroundedSAMV2(model_utils.ModelInterface):
+             WE use RLE encoding to compress the masklet.
+         """
+ 
+-        # Open the video buffer using OpenCV
+-        with tmp_files.make_named_temporary_file(suffix=".mp4") as tmp_file:
+-            tmp_file.write_bytes(video_bytes)
+-            frames_norm, frames, original_shape = self._read_frames(str(tmp_file))
++        if isinstance(video_path_or_bytes, (str, pathlib.Path)):
++            frames_norm, frames, original_shape = self._read_frames(str(video_path_or_bytes))
++        else:
++            # Fallback: write bytes to a temp file then read — avoid /tmp by using
++            # the same filesystem as the workspace to prevent ffmpeg open failures
++            # under concurrent load.
++            import os, tempfile
++            tmpdir = os.environ.get("PAIBENCH_TMPDIR") or os.environ.get("TMPDIR") or tempfile.gettempdir()
++            with tmp_files.make_named_temporary_file(suffix=".mp4", target_dir=pathlib.Path(tmpdir)) as tmp_file:
++                tmp_file.write_bytes(video_path_or_bytes)
++                frames_norm, frames, original_shape = self._read_frames(str(tmp_file))
+ 
+         # handle empty video
+         if len(frames) == 0:
+diff --git a/conditional_generation/pyproject.toml b/conditional_generation/pyproject.toml
+--- a/conditional_generation/pyproject.toml
++++ b/conditional_generation/pyproject.toml
+@@ -12,7 +12,6 @@ dependencies = [
+     "torch",
+     "torchvision",
+     "loguru",
+-    "decord",
+     "matplotlib",
+     "scipy",
+     "numpy",
+@@ -20,7 +19,8 @@ dependencies = [
+     "timm",
+     "einops",
+     "scikit-video",
+-    "transformers",
++    "transformers==4.46.3",  # must match the reference pipeline — GroundingDINO post-processing differs across major versions
++    "sam2==1.1.0",  # must match the reference pipeline — sam2_video_predictor propagation logic differs across versions
+     "hydra-core",
+     "attrs",
+     "pandas",
+@@ -37,7 +37,7 @@ dependencies = [
+     "imageio-ffmpeg",
+     "lpips",
+     "easydict",
+-    "xformers",
++    # "xformers",  # removed: 0.0.35 has no CUDA kernels for GB200 (sm_100); fallback to PyTorch native attention
+     "scikit-image",
+     "typer",
+ ]
+@@ -49,7 +49,6 @@ build-backend = "setuptools.build_meta"
+ [tool.setuptools]
+ include-package-data = true
+ 
+-# Configure package discovery to include all packages
+ [tool.setuptools.packages.find]
+ include = ["*"]
+ exclude = ["tests*"]
+diff --git a/conditional_generation/third_party/Grounded-SAM-2/grounding_dino/pyproject.toml b/conditional_generation/third_party/Grounded-SAM-2/grounding_dino/pyproject.toml
+new file mode 100644
+--- /dev/null
++++ b/conditional_generation/third_party/Grounded-SAM-2/grounding_dino/pyproject.toml
+@@ -0,0 +1,3 @@
++[build-system]
++requires = ["setuptools", "wheel"]
++build-backend = "setuptools.build_meta"
+diff --git a/conditional_generation/third_party/Grounded-SAM-2/grounding_dino/setup.py b/conditional_generation/third_party/Grounded-SAM-2/grounding_dino/setup.py
+--- a/conditional_generation/third_party/Grounded-SAM-2/grounding_dino/setup.py
++++ b/conditional_generation/third_party/Grounded-SAM-2/grounding_dino/setup.py
+@@ -22,23 +22,10 @@
+ 
+ import glob
+ import os
+-import subprocess
+-
+ import subprocess
+ import sys
+ 
+-def install_torch():
+-    try:
+-        import torch
+-    except ImportError:
+-        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch"])
+-
+-# Call the function to ensure torch is installed
+-install_torch()
+-
+-import torch
+ from setuptools import find_packages, setup
+-from torch.utils.cpp_extension import CUDA_HOME, CppExtension, CUDAExtension
+ 
+ # groundingdino version info
+ version = "0.1.0"
+@@ -62,10 +49,13 @@ def write_version_file():
+ 
+ requirements = ["torch", "torchvision"]
+ 
+-torch_ver = [int(x) for x in torch.__version__.split(".")[:2]]
+-
+ 
+ def get_extensions():
++    # torch is imported here (not at module level) so that setup.py metadata
++    # steps (prepare_metadata_for_build_editable) work without torch installed.
++    import torch
++    from torch.utils.cpp_extension import CUDA_HOME, CppExtension, CUDAExtension
++
+     this_dir = os.path.dirname(os.path.abspath(__file__))
+     extensions_dir = os.path.join(this_dir, "groundingdino", "models", "GroundingDINO", "csrc")
+ 
+@@ -87,15 +77,13 @@ def get_extensions():
+         extension = CUDAExtension
+         sources += source_cuda
+         define_macros += [("WITH_CUDA", None)]
++        # Hardcoded gencode flags removed — TORCH_CUDA_ARCH_LIST controls arch
++        # selection. Old archs (sm_70/75/80/86) are not supported by CUDA 13+.
+         extra_compile_args["nvcc"] = [
+             "-DCUDA_HAS_FP16=1",
+             "-D__CUDA_NO_HALF_OPERATORS__",
+             "-D__CUDA_NO_HALF_CONVERSIONS__",
+             "-D__CUDA_NO_HALF2_OPERATORS__",
+-            "-gencode=arch=compute_70,code=sm_70",
+-            "-gencode=arch=compute_75,code=sm_75",
+-            "-gencode=arch=compute_80,code=sm_80",
+-            "-gencode=arch=compute_86,code=sm_86",
+         ]
+     else:
+         print("Compiling without CUDA")
+@@ -205,6 +193,12 @@ if __name__ == "__main__":
+ 
+     write_version_file()
+ 
++    ext_modules = get_extensions()
++    cmdclass = {}
++    if ext_modules:
++        import torch.utils.cpp_extension
++        cmdclass = {"build_ext": torch.utils.cpp_extension.BuildExtension}
++
+     setup(
+         name="groundingdino",
+         version="0.1.0",
+@@ -219,6 +213,6 @@ if __name__ == "__main__":
+                 "tests",
+             )
+         ),
+-        ext_modules=get_extensions(),
+-        cmdclass={"build_ext": torch.utils.cpp_extension.BuildExtension},
++        ext_modules=ext_modules,
++        cmdclass=cmdclass,
+     )

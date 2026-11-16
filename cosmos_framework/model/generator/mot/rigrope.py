@@ -2,9 +2,8 @@
 # Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # -----------------------------------------------------------------------------
 
-"""VRAD's active RopeRigPE, pinned to 979c4d32fe1da235c0a031ebf86d1767013db700.
+"""Active RopeRigPE, ported from a research implementation.
 
-Ported from genradar/networks/position_embedding.py and datasets/utils.py.
 By default direction and moment are independently normalized as in that source.
 The spatial ablation instead scales the raw moment by a fixed distance in metres.
 The fixed frequencies introduce buffers only, with no learned parameters.

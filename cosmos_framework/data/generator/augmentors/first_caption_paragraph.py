@@ -11,7 +11,7 @@ from cosmos_framework.data.generator.multiview.caption_format import first_capti
 
 
 class FirstCaptionParagraph(Augmentor):
-    """Retain the first timestamped paragraph of a plain-text Tier-1 caption.
+    """Retain the first timestamped paragraph of a plain-text caption.
 
     Timestamp boundaries also handle consecutive paragraphs separated by only
     one newline. Untimestamped captions keep their first blank-line paragraph.

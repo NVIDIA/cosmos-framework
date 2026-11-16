@@ -1,7 +1,7 @@
 """NV-deployed Gemini wrapper for gcp/google/gemini-3.1-{pro,flash-lite}-preview.
 
 Routes through NV inference gateway's Vertex passthrough
-(inference-api.nvidia.com/vertex_ai/v1/.../models/{MODEL}:generateContent).
+(<gateway>/vertex_ai/v1/.../models/{MODEL}:generateContent).
 Native Gemini schema (contents/parts/inlineData) — the OpenAI-compat path on
 the same gateway resamples video to ~1 fps server-side, so Vertex passthrough
 is the only path that preserves the client's encoded fps end-to-end.

@@ -6,7 +6,7 @@
 ``RandomCameraSampler`` preserves the existing behavior: sample a camera count,
 then choose an arbitrary subset of that size. ``ExplicitRigSampler`` samples a
 configured catalog of camera lists. ``RigSampler`` samples the 32 structural
-MADS rigs built from a front-wide anchor and five independently enabled units.
+Multiview rigs built from a front-wide anchor and five independently enabled units.
 """
 
 import math
@@ -241,7 +241,7 @@ class ExplicitRigSampler:
 
 
 def buckets() -> dict[int, list[tuple[str, ...]]]:
-    """Build camera-count buckets containing all 32 structural MADS rigs."""
+    """Build camera-count buckets containing all 32 structural rigs."""
     rigs_by_count: defaultdict[int, list[tuple[str, ...]]] = defaultdict(list)
     unit_names = list(UNITS)
     for bits in product((0, 1), repeat=len(unit_names)):
@@ -254,7 +254,7 @@ def buckets() -> dict[int, list[tuple[str, ...]]]:
 
 
 class RigSampler:
-    """Sample all 32 structural MADS rigs uniformly by count, then by rig.
+    """Sample all 32 structural rigs uniformly by count, then by rig.
 
     Args:
         seed: Optional deterministic seed. When omitted, use Python's global

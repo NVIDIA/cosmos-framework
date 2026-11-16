@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """The inherited experiment catalog must survive an absent optional third-party dependency.
 
-`build_root` imports the whole cosmos3 experiment catalog so posttrain experiments can inherit i4
+`build_root` imports the whole cosmos3 experiment catalog so posttrain experiments can inherit upstream
 experiments through `defaults`. One action experiment imports a robotics dataset library that is
 not part of the posttrain runtime, and a module-scope `ModuleNotFoundError` there used to abort the
 config load of every recipe - including text DPO and OPD, which have nothing to do with it.

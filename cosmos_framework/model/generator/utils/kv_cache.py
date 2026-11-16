@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """
-Imaginaire4 Modules:
+Modules:
 KV Cache support for efficient sequential/streaming inference.
 
 This module provides utilities for caching key/value tensors across

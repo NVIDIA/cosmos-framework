@@ -9,8 +9,8 @@ burns GPU-hours hanging on the first collective.
 It uses torchrun's WORLD_SIZE, RANK, LOCAL_WORLD_SIZE, and LOCAL_RANK, does
 one all-reduce, and prints NCCL_PROBE_OK. For offline template checks it can
 also derive these values from NNODES, NPROC_PER_NODE, and NODE_RANK.
-If NCCL is misconfigured (e.g. the CS-OCI-ORD
-intra-node P2P hang) it HANGS on all_reduce — the orchestrating skill wraps this
+If NCCL is misconfigured (e.g. an
+intra-node P2P hang on some clusters) it HANGS on all_reduce — the orchestrating skill wraps this
 with a timeout and, on timeout, sets the cluster's NCCL knob (NCCL_P2P_DISABLE=1,
 NCCL_SOCKET_IFNAME, ...) and re-probes, caching the working env per cluster.
 

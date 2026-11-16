@@ -10,7 +10,7 @@
 # pins the run-level scalars that define the reference reproduction.
 #
 # Env required:
-#   DROID_ROOT=/path/to/droid_lerobot_640x360/success
+#   DROID_ROOT=/path/to/droid_plus_lerobot_640x360_20260412
 #   BASE_CHECKPOINT_PATH=<Cosmos3-Nano DCP dir>
 #   WAN_VAE_PATH=<Wan2.2_VAE.pth>
 #   IMAGINAIRE_OUTPUT_ROOT=/path/to/output_root   # persist checkpoints

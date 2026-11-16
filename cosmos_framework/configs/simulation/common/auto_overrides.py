@@ -14,7 +14,7 @@ def framework_auto_overrides(overrides: list[str]) -> list[str]:
 
     A local captured descriptor is immutable. Its stage-specific changes live
     under transform_overrides. Storage credentials bind to their real readers,
-    not an i4 cluster object, and local bundle iteration replaces named IO caches.
+    not a cluster object, and local bundle iteration replaces named IO caches.
     """
     result = []
     for override in overrides:

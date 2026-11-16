@@ -310,7 +310,7 @@ def _causal_lidar_model(projection: LidarRangeProjectionConfig) -> SimpleNamespa
 
 
 def _write_rangemap_archive(path: Path, frame_ids: list[int]) -> None:
-    """A MADS ``lidar_rangemap`` tar with one occupied ray per sweep and measured intensity 0.25."""
+    """A multiview ``lidar_rangemap`` tar with one occupied ray per sweep and measured intensity 0.25."""
     with tarfile.open(path, "w") as archive:
         for frame_id in frame_ids:
             arrays = {"row": [0], "col": [0], "range": [20.0 + frame_id], "intensity": [0.25]}

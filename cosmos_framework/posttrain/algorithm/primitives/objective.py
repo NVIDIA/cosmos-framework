@@ -289,7 +289,7 @@ def backward(loss: "torch.Tensor", reduction: Reduction, grad_accum: int, denom:
             )
         else:
             # Recover the chunk SUM. The trainer divides ONCE, by the accumulated divisor,
-            # before clip-and-step — see roles/trainer/llm.py and spec §3.5.
+            # before clip-and-step — see roles/trainer/llm.py.
             (loss * denom).backward()
     else:
         raise AssertionError(f"unhandled reduction {reduction}")

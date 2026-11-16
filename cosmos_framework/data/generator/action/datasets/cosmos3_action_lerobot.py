@@ -533,7 +533,7 @@ class BaseActionLeRobotDataset(Dataset):
             val_ratio=self._split_val_ratio,
             split=self._split,
         )
-        # TODO(tianweis): remove once bridge training switches to a pre-filtered mirror.
+        # TODO: remove once bridge training switches to a pre-filtered mirror.
         if hasattr(self, "_filter_valid_episodes"):
             episode_ids = self._filter_valid_episodes(meta, episode_ids)
         episode_spans, valid_count, sample_count = build_episode_spans(

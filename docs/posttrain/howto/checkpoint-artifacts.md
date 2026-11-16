@@ -222,52 +222,51 @@ without `--no-verify`, naming the file (a sidecar equal to the canonical text is
 directory is refused whatever it holds, empty included, by the one helper the preflight and
 `verify_sidecars` share). The preflight runs before anything is written: `<out>.tmp` is created and the
 overlay run only after it has passed, so a refused request leaves an existing output byte-identical; and
-since fix round T6j the construction is staged, so a failure after the preflight keeps it too (below). It
+the construction is staged, so a failure after the preflight keeps it too (below). It
 also parses every JSON sidecar of the base
 (`tokenizer_config.json` and `chat_template.json` as objects), refuses in the default path an
 `additional_chat_templates/` whose entries are not all regular files, and refuses an unreadable base with
-a named reason instead of a traceback (fix round T6g); runs on every base shard the index lists the safetensors
+a named reason instead of a traceback; runs on every base shard the index lists the safetensors
 header check the output gets (`shard_status`: present, readable, header parsed, size = 8 + header + data, header
 keys = the index's), because the overlay opens every shard in the staged build; requires every JSON sidecar to be a
 JSON object and `chat_template.json`, when present, to carry a non-empty `chat_template` string (the loaders index
 these after the overlay); validates the index's `weight_map` (a non-empty object of tensor name -> shard name); and
 raises every refusal in the one message family `REFUSED before anything is published: <what was found; what the
-staged build would have done with it>` (fix round T6h); decodes every JSON file through ONE decoder (strict UTF-8
+staged build would have done with it>`; decodes every JSON file through ONE decoder (strict UTF-8
 text, what the loaders and the materializer's own readers use in the staged build), so a UTF-8 byte-order mark in front of
 valid JSON is refused by name instead of passing through `json.loads(bytes)`; and validates the safetensors header's shape
 in `shard_status` (a JSON object of tensor entries with a dtype string, a shape list and two-integer `data_offsets`, an
 optional `__metadata__` object), so a malformed header is a named refusal before the staged build and a named failure of the
-output verifier (fix round T6i); asks the pinned safetensors reader itself for every base shard the index lists
+output verifier; asks the pinned safetensors reader itself for every base shard the index lists
 (`safe_open` on the header: dtype names, string metadata values, contiguous offsets, byte count per tensor, file
 length) and decodes every Jinja template the loaders read (`chat_template.jinja`, `additional_chat_templates/*.jinja`)
-as strict UTF-8, refusing by file and reader message / decode position (fix round T6j). Since fix round T6j the
+as strict UTF-8, refusing by file and reader message / decode position. The
 construction is STAGED: the whole build (overlay, sidecar sync, `config.json <- base`, verification, marker) happens
 in `<out>.tmp` beside an existing output, which is replaced only afterwards by a rename swap (`<out>` ->
 `<out>.previous`, `<out>.tmp` -> `<out>`, `<out>.previous` removed); on any failure before the swap the staging
 directory is removed, the error names its stage and the existing output is byte-identical, under `--force
 --no-verify` too. Transient disk: two exports side by side from the overlay to the swap. A leftover
-`<out>.previous` is refused before the build unless `--force`. Fix round T6k: under `--force` no complete marked tree is discarded while it is the only one (in the crash state between the
+`<out>.previous` is refused before the build unless `--force`. Under `--force` no complete marked tree is discarded while it is the only one (in the crash state between the
 swap's two renames `<out>.previous` is renamed back to `<out>` first; `--force` rebuilds from the source, discarding a death-left
 `<out>.tmp` once `<out>` is complete again, and a kept staged copy is published only by a request without `--force`, after the
-same verification as a fresh build, where `--no-verify` trusts its bytes on size and tensor count (fix round T6l); an inherited
+same verification as a fresh build, where `--no-verify` trusts its bytes on size and tensor count; an inherited
 sole complete marked `<out>.tmp` is never deleted: its sidecars are re-synced from the base before the checks (files through a
 temporary and a replace, the template directory through a staged copy and renames; never a shard), a missing staged
 `config.json` is repaired the same way, a failed recovery check refuses by name and keeps the tree (shards and marker
 untouched, sidecars possibly repaired: a `.copying` or `.writing` temporary left by an interrupted copy or unified-template
 rewrite, under `--unified-chat-template` the two template files back in the base's form when that rewrite did not reach its
 rename; the state at `<out>` named), and the overlay is never run while it is the sole
-complete tree (fix rounds T6m / T6n / T6o); a leftover `<out>.previous` beside an existing `<out>` goes at the swap), and one
+complete tree; a leftover `<out>.previous` beside an existing `<out>` goes at the swap), and one
 materializer per output: `<out>.lock` (`fcntl.flock`, the file stays beside the output) refuses a second materializer on the
 same `--out` by name (pid, host, start time) without touching anything, and the marker / skip / mismatch decision is taken under
-that lock (fix round T6m: a materializer paused before the lock cannot overwrite an export published meanwhile); a held lock is
+that lock (a materializer paused before the lock cannot overwrite an export published meanwhile); a held lock is
 waited for up to 120 s (`--lock-wait-seconds`, polling), so two simultaneous identical requests of a published source both
-end with 0 and a differing one is refused on the marker; a holder still there after the bound is refused by name (fix round
-T6n; the bound must be a finite number >= 0, `inf` and `nan` are refused, fix round T6o); the source's identity of record is read
+end with 0 and a differing one is refused on the marker; a holder still there after the bound is refused by name (the bound must be a finite number >= 0, `inf` and `nan` are refused); the source's identity of record is read
 under that lock through a file object opened once there, and the overlay memory-maps that same open file, as does the default
-verification (fix round T6t), so the marker names the bytes the overlay consumed and the staged shards are verified against them
+verification, so the marker names the bytes the overlay consumed and the staged shards are verified against them
 even when `model.pt` was replaced while the request waited or while the overlay ran; an in-place
 change of the opened inode refuses the build when the client reports the change: best effort on a networked file system; the
-guarantee of record is against a replaced path, by construction (fix rounds T6q and T6r); the file system must support flock
+guarantee of record is against a replaced path, by construction; the file system must support flock
 (Lustre: the `flock` mount option). The weights-free loader calls
 (`AutoProcessor` / `AutoTokenizer` / `GenerationConfig`) stay in the overlay, in the staged build with the
 existing output kept: they are not torch-free, their

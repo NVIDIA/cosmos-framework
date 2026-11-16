@@ -531,7 +531,7 @@ class Boto3Backend(BaseStorageBackend):
 
         Args:
             src (str or Path): A file to be copied.
-            dst (str or Path): Copy file to to local dst.
+            dst (str or Path): Copy file to local dst.
 
         Returns:
             str: If dst specifies a directory, the file will be copied into dst

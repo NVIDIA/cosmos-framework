@@ -110,7 +110,7 @@ def _numeric_array(value, name: str) -> np.ndarray:
 def load_action_sidecar(path: Path, *, default_domain: str | None = None) -> tuple[np.ndarray, list[str]]:
     """Rows and one embodiment name per row from an action file.
 
-    The file is either the imaginaire4 unified sidecar object
+    The file is either the upstream unified sidecar object
     ``{"action_space": "normalized_unified_v1", "action": rows, "domain_names": names}``
     or a bare array of rows, in which case every row uses ``default_domain``.
     ``domain_names`` may hold one name for the whole clip or one name per row.

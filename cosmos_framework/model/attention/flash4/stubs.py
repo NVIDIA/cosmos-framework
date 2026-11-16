@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """
-Imaginaire4 Attention Subpackage:
+Attention Subpackage:
 Unified implementation for all Attention implementations.
 
 Flash Attention v4 (flash4) Backend: intermediate API stubs

@@ -341,7 +341,7 @@ def get_multiview_sample_data(
     return batch
 
 
-# --- MADS caption-chunk generation ------------------------------------------------
+# --- multiview caption-chunk generation ------------------------------------------------
 #
 # Ported from the reference implementation (`_MultiviewCaptionChunk`, `_load_multiview_caption_chunks`,
 # `_generate_multiview_caption_chunks_batch`). Before this existed, cosmos-framework
@@ -362,7 +362,7 @@ def get_multiview_sample_data(
 # well-formed video.
 #
 # The previous local parser accepted only the legacy style-keyed list. Every caption file in the
-# MADS eval bundles is a ``caption_structured`` object, so it raised
+# multiview eval bundles is a ``caption_structured`` object, so it raised
 #   ValueError: Expected multiview caption JSON to contain a list, got dict.
 # on all 1100 of them, and no multiview caption-chunk run against those bundles was possible.
 
@@ -481,7 +481,7 @@ def generate_multiview_caption_chunks(
     debug_save: Any = None,
     per_view_captions: bool = False,
 ) -> MultiviewCaptionChunksOutput:
-    """Run chunkwise multiview generation driven by a MADS caption file.
+    """Run chunkwise multiview generation driven by a multiview caption file.
 
     Each chunk replaces the prompt with that chunk's caption, generates
     ``num_video_frames_per_chunk`` frames seeded at ``base_seed + chunk.index``, and
@@ -548,7 +548,7 @@ def generate_multiview_caption_chunks(
     # Captions are written against a fixed frame span, so the span decides the chunk length and
     # `num_frames` does not apply here. Deriving it -- rather than falling back to num_frames, or
     # to the generic 93-frame transfer chunk the arg defaults used to supply -- is what makes this
-    # agree with the reference implementation: for the MADS bundles, whose captions all cover 0-300, it gives 297.
+    # agree with the reference implementation: for the multiview bundles, whose captions all cover 0-300, it gives 297.
     # A wrong count generates a different amount of video from the same caption and raises nothing.
     chunk_frame_count = sample_args.num_video_frames_per_chunk or caption_chunk_frame_count(
         caption_chunks,

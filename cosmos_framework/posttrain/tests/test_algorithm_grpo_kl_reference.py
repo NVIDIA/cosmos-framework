@@ -30,7 +30,7 @@ Pins, on tiny CPU tensors and a transformers-free two-layer LM:
   CONTENT identity into the objective's exact-resume identity (`reference_artifact`: another
   directory, other content at the same path, or dropping the knob refuses the resume), and makes
   `build_trainer` load the twin
-  from THAT directory (qwen3_vl alias, generic i4 spec, hf) while the policy build and the
+  from THAT directory (qwen3_vl alias, generic native spec, hf) while the policy build and the
   caller's config keep the policy's own directory;
 * the gradient bound — `rl.kl_coeff_clamp` keeps the k3 VALUE bit-identical while holding the
   per-token gradient coefficient at its `|z| = c` boundary value beyond the band (the exact
@@ -837,7 +837,7 @@ def test_build_trainer_redirects_only_the_populated_identity_fields_of_a_generic
     built: list[Any] = []
     seen: list[tuple[str, str, str]] = []
     config = _mock_build_trainer(monkeypatch, tmp_path, built)
-    config.model_backend = "i4"
+    config.model_backend = "native"
     config.model = NativePolicyBuildSpec(
         builder="tests.fake.build_policy", model_id="policy/model", model_config=Qwen3VLModelConfig()
     )

@@ -349,7 +349,7 @@ def load_camera_pose_geometry(
             current_rig = payload.get("rig_geometry")
             if current_rig is None or key not in current_rig.get("camera_to_rig", {}):
                 # PAIBench direct pose sidecars are canonical camera-to-world streams.  For
-                # non-MADS samples these may be moving cameras, so the shared world is the
+                # samples from other rigs these may be moving cameras, so the shared world is the
                 # only correct rig and each selected frame carries its own camera transform.
                 current_rig = {
                     "camera_to_rig": {key: (poses if poses.ndim == 2 else poses[0]).tolist()},

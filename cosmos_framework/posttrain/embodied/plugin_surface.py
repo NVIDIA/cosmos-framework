@@ -65,7 +65,7 @@ SCHEMA = ("metrics", "trajectory")
 #: Backend modules the sim container needs, as ``embodied.`` submodule paths.
 #:
 #: ``policies.cosmos3`` is DELIBERATELY EXCLUDED and that exclusion is the point of the
-#: exercise: it is the only thing in ``embodied/`` that drags in the i4 policy stack, and it
+#: exercise: it is the only thing in ``embodied/`` that drags in the native policy stack, and it
 #: runs in the FRAMEWORK venv, on the other side of the seam. A surface that included it
 #: would put torch in the Isaac image and there would be nothing left to decouple.
 BACKENDS = ("sims.behavior1k", "sinks.null")

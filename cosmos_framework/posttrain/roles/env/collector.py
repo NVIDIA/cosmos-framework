@@ -19,7 +19,7 @@ Two entry points, and the difference between them is the whole of Phase 2:
 
 ``run_units``
     PUSH. The driver bin-packs once and scatters disjoint bins. A cell that dies takes its
-    remaining bin with it -- measured in round 3 as *15 dead cells cost 150 of 400
+    remaining bin with it -- measured in a collection run as *15 dead cells cost 150 of 400
     episodes*.
 
 ``run_from_source``
@@ -700,7 +700,7 @@ class CollectorBody:
         The lease renewal has to happen HERE, from inside the rollout loop, and that is not
         an optimisation. A unit is up to ~46 minutes of episodes against a 30-minute default
         TTL, so a worker that renewed only between units would age out mid-unit and have its
-        work claimed by a second cell while the first is still running it. Round 3 hit the
+        work claimed by a second cell while the first is still running it. An earlier collection run hit the
         same shape from the other side: takeovers fired on LIVE processes because the
         holder's only heartbeat was the work it was not currently doing.
 

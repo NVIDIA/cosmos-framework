@@ -673,7 +673,7 @@ def test_vllm_rollout_records_the_sampler_head_in_rank_order_and_keeps_the_true_
     head_engine = {"max_logprobs": 128, "logprobs_mode": "processed_logprobs"}
     body = VLLMRollout(object(), packer=fake_packer, topk_logprobs=128, engine_config=head_engine)  # type: ignore[arg-type]
     assert body._topk_logprobs == 128 and VLLMRollout(object(), packer=fake_packer)._topk_logprobs == 0  # type: ignore[arg-type]
-    # The likelihood convention is checked at construction (reviewer thread on vllm.py:173): no engine identity,
+    # The likelihood convention is checked at construction: no engine identity,
     # raw logprobs, or a too-small max_logprobs all refuse; the same three refusals guard PPO's behavior head.
     with pytest.raises(ValueError, match="engine_config"):
         VLLMRollout(object(), packer=fake_packer, topk_logprobs=128)  # type: ignore[arg-type]
@@ -812,7 +812,7 @@ def test_config_defaults_off_parses_refuses_uncomposable_combinations_and_shapes
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_out_of_vocabulary_head_ids_are_refused_inside_the_rank_converged_preparation():
-    """Reviewer thread (score_centering.py:256): an id >= the trainer vocabulary must fail in the converged
+    """An id >= the trainer vocabulary must fail in the converged
     preparation on every rank, never as a rank-local CUDA gather fault. FAIL-ON-OLD: without ``vocab_size``
     the same record passes ``gather_head_records`` and only the gather can trip."""
     import math as _math

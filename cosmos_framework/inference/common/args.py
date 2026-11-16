@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import contextlib
+import contextvars
 import glob
 import hashlib
 import itertools
@@ -534,8 +535,8 @@ class CheckpointConfig(pydantic.BaseModel):
 
     config_file: ConfigFile
     """Path to config file."""
-    s3_uri: str
-    """Checkpoint S3 URI."""
+    s3_uri: str = ""
+    """Optional operator-supplied checkpoint S3 URI."""
     hf: CheckpointDirHf
     """Config for checkpoint on Hugging Face."""
 
@@ -978,6 +979,9 @@ class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, QuantizationArgs, Guardrai
     num_iterations: pydantic.PositiveInt
     max_model_len: pydantic.PositiveInt | None
     max_num_seqs: pydantic.PositiveInt | None
+    enable_cpu_offload: bool
+    enable_layerwise_offload: bool
+    prefill_text_kv: bool
     use_batched_cfg: bool
     diffusion_cache: bool
     diffusion_cache_thresh: float | None
@@ -1037,6 +1041,16 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, Quantizatio
     max_num_seqs: pydantic.PositiveInt | None = 1
     """Maximum number of sequences per batch.  When set, samples are packed into
     batches by number of sequences."""
+    enable_cpu_offload: bool = False
+    """Swap reasoner/generator blocks through CPU (single GPU, no CUDA graphs).
+    Loads network weights on CPU and prepares text K/V in the first forward. VAE and heads remain resident."""
+    enable_layerwise_offload: bool = False
+    """Stream reasoner/generator layers from pinned CPU memory with asynchronous prefetch.
+    Single GPU, no CUDA graphs or runtime quantization; supports ModelOpt FP8 checkpoints.
+    Mutually exclusive with enable_cpu_offload."""
+    prefill_text_kv: bool = False
+    """Prepare text K/V inside the first forward (single GPU, two-way attention, no CUDA graphs).
+    Enabled automatically by either CPU offload mode."""
     use_batched_cfg: bool = False
     """Run conditional and unconditional CFG branches as a single batched forward of
     size 2N instead of two sequential N-forwards. Disabled by default because
@@ -1188,6 +1202,18 @@ def _deep_merge(base: dict, overrides: dict) -> dict:
     return merged
 
 
+_LAUNCH_DIR: contextvars.ContextVar[Path | None] = contextvars.ContextVar("_LAUNCH_DIR", default=None)
+
+
+def current_launch_dir() -> Path:
+    """The folder the current spec file was loaded from, or the current folder outside spec loading.
+
+    Spec files are validated inside a chdir to their own folder; this keeps the folder the run was in
+    just before that chdir available to validators that need it.
+    """
+    return _LAUNCH_DIR.get() or Path.cwd()
+
+
 def _from_file(cls: type[_PydanticModelT], path: Path, override_data: dict[str, Any]) -> list[_PydanticModelT]:
     """Load arguments from a json/jsonl/yaml file.
 
@@ -1206,6 +1232,17 @@ def _from_file(cls: type[_PydanticModelT], path: Path, override_data: dict[str, 
     # Validate data
     # Input paths are relative to the file path
     path = path.expanduser().absolute()
+    launch_token = _LAUNCH_DIR.set(Path.cwd())
+    try:
+        objs = _validate_in_spec_dir(cls, path, data_list, override_data)
+    finally:
+        _LAUNCH_DIR.reset(launch_token)
+    return objs
+
+
+def _validate_in_spec_dir(
+    cls: type[_PydanticModelT], path: Path, data_list: list[Any], override_data: dict[str, Any]
+) -> list[_PydanticModelT]:
     with contextlib.chdir(path.parent):
         objs: list[_PydanticModelT] = []
         for i, data in enumerate(data_list):

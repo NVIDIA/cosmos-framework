@@ -3,7 +3,7 @@
 """Gate G4 -- ``embodied/`` imports stdlib and numpy, and nothing else.
 
 That property is what lets one rollout core load in the Isaac venv (py3.11 + Isaac 5.1, no
-torch, no i4), the policy venv (torch + i4, no omnigibson) and the trainer venv alike. It is
+torch, no native policy stack), the policy venv (torch + the native policy stack, no omnigibson) and the trainer venv alike. It is
 also the whole answer to "why is ``embodied/`` a top-level package instead of a subtree of
 ``roles/``": ``roles/`` is the framework's role taxonomy and this is a library two venvs
 share. The acute symptom was ``roles/env/__init__.py`` eagerly re-exporting ``wfm``, which
@@ -133,7 +133,7 @@ def test_the_core_adds_nothing_beyond_the_repo_itself():
     added = _delta(body)
 
     # "projects" and nothing else: the core imports schema/ (zero-dep, and the framework's
-    # shared data contract per DESIGN 9's "Shared library" bucket) plus its own modules.
+    # shared data contract, the "Shared library" bucket) plus its own modules.
     assert added == ["projects"], (
         f"embodied/ core pulled in non-stdlib packages beyond numpy: {added}. The core must "
         f"load in the Isaac venv, the policy venv and the trainer venv alike; move the "
@@ -301,7 +301,7 @@ def test_the_backends_import_without_their_engines():
 
     The registry defers WHICH file loads; this pins WHEN the engine inside that file loads.
     `the external simulator backend` and `the external native policy adapter` are exempt from the CORE rule precisely
-    because they are allowed to touch omnigibson and the i4 stack -- so an author who hoists
+    because they are allowed to touch omnigibson and the native policy stack -- so an author who hoists
     `import omnigibson` to module top passes every other gate here and only finds out in
     production, where `build_sim()` runs inside a Ray actor constructor: the Kit boot moves to
     bind time, it runs before `_boot()`'s `OMNIGIBSON_HEADLESS` setdefault can take effect, and

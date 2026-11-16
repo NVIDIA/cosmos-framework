@@ -18,7 +18,7 @@ git clone https://github.com/NVIDIA/cosmos-framework.git
 cd cosmos-framework
 ```
 
-- **Codex** loads the skills in `.agents/skills/` when you start it in the clone, except those in hidden folders such as `cosmos3-nim-user`.
+- **Codex** loads the skills in `.agents/skills/` when you start it in the clone.
 - **Claude Code** loads only the skills in `.claude/skills/`, a subset of the table below. To load them while working in another project, start it with `claude --add-dir <path to the clone>`.
 - **For any skill your agent does not load**, ask it to read the skill's `SKILL.md`.
 

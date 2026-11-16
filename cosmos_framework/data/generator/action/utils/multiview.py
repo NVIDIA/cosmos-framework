@@ -4,7 +4,7 @@
 """Bridge native Action windows to the multiview unified-wrist-slot layout.
 
 Camera poses have already been converted from end-effector targets at the
-sampler boundary. Reuse !14785's slot scatter, metric-gripper normalization and
+sampler boundary. Reuse the existing slot scatter, metric-gripper normalization and
 codec, retaining one camera-major row block per view and all native channels
 for the single-view human streams.
 """

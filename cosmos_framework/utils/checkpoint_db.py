@@ -62,8 +62,8 @@ from typing import Annotated, Callable, TypeAlias
 import pydantic
 from typing_extensions import Self, override
 
-from cosmos_framework.utils.flags import EXPERIMENTAL_CHECKPOINTS, INTERNAL, StrEnum
 from cosmos_framework.utils import log
+from cosmos_framework.utils.flags import EXPERIMENTAL_CHECKPOINTS, INTERNAL, StrEnum
 
 _HF_CLI_PROJECT = Path(__file__).resolve().with_name("hf_cli")
 
@@ -372,7 +372,7 @@ def register_checkpoint(checkpoint_config: CheckpointConfig):
     DEPRECATED: Use 'CheckpointConfig.register' instead.
     """
     if not EXPERIMENTAL_CHECKPOINTS:
-        if checkpoint_config.hf.repository in ["nvidia/Cosmos-Experimental", "nvidia-cosmos-ea/Cosmos-Experimental"]:
+        if checkpoint_config.metadata.get("experimental", False):
             # Don't register experimental checkpoints. An exception will be
             # raised in CI if the checkpoint is used without
             # EXPERIMENTAL_CHECKPOINTS.

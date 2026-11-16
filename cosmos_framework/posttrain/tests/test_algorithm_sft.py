@@ -240,7 +240,7 @@ def test_two_cpu_ranks_global_token_mean_and_preflight(tmp_path: Any) -> None:
 
 
 def test_ce_exponent_weights_rows_like_the_backbone() -> None:
-    """Review R125-D-01 knob 6: with ``ce_exponent=e`` every row contributes ``sum(CE)/n^e`` over ``sum_rows n^(1-e)``
+    """Knob 6: with ``ce_exponent=e`` every row contributes ``sum(CE)/n^e`` over ``sum_rows n^(1-e)``
     (the backbone's ``weighted_cross_entropy_loss``); ``e=0`` is the token mean the parent computed (unchanged bytes),
     ``e=0.5`` the square-root weighting, ``e=1`` the per-row mean. The parent accepted no exponent."""
     packer = MemoryPacker()
@@ -322,7 +322,7 @@ def _metadata(counts: list[int], probs: list[float], top_k: int = 2) -> Any:
 
 
 def test_sft_objective_reads_load_balancing_through_the_model_protocol() -> None:
-    """FIXTURE: on 02fed8cbea ``algorithm/sft.py`` imported ``model.qwen3_vl_moe`` inside the objective and called its
+    """FIXTURE: on the parent ``algorithm/sft.py`` imported ``model.qwen3_vl_moe`` inside the objective and called its
     module functions over ``net``. The objective asks the policy for the ``LoadBalancingPolicy`` capability
     (``model/protocol.py``): a toy policy that implements it yields ``sft_lbl_loss`` equal to
     :func:`load_balancing_loss` over the metadata it hands back; a policy without it is refused with ``TypeError``
@@ -346,7 +346,7 @@ def test_sft_objective_reads_load_balancing_through_the_model_protocol() -> None
     }
     assert not offenders, offenders
     # Imported after the behavioural assertion so that a tree whose objective imports the MoE module fails on it, not on
-    # this ImportError (review round 1 of fix round 1, finding F3).
+    # this ImportError.
     from cosmos_framework.posttrain.model.protocol import LoadBalancingPolicy
 
     uniform = _metadata([4, 4, 4, 4], [0.25, 0.25, 0.25, 0.25])
@@ -374,7 +374,7 @@ def test_sft_objective_reads_load_balancing_through_the_model_protocol() -> None
 
 
 def test_load_balancing_loss_matches_the_backbone_formula() -> None:
-    """Review R125-D-01 knob 1: ``coeff * E * mean_layers(sum_e f_e P_e)`` -- 1.0 * coeff at uniform routing, ``E`` *
+    """Knob 1: ``coeff * E * mean_layers(sum_e f_e P_e)`` -- 1.0 * coeff at uniform routing, ``E`` *
     coeff when one expert takes everything; the gradient reaches the router probabilities, not the counts; the load
     readout is ``E * max f_e`` (1.0 = balanced). Stashing only happens when switched on, and collecting pops."""
     from cosmos_framework.posttrain.algorithm.sft import load_balancing_loss

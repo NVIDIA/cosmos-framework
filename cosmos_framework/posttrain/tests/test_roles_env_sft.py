@@ -126,7 +126,7 @@ def test_missing_media_reports_sample(tmp_path: Path) -> None:
 
 
 def test_supervise_field_is_validated_by_the_loader_and_reaches_the_target(tmp_path: Path) -> None:
-    """``supervise`` (fix round T6): a row's value is validated by ``normalize_row`` and never added when absent (the
+    """``supervise``: a row's value is validated by ``normalize_row`` and never added when absent (the
     fingerprint of an existing file does not change), carried by the JSONL source and set on the ``SFTTarget`` the env
     produces; any other value, ``null`` included, is refused with the row's label. On the parent commit the value passes
     the loader unchecked and never reaches a target (no field)."""
@@ -157,13 +157,13 @@ def test_supervise_field_is_validated_by_the_loader_and_reaches_the_target(tmp_p
 
 
 def test_opener_field_is_validated_by_the_loader_and_reaches_the_target(tmp_path: Path) -> None:
-    """``opener`` (fix round T6c, row rule R4): a row's value is validated by ``normalize_row`` and never added when absent,
+    """``opener`` (row rule R4): a row's value is validated by ``normalize_row`` and never added when absent,
     carried by the JSONL source and set on the ``SFTTarget`` the env produces; any other value is refused with the row's
     label; the exporter's ``meta.opener`` record must agree with the field the packer reads (a ``prefilled`` in ``meta``
     without the field is refused, a ``self`` in ``meta`` without the field is the default). On the parent commit the value
-    passes the loader unchecked and never reaches a target (no field). Fix round T6d: the prefilled row's supervised
-    turn carries reasoning (a bare prefilled turn is refused, review R149-01)."""
-    # the prefilled row's supervised turn carries reasoning: a prefilled row without one is refused (review R149-01)
+    passes the loader unchecked and never reaches a target (no field). The prefilled row's supervised
+    turn carries reasoning (a bare prefilled turn is refused)."""
+    # the prefilled row's supervised turn carries reasoning: a prefilled row without one is refused
     messages = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a", "reasoning_content": "r"}]
     prefilled = {"messages": messages, "opener": "prefilled", "meta": {"opener": "prefilled"}}
     plain = {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "b"}]}
@@ -173,7 +173,7 @@ def test_opener_field_is_validated_by_the_loader_and_reaches_the_target(tmp_path
         with pytest.raises(ValueError, match="row-3: opener must be one of"):
             normalize_row({**plain, "opener": bad}, tmp_path, label="row-3")
     with pytest.raises(ValueError, match=r"row-3b: opener=prefilled requires .*message\(s\) \[1\] carry none"):
-        normalize_row({**plain, "opener": "prefilled"}, tmp_path, label="row-3b")  # a bare turn (review R149-01)
+        normalize_row({**plain, "opener": "prefilled"}, tmp_path, label="row-3b")  # a bare turn
     with pytest.raises(ValueError, match="row-4: meta.opener 'prefilled' \\(the exporter's record\\) disagrees"):
         normalize_row({**plain, "meta": {"opener": "prefilled"}}, tmp_path, label="row-4")
     with pytest.raises(ValueError, match="row-5: meta.opener 'self'"):
@@ -193,12 +193,12 @@ def test_opener_field_is_validated_by_the_loader_and_reaches_the_target(tmp_path
 def test_opener_prefilled_rows_require_reasoning_on_every_supervised_turn_and_meta_supervise_must_agree(
     tmp_path: Path,
 ) -> None:
-    """Review R149-01 / R149-05 (fix round T6d): the loader refuses a ``prefilled`` row whose supervised assistant turns
+    """The loader refuses a ``prefilled`` row whose supervised assistant turns
     (all of them under ``all_assistant``, the last under ``last_assistant``) lack a non-empty ``reasoning_content.strip()``
     (B1: no reasoning at all; B2: a bare last turn under ``last_assistant``; B3: mixed; whitespace-only reasoning counts
     as none), names the bare messages with the row's label, and accepts the rows with reasoning where it is required; a
     ``meta.supervise`` that disagrees with the row's ``supervise`` field is refused, an agreeing or defaulted one accepted.
-    On cd2f6fddac67 every one of these rows passes the loader (no rule)."""
+    On the parent every one of these rows passes the loader (no rule)."""
     call = {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "lookup", "arguments": {"q": 1}}}]}
     reasoned_call = {**call, "reasoning_content": "Look."}
     tool = {"role": "tool", "content": "found"}

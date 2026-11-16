@@ -62,6 +62,7 @@ from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMN
 from cosmos_framework.model.generator.mot.diffusion_cache import _velocity_pathways
 from cosmos_framework.model.generator.mot.inference_text_kv_memory import (
     InferenceTextKVMemoryState,
+    InferenceTextKVPrefill,
     UndKVCache,
     install_inference_memory_attention_dispatch,
     make_inference_text_kv_cache,
@@ -282,6 +283,17 @@ def _densify_action_family(
 INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY = "_inference_raw_vision_retained_items"
 
 
+def _materialize_inference_net_on_cpu(
+    net: torch.nn.Module, *, buffer_device: torch.device = torch.device("cpu")
+) -> None:
+    # Initialize nonpersistent buffers while parameters are still meta;
+    # the complete checkpoint supplies weights, so do not randomize them.
+    # Match resident initialization arithmetic (notably RoPE frequencies).
+    # Only small buffers use the execution device; parameters remain meta.
+    net.init_weights(buffer_device=buffer_device)
+    net._apply(lambda tensor: torch.empty_like(tensor, device="cpu") if tensor.is_meta else tensor.cpu())
+
+
 @dataclasses.dataclass(frozen=True)
 class VelocityPostprocess:
     """A velocity transform that declares its CFG branches before execution."""
@@ -300,11 +312,23 @@ class VelocityPostprocess:
         return self.apply(velocity, noise_x, timestep, text_guidance_scale)
 
 
+class _NoOpOffloader:
+    """Default phase interface for a model whose weights remain resident."""
+
+    def activate(self, name: str) -> None:
+        pass
+
+    def offload(self) -> None:
+        pass
+
+
 class OmniMoTModel(ImaginaireModel):
     """
     Mixture of Transformers (MoT) model to be trained with the flow matching objective
     for visual / sound / action generation.
     """
+
+    _component_offloader = _NoOpOffloader()
 
     def __init__(self, config: OmniMoTModelConfig):
         super().__init__()
@@ -628,6 +652,22 @@ class OmniMoTModel(ImaginaireModel):
         if self.config.quantization.modelopt_fp8_checkpoint_path:
             swap_modelopt_fp8_linears_on_meta(net, self.config.quantization.modelopt_fp8_target_fqns)
 
+        cpu_net = self.config.parallelism.inference_cpu_initialization
+        if cpu_net:
+            if not self.config.parallelism.enable_inference_mode or (
+                self.parallel_dims is not None and self.parallel_dims.dp_enabled
+            ):
+                raise ValueError("CPU offload requires unsharded inference")
+            if self.config.quantization.method or lora_enabled:
+                raise ValueError("CPU offload does not support runtime quantization or LoRA")
+            if self.config.quantization.mixed_precision_w8a16_cache != "none":
+                raise ValueError("CPU offload requires mixed_precision_w8a16_cache='none'")
+            if self.config.joint_attn_implementation != "two_way" or self.config.video_temporal_causal:
+                raise ValueError("CPU offload requires non-causal two_way attention")
+            if not getattr(net.language_model.model, "include_gen_pathway", True):
+                raise ValueError("CPU offload requires a combined reasoner/generator checkpoint")
+            if any(layer.self_attn.k_norm_und_for_gen is not None for layer in net.language_model.model.layers):
+                raise ValueError("CPU offload does not support generation-specific text K normalization")
         self.install_attention_dispatch(net)
 
         # Cast while still on meta (free -- no data to convert) and BEFORE sharding: each
@@ -653,11 +693,13 @@ class OmniMoTModel(ImaginaireModel):
         )
 
         with misc.timer("meta to cuda and broadcast model states"):
-            if self.config.parallelism.fsdp_cpu_offload:
+            if cpu_net:
+                _materialize_inference_net_on_cpu(net, buffer_device=torch.device(DEVICE))
+            elif self.config.parallelism.fsdp_cpu_offload:
                 materialize_non_offloaded_state(net, device=DEVICE)
             else:
                 net.to_empty(device=DEVICE)  # parameters and buffers: [*shape]
-            if DEVICE == Device.CUDA:
+            if DEVICE == Device.CUDA and not cpu_net:
                 # Weight initialization is not needed for other devices (cpu,
                 # meta), since they are only for checkpoint conversion and smoke
                 # tests.
@@ -4418,6 +4460,12 @@ class OmniMoTModel(ImaginaireModel):
             _cfgp_group,
             _align_device,
         )
+        prefill_text_kv = getattr(self, "_prefill_text_kv", False)
+        if prefill_text_kv:
+            if not reuse_text_kv or _dp_shard_group is not None or _cfgp_group is not None:
+                raise ValueError("Text K/V prefill requires single-GPU two-way text-KV eligible inference")
+            if self.config.compile.use_cuda_graphs:
+                raise ValueError("Text K/V prefill requires CUDA graphs to be disabled")
         cond_text_kv_cache: list[UndKVCache] | None = None
         uncond_text_kv_cache: list[UndKVCache] | None = None
         batched_text_kv_cache: list[UndKVCache] | None = None
@@ -4440,12 +4488,26 @@ class OmniMoTModel(ImaginaireModel):
                 # unused uncond stack. Otherwise keep the sequential cond+uncond pair.
                 cond_text_kv_cache = self._make_inference_text_kv_cache(target_net)
                 if batched_cfg_fast_path:
-                    # Shared und K/V for the fused cond+uncond (B=2) pack. Filled on
-                    # the first batched forward; later steps run gen-only with
-                    # per-sample isolation in ``_attention_gen_with_cached_text``.
+                    # Shared und K/V for the fused cond+uncond (B=2) pack.
+                    # Prepared with all CFG branches when prefill is enabled;
+                    # otherwise filled by the first batched forward.
                     batched_text_kv_cache = self._make_inference_text_kv_cache(target_net)
                 elif guidance != 1.0 or velocity_postprocess_builder is not None:
                     uncond_text_kv_cache = self._make_inference_text_kv_cache(target_net)
+
+            prepare_text_kv = (
+                InferenceTextKVPrefill(
+                    target_net,
+                    [
+                        (cond_packed_sequence_template, cond_text_kv_cache),
+                        (uncond_packed_sequence_template, uncond_text_kv_cache),
+                        (batched_packed_sequence_template, batched_text_kv_cache),
+                    ],
+                    self._component_offloader.activate,
+                )
+                if prefill_text_kv
+                else None
+            )
 
             def velocity_fn(
                 noise_x: list[torch.Tensor], timestep: torch.Tensor, action_timestep: torch.Tensor | None = None
@@ -4476,7 +4538,9 @@ class OmniMoTModel(ImaginaireModel):
                                 uncond_text_kv_cache = self._make_inference_text_kv_cache(net)
                             text_kv_cache = uncond_text_kv_cache
                     memory: MemoryState | None = (
-                        InferenceTextKVMemoryState(text_kv_cache) if text_kv_cache is not None else None
+                        InferenceTextKVMemoryState(text_kv_cache, prepare=prepare_text_kv)
+                        if text_kv_cache is not None
+                        else None
                     )
                     return self._get_velocity(
                         net=net,
@@ -4546,7 +4610,9 @@ class OmniMoTModel(ImaginaireModel):
                     assert sequence_plans_doubled is not None and gen_data_clean_doubled is not None
                     n = len(noise_x)
                     batched_memory: MemoryState | None = (
-                        InferenceTextKVMemoryState(batched_text_kv_cache) if batched_text_kv_cache is not None else None
+                        InferenceTextKVMemoryState(batched_text_kv_cache, prepare=prepare_text_kv)
+                        if batched_text_kv_cache is not None
+                        else None
                     )
                     velocities = self._get_velocity(
                         net=net,
@@ -4913,6 +4979,9 @@ class OmniMoTModel(ImaginaireModel):
             if self.config.sound_gen and len(result_sound) > 0:
                 result["sound"] = result_sound
             return result
+        except Exception:
+            self._component_offloader.offload()
+            raise
         finally:
             if previous_attention_dispatch is not None:
                 restore_inference_attention_dispatch(previous_attention_dispatch)
@@ -7392,6 +7461,8 @@ class OmniMoTModel(ImaginaireModel):
                 ``apply_chat_template`` (i.e., the VLM is configured as
                 text-only).
         """
+        self._component_offloader.activate("reasoner")
+
         # Decide whether the multimodal flow is in play, and validate the
         # image-list contract here so the failure happens before any
         # decoding work — far easier to debug than a downstream

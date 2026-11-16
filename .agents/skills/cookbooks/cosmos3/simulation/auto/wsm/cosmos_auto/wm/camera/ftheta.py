@@ -641,7 +641,7 @@ class FThetaCamera(CameraBase):
         # Fix the type
         rays = rays.astype(np.float32)
 
-        # TODO(restes) combine 2 and 3 column norm for rays?
+        # TODO: combine 2 and 3 column norm for rays?
         xy_norm = np.linalg.norm(rays[:, :2], axis=1, keepdims=True)
         cos_alpha = rays[:, 2:] / np.linalg.norm(rays, axis=1, keepdims=True)
 

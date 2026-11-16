@@ -181,7 +181,7 @@ def _is_type_alias(value: Any) -> bool:
 
 def _canonicalize_module_path(path: str) -> str:
     replacements = (
-        # vlm → reasoner rename (upstream i4). Longer/more-specific rules first
+        # vlm → reasoner rename (upstream). Longer/more-specific rules first
         # so the reasoner subtree isn't shadowed by the general vfm rules below.
         ("cosmos_framework.configs.base.defaults.reasoner.", "projects.cosmos3.vfm.configs.base.defaults.vlm."),
         ("cosmos_framework.configs.base.reasoner.", "projects.cosmos3.vfm.configs.base.vlm."),

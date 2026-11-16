@@ -533,8 +533,8 @@ class CheckpointCoordinator:
 
         The cadence path dedups by step number alone, which let a validation-only artifact
         (``validation.checkpoint_components=[training_state]``) of the same step answer "already
-        checkpointed" to an emergency save whose run plan was ``[model]``: no weights were written
-        (review of e11b239d02). Coverage is decided per component here. A step that is already partially
+        checkpointed" to an emergency save whose run plan was ``[model]``: no weights were written.
+        Coverage is decided per component here. A step that is already partially
         saved owns a committed artifact, and a committed artifact is never re-committed
         (``store.commit_artifact`` refuses a second manifest), so a missing model could only go into the
         step's full checkpoint: the save escalates to the full plan, with a log line. No accepted config

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Shared root-config machinery for the posttrain entrypoints (DESIGN: config system).
+"""Shared root-config machinery for the posttrain entrypoints.
 
 The registration + base that the per-algorithm roots build on. `PosttrainConfig` subclasses the
 cosmos3 root `Config` and adds the typed posttrain fields (`rl`/`grid` and model backends);
@@ -23,12 +23,12 @@ from typing import TypeVar
 
 import attrs
 
-from cosmos_framework.trainer import ImaginaireTrainer as Trainer
-from cosmos_framework.utils.config_helper import import_all_modules_from_package
 from cosmos_framework.configs.base import config as c3
-from cosmos_framework.posttrain.config.model import HF, I4, QWEN3_VL, HFModelConfig, Qwen3VLModelConfig
+from cosmos_framework.posttrain.config.model import HF, NATIVE, QWEN3_VL, HFModelConfig, Qwen3VLModelConfig
 from cosmos_framework.posttrain.config.rl import GridConfig, RunConfig
 from cosmos_framework.posttrain.utils.log import logger
+from cosmos_framework.trainer import ImaginaireTrainer as Trainer
+from cosmos_framework.utils.config_helper import import_all_modules_from_package
 
 
 @attrs.define(slots=False)
@@ -39,18 +39,18 @@ class PosttrainConfig(c3.Config):
     algorithm: str = "dpo"
     rl: RunConfig = attrs.field(factory=RunConfig)
     grid: GridConfig = attrs.field(factory=GridConfig)
-    # Model sourcing is top-level, not an RL concern: "i4" uses the inherited `model` tree, while
+    # Model sourcing is top-level, not an RL concern: "native" uses the inherited `model` tree, while
     # the typed load specs below are shared by every algorithm root.
-    model_backend: str = "i4"
+    model_backend: str = "native"
     model_hf: HFModelConfig = attrs.field(factory=HFModelConfig)
     model_qwen3_vl: Qwen3VLModelConfig = attrs.field(factory=Qwen3VLModelConfig)
 
     def __attrs_post_init__(self) -> None:
         """Reject unknown backend selectors when the typed root is constructed."""
-        if self.model_backend not in (I4, HF, QWEN3_VL):
+        if self.model_backend not in (NATIVE, HF, QWEN3_VL):
             raise ValueError(
                 f"unknown model_backend {self.model_backend!r} "
-                f"(expected {I4!r} or {HF!r}; {QWEN3_VL!r} is a compatibility alias)"
+                f"(expected {NATIVE!r} or {HF!r}; {QWEN3_VL!r} is a compatibility alias)"
             )
 
 
@@ -61,7 +61,7 @@ _C = TypeVar("_C", bound=PosttrainConfig)
 # another project that carries its own optional dependencies (robotics datasets, a database driver,
 # video and array codecs), and posttrain installs none of those. A module-scope import failure in
 # one experiment must not decide whether an unrelated recipe can load its config. Both catalogs get
-# the same treatment: posttrain's own experiments inherit i4 experiments through `defaults`, so they
+# the same treatment: posttrain's own experiments inherit upstream experiments through `defaults`, so they
 # import the same optional dependencies transitively.
 _EXPERIMENT_CATALOGS = (
     "cosmos_framework.configs.base.experiment",
@@ -154,14 +154,12 @@ def _register_experiment_catalogs() -> None:
             )
 
 
-
-
 def build_root(
     cls: type[_C], group: str, *, register_experiment_configs: bool = True, register_base_configs: bool = True
 ) -> _C:
     """Build a per-algorithm root of type `cls`: reuse cosmos3's config-group registration, register
-    posttrain experiments when requested (so `experiment=` selects them; inherited i4 experiments
-    stay available so a posttrain experiment can `defaults: [/experiment/<i4>]`), and stamp the
+    posttrain experiments when requested (so `experiment=` selects them; inherited upstream experiments
+    stay available so a posttrain experiment can `defaults: [/experiment/<name>]`), and stamp the
     posttrain job/trainer defaults. Concrete recipes that fully populate the root disable experiment
     registration so they do not import unrelated projects and their optional dependencies. Idempotent
     — the ConfigStore registration is safe to repeat. ``register_base_configs=False`` selects a

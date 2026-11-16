@@ -106,7 +106,7 @@ physical-ai-bench-conditional-generation/
 The primary metric for each modality is **bold**. All other metrics are cross-modality diagnostics.
 SI-RMSE is lower-is-better; all others are higher-is-better.
 
-> All scores were computed using [`trungtpham/pai-bench-c-cosmos3`](https://github.com/trungtpham/pai-bench-c-cosmos3), which includes fixes from [SHI-Labs/physical-ai-bench PR #8](https://github.com/SHI-Labs/physical-ai-bench/pull/8) for depth SI-RMSE outlier blow-up and DOVER score bias. The script auto-clones this repo. Once PR #8 merges into `SHI-Labs/physical-ai-bench:main`, that will become the default.
+> All scores were computed with upstream [`SHI-Labs/physical-ai-bench`](https://github.com/SHI-Labs/physical-ai-bench) at commit `2f3b687` (which includes [PR #8](https://github.com/SHI-Labs/physical-ai-bench/pull/8) for depth SI-RMSE outlier blow-up and DOVER score bias) plus the bundled patch `patches/physical-ai-bench-metric-alignment.patch`, which applies the remaining fixes listed under "Changes to PAI-Bench-C" below. The script clones the library and verifies the pin and the patch on every run. Override the source with `PAIBENCH_EVAL_GIT_URL` / `PAIBENCH_EVAL_GIT_COMMIT` / `PAIBENCH_EVAL_PATCH` (`""` skips the pin or the patch); a checkout you provide through `PAIBENCH_EVAL_ROOT` keeps its commit and is only checked for the patch.
 >
 > GT segmentation masks and GT depth maps are recomputed on the fly from the raw GT videos (`--force_recompute_gt_seg --force_recompute_gt_depth`) rather than using the pre-cached pkl/npz files bundled with the dataset. Predicted segmentation is always computed from the original pred video bytes (no lossy re-encode).
 
@@ -133,14 +133,17 @@ SI-RMSE is lower-is-better; all others are higher-is-better.
 
 
 ## Notes
-The reference scores above may differ slightly from those reported in the Cosmos3 paper. The paper scores were computed with the internal evaluation pipeline; the scores here use the public [`trungtpham/pai-bench-c-cosmos3`](https://github.com/trungtpham/pai-bench-c-cosmos3) library. Minor numerical differences can also arise from library version changes (PyTorch, Transformers, SAM2).
+The reference scores above may differ slightly from those reported in the Cosmos3 paper. The paper scores were computed with the internal evaluation pipeline; the scores here use the public [`physical-ai-bench`](https://github.com/SHI-Labs/physical-ai-bench) library, pinned and patched as described under "Changes to PAI-Bench-C" below. Minor numerical differences can also arise from library version changes (PyTorch, Transformers, SAM2).
 
 ## Changes to PAI-Bench-C
 
-The reference scores above were produced with the fork
-[`trungtpham/pai-bench-c-cosmos3`](https://github.com/trungtpham/pai-bench-c-cosmos3)
-rather than upstream `SHI-Labs/physical-ai-bench:main`.
-The fork applies nine bug fixes:
+The reference scores above were produced with upstream
+[`SHI-Labs/physical-ai-bench`](https://github.com/SHI-Labs/physical-ai-bench) at commit `2f3b687`
+plus the bundled patch `patches/physical-ai-bench-metric-alignment.patch`.
+Together they apply nine bug fixes. The outlier cap and the two DOVER fixes landed upstream in
+[PR #8](https://github.com/SHI-Labs/physical-ai-bench/pull/8); the patch carries the other six,
+pins the `transformers` / `sam2` versions, adds a `decord` compatibility shim for aarch64 hosts,
+and evaluates tasks in fixed-size batches (`PAIBENCH_C_EVAL_BATCH_SIZE`, default 30) to bound CPU memory:
 
 | Area | Root cause | Fix |
 | ---- | ---------- | --- |
@@ -149,10 +152,14 @@ The fork applies nine bug fixes:
 | **DOVER — deterministic** | DOVER's spatial patch sampler uses `torch.randint` / `np.random.randint` without a fixed seed, causing score variation between runs. | Seed `torch.manual_seed(0)` and `np.random.seed(0)` inside `get_technical_view()`, saving and restoring global RNG state. |
 | **DOVER — original bytes** | `dover_single_task` decoded the video to a numpy array then re-encoded it to MP4 bytes via imageio (lossy H.264, CRF ≈ 28) before passing to DOVER, introducing a systematic ~1.1 point downward bias. | Read raw file bytes directly with `Path(pred_video_file).read_bytes()` — no re-encode. |
 | **Canny F1 — RGB→GRAY** | `cv2.Canny` was called on raw RGB frames; OpenCV treated them as BGR, swapping the R/B channel weights in the implicit grayscale conversion. | Explicitly convert with `cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)` before calling `cv2.Canny` (`video_to_canny_and_blur.py`). |
-| **Seg mIoU / Recall** | Empty masks (objects SAM2 failed to track in any frame) were included in the IoU denominator, deflating scores. | Add `is_mostly_inside()` filter in `segmentation_metrics.py` to drop fully-empty masks before matching. |
+| **Seg mIoU / Recall** | Empty masks (objects SAM2 failed to track in any frame) were included in the IoU denominator, deflating scores. | Add `is_mostly_inside()` filter in `segmentation_metrics.py` to drop fully-empty masks before matching; when nothing is left on either side the metric reports `(0.0, 0.0)` instead of failing on an empty tensor stack. |
 | **Seg — SAM2 version** | Bundled `third_party/Grounded-SAM-2` ships an older SAM2 with different mask-propagation logic. | Pin `sam2==1.1.0` in `pyproject.toml`; force-reinstall after the editable install so site-packages wins. Also add `frames_tracked_per_obj` to `pack2tensor()` (required by `sam2>=1.1.0`). |
 | **Seg — GroundingDINO API** | `transformers>=5.0` renamed `threshold=` to `box_threshold=` in `post_process_grounded_object_detection`; the old keyword was silently ignored, disabling box filtering. | Pin `transformers==4.46.3`; use `box_threshold=` at the call site in `grounded_sam_v2.py`. |
 | **Seg — deterministic sampling** | `sample_points_from_masks()` used the global `np.random.choice`, causing run-to-run recall variance of ~1 object. | Seed a per-mask `np.random.default_rng` from the mask's pixel coordinates for reproducible point sampling. |
+
+Regression checks for the patched scorer live in `tests/metric_alignment_patch_test.py`. Run them from this directory
+with an environment that has the scorer's dependencies (the checkout's own `.venv` after `uv sync` works):
+`PAIBENCH_EVAL_ROOT=<checkout>/physical-ai-bench/conditional_generation python -m pytest tests/`.
 
 ## Requirements
 

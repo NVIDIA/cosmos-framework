@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Weight-free CPU shaping for i4-native Qwen3-VL dense and MoE policies."""
+"""Weight-free CPU shaping for native Qwen3-VL dense and MoE policies."""
 
 from __future__ import annotations
 

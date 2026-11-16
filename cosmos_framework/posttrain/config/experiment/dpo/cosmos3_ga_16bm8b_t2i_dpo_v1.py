@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """Text-to-image Diffusion-DPO experiment (T=1) — the image sibling of the video DPO.
 
-Same unified shape: inherit an i4 experiment via `defaults` + a typed `rl` section, but
+Same unified shape: inherit an upstream experiment via `defaults` + a typed `rl` section, but
 `rl.data.media="image"` (→ single latent frame → rectified_flow_image) with the T2I
 hyperparameters from the cosmos-rl recipe (beta=5000, lr=1e-6). Run via the unified loader:
 
@@ -22,7 +22,7 @@ from cosmos_framework.posttrain.config.rl import DPOConfig, OptimizerConfig, Pre
 cosmos3_ga_16bm8b_t2i_dpo_v1 = LazyDict(
     dict(
         defaults=[
-            "/experiment/t2w_mot_exp302_000_qwen3_vl_8b_multires",  # inherit i4 model/data (test exp)
+            "/experiment/t2w_mot_exp302_000_qwen3_vl_8b_multires",  # inherit the upstream model/data (test exp)
             "_self_",
         ],
         rl=DPOConfig(

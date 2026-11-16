@@ -133,10 +133,10 @@ def test_interactive_attention_configs_round_trip():
     """Causal artifacts carry three interactive-only attention configs.
 
     Without aliases for them, loading an exported causal checkpoint fails with
-    "Unknown Cosmos type alias" -- the imaginaire4 exporter writes the alias, and
+    "Unknown Cosmos type alias" -- the upstream exporter writes the alias, and
     this table is what has to turn it back into an importable path.
 
-    causal_flex_attention.py is the released name of imaginaire4's
+    causal_flex_attention.py is the released name of the upstream codebase's
     interactive/configs/defaults/flex_attention.py, renamed so it does not collide
     with the non-causal multiview attention config, which is asserted here too so an
     over-broad rule for either cannot capture the other.
@@ -173,7 +173,7 @@ def test_interactive_attention_configs_round_trip():
     assert config["teacher_forcing_replay_policy"]["_type"] == "teacher_forcing_replay_policy_config"
     # The non-causal siblings keep their own aliases. The alias name is still
     # flex_attention_config for compatibility with artifacts already exported, but it now
-    # names MultiviewAttentionConfig -- which is what imaginaire4 emits it for.
+    # names MultiviewAttentionConfig -- which is what the upstream codebase emits it for.
     assert config["multiview_attention"]["_type"] == "flex_attention_config"
     assert config["multiview_attention"]["mask"]["_type"] == "flex_attention_mask_config"
     assert "projects.cosmos3" not in json.dumps(public_model_config)
