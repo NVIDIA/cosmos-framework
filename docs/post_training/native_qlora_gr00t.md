@@ -73,6 +73,15 @@ remains failed; a bounded release wait is needed before the next container.
 Single-container task diagnostics can proceed with their own compute preflight.
 No repeated-start, model-performance or quality result follows from this probe.
 
+The bounded-wait successor (`38634861`, **1,230 GPU-seconds**) subsequently passed
+all twenty fresh container starts and their step-release checks. Its 109 retained
+files cover 93,060 bounded one-byte file-access checks, all forty mount flags,
+durable-write cleanup and unchanged GPU/CPU placement. Eighteen releases required
+four recorded queries and two required five. No `srun` was retried. This qualifies
+the repeated-container infrastructure for the unchanged sixteen-case benchmark;
+no policies were loaded and no latency or quality result follows from this canary.
+All preceding failed allocations retain their original outcomes.
+
 Native commands: [training and recovery](#native-training-and-recovery),
 [fresh-process evaluation](#fresh-process-evaluation),
 [standalone artifacts](#standalone-artifacts), and [LIBERO rollout](#libero-rollout).

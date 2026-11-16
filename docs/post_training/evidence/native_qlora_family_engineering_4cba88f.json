@@ -32401,6 +32401,81 @@
         "No simulator cause, policy-quality, performance or generated-scene acceptance claim.",
         "Original failure and protocol remain immutable; any lossless packing repair requires separate validation."
       ]
+    },
+    "38634861": {
+      "job": "38634861",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_gpu_seconds": 1230,
+      "scope": "Twenty fresh model-free container mount/read/write starts and bounded step releases; no policy load, training, numerical or latency comparison.",
+      "scientific_protocol_sha256": "e0d830f997068a2bde7bb2351d63095d8a12ba9e5c6474595e8ac94a63114a82",
+      "canary_protocol_sha256": "b4a8be01915c69ba7d455ed20e969826f2de3a0e2442ddf2321bb4215fb8d823",
+      "admission_sha256": "c2536f5f0884f49fdfafaff87d573bbc412c91074e37f943d487899c1c83d5a1",
+      "helper_sha256": "58d3e517697b7e3158d00724cc88096eb190b2ccd78461d928349d46814dc882",
+      "receipt_archive": "selected-mount-canary-38634861-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "f83611c58b336fcce2ac17b2dbc949b3df63a6be1dbf36ef4c18fa3516031d67",
+      "receipt_archive_bytes": 1972411,
+      "inventory_sha256": "2ce266694004733ac597779f5600798ca308077da474c5ff5128c7d9213e23bf",
+      "listed_files": 109,
+      "listed_bytes": 72211559,
+      "regular_archive_members": 110,
+      "terminal_release_sha256": "85639288890bf152d1b05f9b16723df597836c0eb718b66c534e03410f96aab2",
+      "owner_raw_replay_sha256": "df0a3f823f0cb645e25be717809a441a322bf503e6208fed794bb86b23580e75",
+      "root_independent_checks": "All109 hashes/sizes, exactc928 release, all20 allocated/standalone case records, all93060 bounded reads and referenced hashes, all20release histories, one placement independently replayed.",
+      "complete_starts": 20,
+      "complete_releases": 20,
+      "starts_by_build": {
+        "native-64ea823": 10,
+        "native-02f93ba": 10
+      },
+      "files_per_start": 4653,
+      "bounded_one_byte_accesses": 93060,
+      "mount_flags_per_start": 40,
+      "writable_mounts_per_start": 2,
+      "input_counts_per_start": {
+        "alpamayo_media": 4096,
+        "artifact": 204,
+        "asset": 33,
+        "gr00t_media": 320
+      },
+      "placement": {
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          46,
+          47,
+          48,
+          49,
+          124,
+          125,
+          126,
+          127,
+          174,
+          175,
+          176,
+          177
+        ],
+        "gpu_bytes": 85174583296,
+        "gpu_name": "NVIDIA A100-SXM4-80GB",
+        "gpu_uuid": "GPU-12a33979-943d-72d2-5f76-758cd76538f0",
+        "node": "batch-block4-1051",
+        "slurm_job": "38634861"
+      },
+      "distinct_placements": 1,
+      "mapped_host_uid": 41852,
+      "release_query_count_histogram": {
+        "4": 18,
+        "5": 2
+      },
+      "automatic_srun_retries": 0,
+      "allocation_workflow_seconds": 1223.5102146390127,
+      "decision": "Repeated-container infrastructure passed. Keep prior failures unchanged; a complete sixteen-policy-case comparison is still required before latency claims.",
+      "limits": [
+        "Bounded reads establish compute-side access, not a fresh complete payload hash or model-load proof. Admission contains separate content checks.",
+        "No simulator trajectory repeatability, native model numerical result, task-quality evidence or deployment-latency improvement is inferred."
+      ]
     }
   },
   "read_only_head_memory_diagnostic": {
