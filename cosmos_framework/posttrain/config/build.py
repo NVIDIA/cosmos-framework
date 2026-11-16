@@ -732,8 +732,32 @@ def _validate_native_adapter_optimizer(opt_cfg: OptimizerConfig, *, net: Any = N
         raise ValueError("native LoRA requires OptimizerConfig(name='adamw', impl='fused')")
     if opt_cfg.train_keys:
         raise ValueError("native LoRA requires train_keys=[]; the builder owns the exact trainability policy")
-    if opt_cfg.decay_groups or opt_cfg.lr_multipliers:
-        raise ValueError("native LoRA requires no decay_groups or lr_multipliers in the initial capability")
+    if opt_cfg.decay_groups:
+        raise ValueError("native LoRA requires no decay_groups in the initial capability")
+    if opt_cfg.lr_multipliers:
+        _validate_native_auxiliary_lr_multipliers(opt_cfg, net)
+
+
+def _validate_native_auxiliary_lr_multipliers(opt_cfg: OptimizerConfig, net: Any) -> None:
+    """Allow per-group learning rates only for explicitly trained non-LoRA auxiliary modules.
+
+    Every LoRA factor keeps the recipe's base learning rate, and every pattern must select at least one trained
+    auxiliary parameter (for example Alpamayo's ``expert.`` and action projections), so a typo or a pattern that
+    would rescale adapters is refused before any optimizer exists.
+    """
+    parameters = getattr(net, "_cosmos_adapter_parameters", None) if net is not None else None
+    identity = getattr(net, "_cosmos_adapter_metadata", {}) if net is not None else {}
+    auxiliary = set(identity.get("auxiliary_parameters", ())) if isinstance(identity, Mapping) else set()
+    if not parameters or not auxiliary or not auxiliary <= set(parameters):
+        raise ValueError(
+            "native LoRA lr_multipliers require a constructed model with explicitly trained auxiliary parameters"
+        )
+    for name in parameters:
+        if lr_multiplier_for(name, opt_cfg.lr_multipliers) != 1.0 and (".lora_" in name or name not in auxiliary):
+            raise ValueError(f"native LoRA lr_multipliers may scale only trained auxiliary parameters, not {name!r}")
+    for pattern in opt_cfg.lr_multipliers:
+        if not any(pattern in name and lr_multiplier_for(name, opt_cfg.lr_multipliers) != 1.0 for name in auxiliary):
+            raise ValueError(f"native LoRA lr_multipliers pattern {pattern!r} selects no trained auxiliary parameter")
 
 
 def refuse_rounding_or_unavailable_optimizer(config: Any, opt_cfg: OptimizerConfig) -> None:

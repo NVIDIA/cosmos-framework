@@ -523,8 +523,11 @@ def test_target_never_substitutes_loss_or_accepts_nonfinite_metrics(metrics):
         )
 
 
+@pytest.mark.parametrize("head_lr_multiplier", [None, 0.1])
 @pytest.mark.parametrize("completed_updates", [0, 3])
-def test_native_adapter_checkpoint_restores_head_optimizer_rng_cursor_and_next_update(tmp_path, completed_updates):
+def test_native_adapter_checkpoint_restores_head_optimizer_rng_cursor_and_next_update(
+    tmp_path, completed_updates, head_lr_multiplier
+):
     """Exercise real DCP/codec/trainer at pristine and trained completed-update boundaries."""
     from cosmos_framework.posttrain.checkpoint.adapter import read_adapter_metadata
     from cosmos_framework.posttrain.checkpoint.manager import CheckpointManager
@@ -555,7 +558,23 @@ def test_native_adapter_checkpoint_restores_head_optimizer_rng_cursor_and_next_u
         )
         family.codec.bind_training_identity({"seed": 19, "effective_batch": 2})
         model = SimpleNamespace(net=net)
-        optimizer = torch.optim.AdamW(family.codec.parameters.values(), lr=0.01)
+        if head_lr_multiplier is None:
+            optimizer = torch.optim.AdamW(family.codec.parameters.values(), lr=0.01)
+        else:
+            from cosmos_framework.posttrain.config.build import build_optimizer
+            from cosmos_framework.posttrain.config.rl import OptimizerConfig
+
+            optimizer = build_optimizer(
+                net,
+                OptimizerConfig(
+                    name="adamw",
+                    impl="fused",
+                    lr=0.01,
+                    weight_decay=0.0,
+                    lr_multipliers={"head.": head_lr_multiplier},
+                ),
+            )
+            assert [g["lr_multiplier"] for g in optimizer.param_groups] == [1.0, head_lr_multiplier]
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.95)
 
         def objective(model, batch):

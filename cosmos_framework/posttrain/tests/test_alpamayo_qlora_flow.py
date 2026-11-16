@@ -265,3 +265,80 @@ def test_native_dense_meta_reconstruction_after_real_task_updates(tmp_path, unme
     # BF16 weight merge changes arithmetic: this is a bounded tiny-output check,
     # not exact adapter parity and not a real driving task-quality qualification.
     torch.testing.assert_close(prediction, reference, atol=0 if unmerged else 2e-3, rtol=0 if unmerged else 2e-2)
+
+
+# The exact keys accepted by the CLI override ++rl.optimizer.lr_multipliers={expert:0.1,...}.
+EXPERT_LR_MULTIPLIERS = {"expert": 0.1, "action_in_proj": 0.1, "action_out_proj": 0.1}
+
+
+def test_expert_lr_multiplier_groups_schedule_and_checkpoint_identity(tmp_path):
+    """The 0.1x expert/projection screen uses only the existing native optimizer grouping."""
+    from cosmos_framework.posttrain.config.build import build_optimizer, build_warmup_cosine_lr_scheduler
+    from cosmos_framework.posttrain.config.rl import OptimizerConfig
+
+    net = source(tmp_path)
+    targets = {
+        name: tuple(module.weight.shape)
+        for name, module in net.named_modules()
+        if type(module) is torch.nn.Linear
+        and name.startswith("vlm.model.language_model.layers.")
+        and (".layers.0." in name or name.endswith(("k_proj", "v_proj")))
+    }
+    auxiliary = tuple(name for name, _ in net.named_parameters() if name.startswith(tuple(EXPERT_LR_MULTIPLIERS)))
+    state = install_family_backbone(
+        net,
+        config=FamilyBackboneConfig(mode="bf16_lora", rank=2, alpha=4, seed=9),
+        targets=targets,
+        auxiliary_parameters=auxiliary,
+        source_identity={"fixture": "actual-public-Alpamayo"},
+        task_identity={"loss": "native-flow"},
+        device=torch.device("cpu"),
+    )
+    from cosmos_framework.posttrain.model.alpamayo.runtime import bind_rotary_aliases
+
+    bind_rotary_aliases(net)
+    cfg = OptimizerConfig(
+        name="adamw",
+        impl="fused",
+        lr=1e-4,
+        warmup_steps=2,
+        weight_decay=0.0,
+        lr_multipliers=dict(EXPERT_LR_MULTIPLIERS),
+    )
+    for refused, message in (
+        ({"layers.0.": 0.1}, "only trained auxiliary"),
+        ({"lora_": 0.1}, "only trained auxiliary"),
+        ({**EXPERT_LR_MULTIPLIERS, "exprt.": 0.1}, "selects no trained auxiliary"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            build_optimizer(net, OptimizerConfig(name="adamw", impl="fused", lr=1e-4, lr_multipliers=refused))
+    optimizer = build_optimizer(net, cfg)
+    state.assert_optimizer(optimizer)
+    names = {id(p): n for n, p in net.named_parameters()}
+    groups = {g["lr_multiplier"]: {names[id(p)] for p in g["params"]} for g in optimizer.param_groups}
+    adapters = set(state.codec.parameters) - set(auxiliary)
+    assert set(groups) == {1.0, 0.1}
+    assert groups[0.1] == set(auxiliary) and groups[1.0] == adapters
+    assert all("lora_" in name for name in groups[1.0])
+    assert optimizer.param_groups[0]["lr_multiplier"] == 1.0  # reported train/learning_rate stays the base lr
+    scheduler = build_warmup_cosine_lr_scheduler(optimizer, warmup_steps=2, cycle_steps=6, f_start=0.01, f_min=0.01)
+    policy = AlpamayoSFTPolicy(net)
+    data = batch()
+    before = {name: p.detach().clone() for name, p in state.codec.parameters.items()}
+    for _ in range(4):
+        lrs = {g["lr_multiplier"]: g["lr"] for g in optimizer.param_groups}
+        assert lrs[0.1] == pytest.approx(0.1 * lrs[1.0], rel=1e-12)
+        optimizer.zero_grad(set_to_none=True)
+        policy.flow_matching_loss(data).loss.backward()
+        optimizer.step()
+        scheduler.step()
+    assert all(not torch.equal(before[n], p) for n, p in state.codec.parameters.items())
+    identity = state.codec.optimizer_identity(optimizer)
+    assert [g["options"]["lr_multiplier"] for g in identity["groups"]] == [1.0, 0.1]
+    assert {n for g in identity["groups"] for n in g["parameters"]} == set(state.codec.parameters)
+    restored = build_optimizer(net, cfg)
+    restored.load_state_dict(copy.deepcopy(optimizer.state_dict()))
+    assert [(g["lr"], g["lr_multiplier"]) for g in restored.param_groups] == [
+        (g["lr"], g["lr_multiplier"]) for g in optimizer.param_groups
+    ]
+    assert state.codec.optimizer_identity(restored) == identity
