@@ -34648,5 +34648,38 @@
       "recovery_build": "e64a735d33303d8e7e919b9919d550e644d1312e"
     },
     "independent_metadata_controls_peer_sha256": "c109c2e01c0a327ce3fa72e2ea3b571644ac358a46acd26e4380e71c4ce4d6f3"
+  },
+  "current_default_recovery_source_review": {
+    "mature_evidence_revision": "cbc950f867329838a81f57fa303dbc033b12bef2",
+    "current_training_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+    "mature_job": "38604682",
+    "current_default_jobs": [
+      "38563905",
+      "38606005"
+    ],
+    "byte_identical_training_contract_files": 29,
+    "canonical_sorted_file_digest_mapping_sha256": "c7e47dc7655dd70135e7baad9f36b6a96f73729bd14282c222b17595ed4a0201",
+    "scope": "Root and peer source review: update/recovery/cursor/evaluator/optimizer machinery unchanged; disabled head-adapter branch creates no parameters or RNG; both matched recipes explicitly use LR1e-5. Supports reuse of mature mechanism evidence alongside current own-build exact short checks.",
+    "observed_current_build_200_to_300": false,
+    "cross_build_resume_allowed": false,
+    "new_quality_or_timing_result": false
+  },
+  "prepared_selected_gr00t_generated_evaluation_backport": {
+    "revision": "fe72f850d9f6e3922bb1a3b1332549e3ab96c82d",
+    "branch": "integration/libero-generated-native64",
+    "parent": "64ea823db4a7978c387d195bb464879b4f4733d0",
+    "production_files_changed": 5,
+    "copied_generated_test_files": 1,
+    "cpu_tests_passed": 102,
+    "selected_artifact_bound_source_hashes_unchanged_per_policy": 9,
+    "source_manifest_sha256": "a367373ad1b23c765eec9ba1dcae38d584735b0d77cc345abd70ac11b92768c6",
+    "wheel_sha256": "1791eca9136555514e0571cd5405dd4488cd218926bafc10de9b31ec931c17b4",
+    "archive_sha256": "5830b746e5cb158b018392bafe4ee79a0667a2b4b2ca4ce4a4559420a2d8ae7e",
+    "build_receipt_sha256": "07b6e164a088f910a6d893ef750dca0f5f28c7d558f7907a02789ea04bdafa76",
+    "source_closure_peer_sha256": "59edd69d573a5646b3ac31fa8230443a50affcd663490517fe104e502abbd176",
+    "package_peer_sha256": "14fb94be2e7e89bd55265b71be56a2fe713bdef0e3a69a9c4ce184db15821d45",
+    "pushed_to_fork": true,
+    "real_selected_policy_or_simulator_qualified": false,
+    "scope": "Evaluation-only legacy-compatible native build; model, codec, config, trainer and loader contract unchanged. No identity bridge, actual scenes, accelerator result or quality claim."
   }
 }

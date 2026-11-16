@@ -643,6 +643,15 @@ reuse with the rejected DiT head-adapter profile remains unqualified. The comple
 300-update timing study and mature recovery retain their `cbc950f` identity;
 this short current-build test does not create a new mature or quality result.
 
+A source review also verified that all 29 update/recovery contract files are
+byte-identical between `cbc950f` and `e64a735`. The added head-adapter path is
+disabled for this full-head configuration; it creates no additional parameters,
+optimizer entries or RNG stream. Both recorded comparisons explicitly use LR
+`1e-5`, despite the changed starter default. This supports reusing the completed
+`cbc950f` mature recovery as mechanism evidence alongside the current-build exact
+checks. It does not establish an observed `e64a735` 200-to-300 run or permit
+cross-build resume. The source comparison is retained in the existing family evidence.
+
 For the official seed-17 control `38546671`, strict v11 memory acceptance passed
 across the whole observed workflow and all four model stages: all 768 host samples were complete and owned-GPU attribution
 was valid. Sampled peaks were 38.254 GiB owned GPU memory and 29.019 GiB host PSS;
@@ -974,6 +983,15 @@ the rollout workflow also includes fresh-process startup and source verification
 policy response latency. CPU fixtures cover these contracts; real pinned-runtime preparation,
 fresh-process regeneration and policy/simulator acceptance remain required before use as
 rollout evidence. No generated-scene campaign is qualified by this implementation alone.
+
+Historical selected-update-200 policies require their compatible native loader.
+The evaluation-only backport `fe72f850d9f6e3922bb1a3b1332549e3ab96c82d` on
+`integration/libero-generated-native64` adds the same five scene-evaluation files
+to native `64ea823`; both policies' nine bound model/shared source hashes, codec,
+configuration and trainer remain unchanged. Its 102 CPU tests passed, but real
+selected-policy/EGL qualification is still pending. This is not an identity
+override. Generate a fresh source description and manifest for that build; a
+manifest from the current build binds a different source closure.
 
 ### Published initial states
 
