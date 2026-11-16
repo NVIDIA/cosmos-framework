@@ -897,7 +897,34 @@ The existing evidence JSON retains 42 NF4 and 43 BF16 hash-listed raw files,
 immutable failed clocks, the dated NF4 analysis and independent numerical and
 telemetry reviews.
 
-The later optimizer-loading fix in build `02f93ba` passed its own Alpamayo gate
+A subsequent component diagnostic (`38608745`, **1,517 GPU-seconds**) tested the
+retained BF16 update-512 policy on 20 already-consumed training rows, with three
+paired native noise seeds. It separately enabled the learned language adapters
+and the learned expert/action projections. The source expert was captured in
+FP32 before loading the trained artifact; using `train_action_head=false` would
+also change its dtype and would not isolate the learned update.
+
+| Applied learned components | Native flow loss | ADE at 6.4s (m) | FDE at 6.4s (m) |
+|---|---:|---:|---:|
+| Neither | 0.370237 | 1.920576 | 5.562543 |
+| Language adapters only | 0.366478 | 1.695836 | 4.956550 |
+| Expert/projections only | 0.422661 | 1.856345 | 5.710785 |
+| Both | 0.421215 | 1.660451 | 5.123561 |
+
+Language adapters with the source expert reduced ADE by 11.70%, with improvement
+at every noise seed. However, restoring the source expert from the jointly trained
+policy reduced flow loss by 13.00% while **worsening ADE by 2.13%**. This fails the
+prospective requirement that restoration improve both metrics. The frozen-expert
+learning screen is therefore **not selected**. This mixed diagnostic does not
+establish a coding defect or invalidate the previous development failures.
+
+All 240 paired cells completed without optimizer updates, and model/buffer values,
+storage/gradient structure, mixed modes, adapter scales and RNG were restored.
+These are interventions on one trained BF16 control, not retraining, held-out
+quality, NF4 qualification or an independent-family confidence interval. The
+existing family evidence retains the raw records and unchanged decision rule.
+
+The optimizer-loading fix in build `02f93ba` passed its own Alpamayo gate
 (`38543454`, **2,109 GPU-seconds**). Both NF4/BF16 LoRA modes completed ten native
 updates, matched the retained `4cba88f` states at updates 5 and 10, and recovered
 exactly from their own update-5 checkpoints to update 10. Model and optimizer

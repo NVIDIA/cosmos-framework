@@ -233,6 +233,245 @@
     "scope": "Source CBC only; both precisions benefit. No task-quality or cross-precision speed claim. Same-build own-ON200to300 recovery and current-e64 compatibility remain pending; no promotion."
   },
   "jobs": {
+    "38608745": {
+      "job": "38608745",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 1517,
+      "native_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "native_source": {
+        "code_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+        "manifest_sha256": "da8103ce69578992a1b11aed793b0dbb89f6e3f86bd3e3d72122965270abe671",
+        "scope": "Original compatible runtime-curated4c closure, no source or metadata bridge",
+        "wheel_sha256": "9113351965b501d293f9a71f476926fc212c51732144a63f90aca144120f0697"
+      },
+      "protocol_sha256": "17cbf4259b570a05f720ace6e26ba739d95b7d326c995e824558d81c37e2b183",
+      "payload_manifest_sha256": "4a7313f3ece3b7f67b88922c9e11f8833b9a44bd6e13cb10aac2a1325689a886",
+      "receipt_archive": "cosmos-qlora-family-20261113/alpamayo-component-ablation-38608745-receipts-v1.tar.gz",
+      "archive_sha256": "f2f4477790945709c19ac16374ef492dc0803a123513199d0c196a19d92a6853",
+      "inventory_sha256": "85c428f831f98a9f4c5b6e8d3b1eae21568a601145fb0dc78513b7b745053e22",
+      "files_verified": 68,
+      "payload_files_verified": 27,
+      "terminal_release_sha256": "277689c16edd192a0a86b51aaf49e32f0d51d043f677e8dfaa7e784a1293f821",
+      "admission_sha256": "6f527662a7f747986c496b9f835b1745494d02c7fa82ea7033c6304619b03e5c",
+      "result_sha256": "c154b6ba1fd402e6e6f6d512f7d4cee82feec43f2a8fdd87912c6be5657daf93",
+      "restoration_sha256": "9083706d2537175dfd34289323b6f3858e4bdb27ba815176f097e7811ad60c9e",
+      "input_bindings_sha256": "6b8c9d4b92bc3c386a5d05320f4ac55f4811d20dbc474f87727cc21fbbb4eaf0",
+      "independent_raw_peer_sha256": "70edd53b87df9c1e86a56db40579632cb52d926c2a6f6805a2017690e423658d",
+      "independent_reader_sha256": "cc952ad1fd3e51bb46e90f229460780f8096a0cd6f8d296ef49eb47182e58949",
+      "independent_success_log_sha256": "0f2f615fd61d1df1a34dda8e3976c0bc07cfe5bc196a6fc88535f6830ae7f069",
+      "runtime": {
+        "allocator": null,
+        "code": "4cba88f4d84ce69037c194e58670e8491388a36d",
+        "cpu_affinity": [
+          12,
+          13,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          124,
+          125,
+          142,
+          143,
+          144,
+          145,
+          146,
+          147
+        ],
+        "family": "alpamayo",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-9df52584-c74a-f7fb-d76d-7139d1f97f4d"
+        },
+        "node": "batch-block7-01718",
+        "numa_nodes": [
+          "node0",
+          "node1",
+          "node2",
+          "node7"
+        ],
+        "slurm_job": "38608745",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "artifact": {
+        "auxiliary_tensors": 409,
+        "language_factor_tensors": 494,
+        "metadata_sha256": "17350ad350977a65915eb673634941335782222f5e2402c70837e3d0b7285ce8",
+        "model_or_optimizer_tensor_payloads_read": false,
+        "small_metadata_deserializations": 1,
+        "step": 512,
+        "trainable_tensors": 903
+      },
+      "input_proof": {
+        "cpu_recomputed_trajectory_cells": 240,
+        "cpu_reduction_scope": "Descriptive recomputation of six trajectory metrics from retained float32 trajectory values and exact local TRAIN target rows; CPU/GPU final-bit differences are not a new acceptance threshold. Native sum/count replay remains exact.",
+        "cpu_vs_native_trajectory_sum_max_abs_difference": 4.76837158203125e-07,
+        "exact_consumed_cursor_selection": true,
+        "input_tensor_records": 160,
+        "native_cell_metric_sum_count_reductions_exact": 240,
+        "noises": [
+          123,
+          456,
+          789
+        ],
+        "paired_flow_tensor_records": 960,
+        "row_cells": 240,
+        "selected_rows": 20,
+        "states": [
+          "00",
+          "10",
+          "01",
+          "11"
+        ],
+        "trajectory_hashes_exact": 240
+      },
+      "parameter_updates": 0,
+      "state_order": {
+        "00": "Language off; source expert/projections FP32",
+        "10": "Trained language adapters; source expert/projections FP32",
+        "01": "Language off; trained expert/projections FP32",
+        "11": "Trained language adapters and trained expert/projections FP32"
+      },
+      "metrics": {
+        "00": {
+          "loss": 0.3702373521712919,
+          "open_loop_ade_1s_meters": 0.04311946236994117,
+          "open_loop_ade_3s_meters": 0.41385757823785146,
+          "open_loop_ade_6p4s_meters": 1.9205755983789763,
+          "open_loop_fde_1s_meters": 0.11071802333462984,
+          "open_loop_fde_3s_meters": 1.2882511164993047,
+          "open_loop_fde_6p4s_meters": 5.562543340524038
+        },
+        "01": {
+          "loss": 0.422661005348588,
+          "open_loop_ade_1s_meters": 0.04284566374650846,
+          "open_loop_ade_3s_meters": 0.3916243570546309,
+          "open_loop_ade_6p4s_meters": 1.856345064441363,
+          "open_loop_fde_1s_meters": 0.11139570075708131,
+          "open_loop_fde_3s_meters": 1.1854523519674938,
+          "open_loop_fde_6p4s_meters": 5.71078542470932
+        },
+        "10": {
+          "loss": 0.36647771634161475,
+          "open_loop_ade_1s_meters": 0.04063435776624828,
+          "open_loop_ade_3s_meters": 0.3654855730632941,
+          "open_loop_ade_6p4s_meters": 1.6958355029424033,
+          "open_loop_fde_1s_meters": 0.10390342397537704,
+          "open_loop_fde_3s_meters": 1.1264565783242384,
+          "open_loop_fde_6p4s_meters": 4.956550083557764
+        },
+        "11": {
+          "loss": 0.42121500535868106,
+          "open_loop_ade_1s_meters": 0.04042403033236042,
+          "open_loop_ade_3s_meters": 0.35497267469763755,
+          "open_loop_ade_6p4s_meters": 1.6604513799150784,
+          "open_loop_fde_1s_meters": 0.10472055635570238,
+          "open_loop_fde_3s_meters": 1.0736803111930688,
+          "open_loop_fde_6p4s_meters": 5.123561410109202
+        }
+      },
+      "paired_noise_seed_ade_6p4s_meters": {
+        "123": {
+          "00": 1.82892207801342,
+          "01": 1.7262599766254425,
+          "10": 1.6961634159088135,
+          "11": 1.5571406573057174
+        },
+        "456": {
+          "00": 2.30874850153923,
+          "01": 2.015464597940445,
+          "10": 2.0775075614452363,
+          "11": 1.882238107919693
+        },
+        "789": {
+          "00": 1.6240562155842782,
+          "01": 1.8273106187582016,
+          "10": 1.3138355314731598,
+          "11": 1.541975374519825
+        }
+      },
+      "descriptive_changes": {
+        "language_on_source_expert_ade_relative_decrease": 0.11701705240150939,
+        "restore_source_at_language_on_ade_relative_increase": 0.02130994225746896,
+        "restore_source_at_language_on_flow_relative_decrease": 0.1299509474275623
+      },
+      "diagnostic_interpretation": {
+        "checks": {
+          "ade_better_every_noise_seed": true,
+          "ade_reduction_at_least_5pct": true,
+          "fde_not_worse": true,
+          "flow_lower": true,
+          "restoring_expert_improves_flow_and_ade": false
+        },
+        "decision": "No new learning screen justified; retain negative/mixed diagnostic and failed low-LR screen unchanged.",
+        "promotion": false,
+        "prospective_condition_met": false,
+        "quality_or_noninferiority_claim": false
+      },
+      "on_node_restoration": {
+        "all_trained_base_buffer_records_exact": true,
+        "mixed_modes_restored": true,
+        "passed": true,
+        "rng_restored": true,
+        "scales_restored": true,
+        "storage_gradient_graph_exact": true
+      },
+      "memory": {
+        "device_peak_bytes": 34888417280,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 23750294528,
+        "host_rss_sum_peak_bytes": 24032862208,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 1457.1606087684631,
+        "owned_device_process_peak_bytes": 34154217472,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 1095,
+        "sampling_gap_seconds": {
+          "count": 1094,
+          "maximum": 2.010143995285034,
+          "mean": 1.3319566807755605,
+          "median": 1.3297535181045532,
+          "p95": 1.39018874168396,
+          "sum": 1457.1606087684631
+        }
+      },
+      "allocator_peaks": {
+        "allocator_peak_allocated_bytes": 32700915200,
+        "allocator_peak_reserved_bytes": 33453768704
+      },
+      "clocks": {
+        "parent_gpu_seconds": 1517,
+        "sampled_span_seconds": 1457.1606087684631,
+        "worker_seconds": 1457.3393102730624,
+        "wrapper_seconds": 1459.8885595309548
+      },
+      "missing_files": [
+        "native-phases.jsonl"
+      ],
+      "phase_records_from_stdout_exact": 4,
+      "scope_limits": [
+        "TRAIN calibration component diagnostic at selected BF512 checkpoint; zero parameter updates, no validation, new recipe, noninferiority or promotion claim.",
+        "Raw RNG arrays, full model/base/gradient storage equality and input immutability are on-device attestations bound to exact worker and restoration; local replay checks hashes and flags, not full tensors.",
+        "Native flow loss replay uses retained native sum/count; no model forward or flow target reconstruction.",
+        "native-phases.jsonl is missing. Four byte-identical semantic phase records are retained in worker stdout and stage memory.jsonl; original missing file is not synthesized.",
+        "Memory is descriptive sampled lower bounds over the observed worker span; it does not cover all scheduler startup/teardown. Unclassified native intervals are retained unchanged."
+      ],
+      "review_failures_retained": "Independent reader attempts01-03 corrected only entry counting, local curated-source directory lookup and native config -- API; original logs retained. No producer, protocol, metric or raw evidence changed."
+    },
     "38606005": {
       "job": "38606005",
       "state": "COMPLETED",
