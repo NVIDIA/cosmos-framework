@@ -233,6 +233,230 @@
     "scope": "Source CBC only; both precisions benefit. No task-quality or cross-precision speed claim. Same-build own-ON200to300 recovery and current-e64 compatibility remain pending; no promotion."
   },
   "jobs": {
+    "38606005": {
+      "job": "38606005",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 1269,
+      "native_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "protocol_sha256": "32027290a30eff4b9bee15135446c3fed6274788d795f567492c9cd98b07e96d",
+      "payload_manifest_sha256": "bf54677b13e0d896ea05cc0e9909f837227ff70c58e8a84e1f4e1429c707dd95",
+      "receipt_archive": "cosmos-qlora-family-20261113/gr00t-current-backbone-reuse-38606005-receipts-v1.tar.gz",
+      "archive_sha256": "78c118585bcf368a29ad1c17230afbf9e60eb171cfbc84ab0fc3d8b166c74e88",
+      "inventory_sha256": "5b79f06ef86a56fa34d65754a8d31be6cbc509aeab630c37120fd33720872f48",
+      "files_verified": 215,
+      "payload_files_verified": 62,
+      "terminal_release_sha256": "4cda303bba07364e146fba9c06076378da866502a03b6d3a0b83f88446350617",
+      "acceptance_sha256": "bd6d66099e2f2087e0a61aac97db646af16fa95920056657d0cfdef3286e597f",
+      "admission_sha256": "bea194628725b7d3014c994ce32a766640e7220b65d740175461c218d4a96bc7",
+      "owner_readout_sha256": "6f282af442ccc53d23fadde38bba23201018206b5b6a29e17d63fd8457a61278",
+      "independent_raw_peer_sha256": "667ca048b0c95eee256b0d8ffd988c3ae8b6a7675c29417c720f52881ad81961",
+      "runtime": {
+        "allocator": null,
+        "code": "e64a735d33303d8e7e919b9919d550e644d1312e",
+        "cpu_affinity": [
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          56,
+          57,
+          198,
+          199,
+          200,
+          201,
+          202,
+          203,
+          218,
+          219
+        ],
+        "family": "gr00t",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-dd6fd96e-5b10-27af-66bc-8eaf0e015ce4"
+        },
+        "node": "batch-block7-01718",
+        "numa_nodes": [
+          "node2",
+          "node3",
+          "node4",
+          "node5"
+        ],
+        "slurm_job": "38606005",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "same_build_off_control_job": "38563905",
+      "model_stages": [
+        "bf16_lora-full",
+        "bf16_lora-resumed",
+        "bf16_lora-portable",
+        "nf4_lora-full",
+        "nf4_lora-resumed",
+        "nf4_lora-portable"
+      ],
+      "modes": {
+        "bf16_lora": {
+          "acceptance_sha256": "863ce023619e841c56f2932aaa93275ad89bac8c32fe48d911ea508d6fe253a2",
+          "cache_observations": {
+            "full": {
+              "format": "gr00t-evaluation-raw-backbone-observations-v1",
+              "hits": 6,
+              "misses": 6,
+              "retained_tensor_bytes_peak": 2214696,
+              "scope": "current process only"
+            },
+            "portable": {
+              "format": "gr00t-evaluation-raw-backbone-observations-v1",
+              "hits": 2,
+              "misses": 2,
+              "retained_tensor_bytes_peak": 2214696,
+              "scope": "current process only"
+            },
+            "resumed": {
+              "format": "gr00t-evaluation-raw-backbone-observations-v1",
+              "hits": 2,
+              "misses": 2,
+              "retained_tensor_bytes_peak": 2214696,
+              "scope": "current process only"
+            }
+          },
+          "fp32_auxiliary": 537,
+          "fresh_rows": [
+            [
+              "libero-1589-0"
+            ],
+            [
+              "libero-1589-28"
+            ]
+          ],
+          "fresh_sha256": "c2eb23f7e146adef191e3bebf6be63b66b16ef0e11f8598562728abb41dabf49",
+          "head_adapters_present": false,
+          "language_factors": 224,
+          "language_targets": 112,
+          "local_small_controls_cursor_evaluation_exact": true,
+          "metadata_parameters": 761,
+          "on_node_fp32_moment_tensors": 1522,
+          "on_node_maximum_tensor_difference": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "on_node_rng_and_full_data_equality": true,
+          "own2_resume1to2_exact": true,
+          "same_e64_off_metadata_controls_rows_exact": true,
+          "source_and_scorer_exact": true,
+          "training_source": {
+            "family": "gr00t-libero",
+            "format": "flow-sft-v1",
+            "sha256": "be88db373a0c27685fb08a6c5d99cb48a331392a4520107b1b6599d721546769"
+          },
+          "validation_source": {
+            "family": "gr00t-libero",
+            "format": "flow-sft-v1",
+            "sha256": "b8950d95e53b691ac4c06542c15b8d80195f4041e4bb92a6f24649742e1b888f"
+          }
+        },
+        "nf4_lora": {
+          "acceptance_sha256": "975087de30de6d45f24ce00146fe3f3dde4fc9876215c45fa9988c41a3a62931",
+          "cache_observations": {
+            "full": {
+              "format": "gr00t-evaluation-raw-backbone-observations-v1",
+              "hits": 6,
+              "misses": 6,
+              "retained_tensor_bytes_peak": 2214696,
+              "scope": "current process only"
+            },
+            "portable": {
+              "format": "gr00t-evaluation-raw-backbone-observations-v1",
+              "hits": 2,
+              "misses": 2,
+              "retained_tensor_bytes_peak": 2214696,
+              "scope": "current process only"
+            },
+            "resumed": {
+              "format": "gr00t-evaluation-raw-backbone-observations-v1",
+              "hits": 2,
+              "misses": 2,
+              "retained_tensor_bytes_peak": 2214696,
+              "scope": "current process only"
+            }
+          },
+          "fp32_auxiliary": 537,
+          "fresh_rows": [
+            [
+              "libero-1589-0"
+            ],
+            [
+              "libero-1589-28"
+            ]
+          ],
+          "fresh_sha256": "8c824a8b8cc169026fcd25443b4b2af087da7bc97c0cc85f1a179ebf15f84cb9",
+          "head_adapters_present": false,
+          "language_factors": 224,
+          "language_targets": 112,
+          "local_small_controls_cursor_evaluation_exact": true,
+          "metadata_parameters": 761,
+          "on_node_fp32_moment_tensors": 1522,
+          "on_node_maximum_tensor_difference": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "on_node_rng_and_full_data_equality": true,
+          "own2_resume1to2_exact": true,
+          "same_e64_off_metadata_controls_rows_exact": true,
+          "source_and_scorer_exact": true,
+          "training_source": {
+            "family": "gr00t-libero",
+            "format": "flow-sft-v1",
+            "sha256": "be88db373a0c27685fb08a6c5d99cb48a331392a4520107b1b6599d721546769"
+          },
+          "validation_source": {
+            "family": "gr00t-libero",
+            "format": "flow-sft-v1",
+            "sha256": "b8950d95e53b691ac4c06542c15b8d80195f4041e4bb92a6f24649742e1b888f"
+          }
+        }
+      },
+      "memory": {
+        "device_peak_bytes": 35832135680,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 36371869696,
+        "host_rss_sum_peak_bytes": 36540391424,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 1195.671456336975,
+        "owned_device_process_peak_bytes": 35055992832,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 885,
+        "sampling_gap_seconds": {
+          "count": 884,
+          "maximum": 4.8135340213775635,
+          "mean": 1.3525695207431845,
+          "median": 1.3099554777145386,
+          "p95": 1.5128286361694334,
+          "sum": 1195.671456336975
+        }
+      },
+      "workflow_seconds": 1197.2123899771832,
+      "qualification": {
+        "accepted": true,
+        "strict_host_samples": 885,
+        "root_verification": "All215 sizes/hashes, archive, actual completed c928 release, and hash-bound owner/raw-peer records independently checked.",
+        "support_decision": "Qualified opt-in evaluation backbone reuse for current-e64 default full-head r32/a64 NF4/BF16 LoRA, one A10080, one-row LIBERO inputs. Default remains disabled. CBC four-pair performance and ownON200to300 recovery remain separate source-specific evidence.",
+        "limits": "Current e64 default full-head reuse ON own2/own1-to2/fresh2 correctness, both precisions; exact same-e64 OFF1/2 observational comparison, enabled-only metadata comparison in memory, strict ON-to-ON resume. CBC timing/mature is a separate source-specific prerequisite. Full761 model/1522 moment tensors and RNG/full data equality remain on-node assertions; local replay reads small metadata, scalar trainer controls, cursor/evaluation state and JSON rows. No historical artifact bridge, learning, mature, export, speedup or memory-reduction claim. Raw sampler covers the observed model workflow, excludes earlier preflight; sampled peaks are lower bounds and tiny unsampled phase intervals remain missing. Original scheduler clocks retained without reconstruction."
+      }
+    },
     "38604682": {
       "job": "38604682",
       "completed_cbc_decision": {

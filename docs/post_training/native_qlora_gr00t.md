@@ -14,7 +14,7 @@ total-memory outcomes remain unmet for the selected full-head recipe:
 | NF4-only memory benefit | The matched selected run measured 30.412 GiB NF4 versus 31.516 GiB BF16 sampled GPU-process peaks: 1.104 GiB saved, about 3.5%. FP32 action-head parameters, gradients and optimizer state dominate; substantial total-memory savings are not established. |
 | Offline quality | Across three paired training seeds, mean NF4 action MSE was 2.224% lower than matched BF16 LoRA, but the one-sided 95% upper regression bound was +9.532%, failing the predefined 5% guard. |
 | Rollout quality | The selected update-200 development rollout scored 98/100 NF4 versus 97/100 BF16; the accuracy-loss upper bound was 3 percentage points, failing the 2-point guard. This does not establish real-robot behavior. |
-| Execution improvement | Four paired cache trials and their same-build mature recovery passed in both precision arms. Current-build compatibility remains required before promotion; this is a shared evaluation optimization, not NF4 learning superiority. |
+| Execution improvement | Four paired cache trials, same-build mature recovery and current-build compatibility passed. Evaluation reuse is qualified as an opt-in for the tested full-head recipe; this is a shared execution improvement, not NF4 learning superiority. |
 | Deployment artifacts | Native portable and standalone unmerged policies retain action components and reproduce task outputs. Merged exports failed parity checks; controlled deployment-latency improvement remains unproven. |
 
 Detailed results below preserve the original builds, negative trials, uncertainty
@@ -381,10 +381,10 @@ Implementation `47587e0`, with ownership fix `cbc950f`, adds
 It reuses only the raw backbone output within one evaluation batch, with independent
 inputs for both native head calls and a 16 MiB retained-tensor bound. The head
 mutates its input mapping, so reusing already transformed features is incorrect.
-The option remains off by default pending the complete matched workflow study
-and its trained-boundary recovery gate. The study gives both precision arms the
-same option and requires exact numerical trajectories; its two completed seed-17
-pairs are recorded below alongside the real-model correctness continuation.
+The option remains off by default. Its matched workflow study, trained-boundary
+recovery and current-build compatibility checks below qualify it as an opt-in for
+the tested full-head recipe. Both precision arms receive the same option and must
+preserve their numerical trajectories.
 The first profile allocation `38548693` failed before model loading because a
 launcher imported an executable monitor module; its 68 GPU-seconds remain
 recorded separately from the successful diagnostic's 334 GPU-seconds.
@@ -511,8 +511,8 @@ seed 42. Within-pair GPU/CPU placement matched; physical placements differ acros
 allocations and filesystem-cache warmth was uncontrolled. The four allocations
 cost **16,139 GPU-seconds**, including all fresh scoring and separate comparisons.
 The original hash-bound timing-only decision retains **`promote=false`**. The
-subsequent same-build recovery below supplies separate evidence; current-`e64a735`
-compatibility remains required. These are shared execution gains, not improved learning,
+subsequent same-build recovery and current-`e64a735` compatibility below supply
+separate evidence. These are shared execution gains, not improved learning,
 NF4 superiority over BF16, new quality confidence intervals, or inference
 acceleration. Exact receipts and clocks remain in the existing family evidence.
 
@@ -545,7 +545,31 @@ reconstruct uninterrupted time to quality. Independent replay verified all 265
 retained files, raw memory records, small controls and fresh scores; the full
 model/optimizer tensor comparison ran on the allocated node. The original
 88-second failure and timing-only decision remain immutable. Current-`e64a735`
-compatibility is the next separate gate, not an inferred result of this recovery.
+compatibility is established separately below.
+
+Current-build job `38606005` then passed all six native stages on `e64a735`:
+two updates, own-update-1-to-2 recovery and fresh two-row portable evaluation in
+each precision. Both arms exactly matched the existing same-build disabled-cache
+controls at updates 1 and 2, and their own enabled checkpoints resumed exactly.
+All 761 model tensors, 1,522 FP32 moments, RNG/data state and resident/fresh rows
+matched under the declared comparisons. Only the enabled flag is normalized for
+the observational OFF/ON comparison; production resume remains strict.
+
+The cache recorded 6/6 hits/misses in each full run and 2/2 in each recovery and
+fresh process, retaining 2,214,696 bytes. All 885 recorded host samples and six
+stage summaries passed. The qualification workflow took 1,197.212 seconds and
+cost 1,269 GPU-seconds; sampled owned-GPU/host-PSS peaks were 32.648/33.874 GiB.
+These are correctness-workflow clocks and lower-bound peaks, not another speed
+comparison. Earlier startup and tiny unsampled intervals remain outside coverage.
+
+For current `e64a735` full-head rank-32/alpha-64 NF4 or BF16 LoRA, add
+`rl.reuse_gr00t_evaluation_backbone=true` to the native training command and retain
+that setting when resuming. This opt-in is qualified on one A100 80GB with the
+documented one-row, two-camera LIBERO geometry. Portable reload with reuse is
+covered. The separate standalone-artifact checks used reuse disabled; combining
+reuse with the rejected DiT head-adapter profile remains unqualified. The complete
+300-update timing study and mature recovery retain their `cbc950f` identity;
+this short current-build test does not create a new mature or quality result.
 
 For the official seed-17 control `38546671`, strict v11 memory acceptance passed
 across the whole observed workflow and all four model stages: all 768 host samples were complete and owned-GPU attribution
