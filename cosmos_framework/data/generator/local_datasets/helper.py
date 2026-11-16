@@ -52,6 +52,26 @@ def download_from_s3(s3_client: Any, s3_url: str, max_tries: int = 20) -> bytes 
         time.sleep(1)
 
 
+def _stream_duration(stream: dict, container: dict) -> float:
+    """Duration in seconds of an ffprobe video stream.
+
+    Matroska/WebM streams report neither ``nb_frames`` nor ``duration``; their
+    length is only in the per-track ``DURATION`` tag (``HH:MM:SS.nnnnnnnnn``).
+    The container duration is the last resort, since it also covers longer
+    audio tracks.
+    """
+    if stream.get("duration"):
+        return float(stream["duration"])
+    tag = stream.get("tags", {}).get("DURATION")
+    if tag:
+        try:
+            hours, minutes, seconds = tag.split(":")
+            return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+        except ValueError:
+            pass  # Malformed tag: use the container duration.
+    return float(container.get("duration") or 0)
+
+
 def get_video_metadata(video_path: str) -> dict:
     """
     Get video metadata using ffprobe.
@@ -69,6 +89,7 @@ def get_video_metadata(video_path: str) -> dict:
         "-print_format",
         "json",
         "-show_streams",
+        "-show_format",
         "-select_streams",
         "v:0",
         video_path,
@@ -85,7 +106,7 @@ def get_video_metadata(video_path: str) -> dict:
     if "nb_frames" in stream:
         total_frames = int(stream["nb_frames"])
     else:
-        duration = float(stream.get("duration") or 0)
+        duration = _stream_duration(stream, probe_data.get("format", {}))
         total_frames = int(duration * video_fps)
 
     return dict(width=width, height=height, fps=video_fps, total_frames=total_frames)
