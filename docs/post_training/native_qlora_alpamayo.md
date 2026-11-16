@@ -1014,3 +1014,33 @@ remain separate from whole-process memory qualification; evaluation clocks inclu
 the diagnostic and establish no serving-speed improvement. There was no training,
 re-export or full-development rescore, and the original policies' adverse quality
 results remain unchanged.
+
+An expert-LR seed-17 screen on build `06a2b84` (`38655897`, **6,488 GPU-seconds**)
+kept the LoRA learning rate at `1e-4`. It scaled only the trained auxiliary groups
+(`expert`, `action_in_proj`, `action_out_proj`) by 0.1 via `optimizer.lr_multipliers`.
+The schedule (512-update cosine, 100 warmup updates, clipping 1.0, pause at update
+128) and all thresholds were unchanged from the LR-only screen. The build refuses
+multipliers that match LoRA factors or unlisted parameters, and both arms verified
+the exact 903-tensor inventory and per-group learning rates.
+
+| Arm | ADE 6.4s (m) | vs own source | FDE 6.4s (m) | vs own source | Flow loss | vs own source |
+|---|---:|---:|---:|---:|---:|---:|
+| NF4 LoRA | 1.92294 | -2.51% | 5.93224 | -2.80% | 0.273249 | +2.31% |
+| BF16 LoRA | 1.92338 | -1.67% | 5.93658 | -2.27% | 0.272784 | +2.31% |
+
+This avoids the ADE regression of the uniform-`1e-4` recipe: its update-128
+checkpoint, in the same table's units, had ADE of 2.697/2.573 m, 28.7%/25.2% worse
+than source. However, the improvement is again below the prospectively required 5%,
+flow loss rose in both arms, and neither arm reached the 1.8582104-m target. The screen
+is **rejected**, with no automatic extension. NF4 point estimates were within all
+four paired ADE/FDE preservation margins (NF4 ADE 0.02% below BF16); this is a
+single exposed seed and establishes no confidence bound.
+
+Both arms completed 128 finite updates and full 256-row evaluations, and passed
+fresh portable two-row reload. Host PSS was complete in both arms. Native allocator
+peaks were **64.664/74.009 GiB** NF4/BF16 (9.345 GiB difference) and the sampled
+owned-process difference was 9.137 GiB, the same as the LR-only screen. Native
+128-update workflow times were 51.2/45.2 minutes in one allocation. NF4's longer
+evaluation stage (2,254 s vs 1,899 s) dominated this difference; training stages
+were 409/400 s. Sequential cases share one allocation but not one clock, so this
+is not a deployment-speed claim.
