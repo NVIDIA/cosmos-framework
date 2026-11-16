@@ -353,15 +353,17 @@ def test_actual_module_main_uses_canonical_fresh_worker_and_retains_failed_seed(
     monkeypatch.setattr(sys, "argv", [g.MODULE, "--plan", str(plan_path), "--output", str(output)])
     with pytest.raises(ValueError):
         runpy.run_module(g.MODULE, run_name="__main__")
-    result = json.loads(output.read_text())
+    assert not output.exists()
+    journal = output.with_name(output.name + ".attempts")
+    header = json.loads((journal / "header.json").read_text())
+    assert header["plan"] == manifest["plan"] and header["plan_sha256"] == g.digest(manifest["plan"])
+    records = [json.loads(path.read_text())["record"] for path in sorted(journal.glob("*.result.json"))]
     assert len(commands) == 2 and all(
         command == [sys.executable, "-m", g.MODULE, "--worker"] for command, _ in commands
     )
-    assert result["records"][1]["request"] == manifest["plan"]["requests"][1]
-    assert result["records"][1]["status"] == "error" and "RandomizationError" in result["records"][1]["error"]
-    with pytest.raises(ValueError):
-        g.validate_manifest(result)
-    with pytest.raises(SystemExit):
+    assert records[1]["request"] == manifest["plan"]["requests"][1]
+    assert records[1]["status"] == "error" and "RandomizationError" in records[1]["error"]
+    with pytest.raises(FileExistsError):
         runpy.run_module(g.MODULE, run_name="__main__")
     assert len(commands) == 2  # create-only refusal, no replacement attempts
 
@@ -526,7 +528,7 @@ def test_describe_hashes_actual_robot_controller_physics_and_assets_without_env(
     assert g.describe_source()["tasks"][0] != baseline["tasks"][0]
 
 
-def test_timeout_retains_original_seed_and_runs_next_requested_seed_once(manifest, monkeypatch):
+def test_timeout_retains_original_seed_and_runs_next_requested_seed_once(manifest, monkeypatch, tmp_path):
     manifest["plan"]["requests"].append({"task_id": 0, "construction_seed": 1, "reset_seed": 2})
     calls = []
 
@@ -535,7 +537,7 @@ def test_timeout_retains_original_seed_and_runs_next_requested_seed_once(manifes
         raise subprocess.TimeoutExpired(command, kw["timeout"])
 
     monkeypatch.setattr(subprocess, "run", timeout)
-    result = g.prepare(manifest["plan"])
+    result = g.prepare(manifest["plan"], journal=tmp_path / "attempts")
     assert calls == [0, 1]
     assert [row["request"] for row in result["records"]] == manifest["plan"]["requests"]
     assert all(row["status"] == "error" for row in result["records"])
@@ -601,13 +603,186 @@ def test_cleanup_does_not_mask_original_reset_failure():
     assert str(error.value.__cause__) == "cleanup failed"
 
 
-def test_wrong_worker_identity_is_retained_as_failure(manifest, monkeypatch):
+def test_wrong_worker_identity_is_retained_as_failure(manifest, monkeypatch, tmp_path):
     wrong = {key: value for key, value in manifest["records"][0].items() if key != "stderr"}
     wrong["scene_id"] = "f" * 64
     monkeypatch.setattr(
         subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(wrong), stderr="")
     )
-    result = g.prepare(manifest["plan"])
+    result = g.prepare(manifest["plan"], journal=tmp_path / "attempts")
     assert result["records"][0]["status"] == "error"
     assert "different generated request" in result["records"][0]["error"]
     assert result["records"][0]["request"] == manifest["plan"]["requests"][0]
+
+
+@pytest.mark.parametrize("interruption", ["between_requests", "during_request"])
+def test_process_interruption_preserves_completed_attempt_and_exact_unstarted_plan(tmp_path, manifest, interruption):
+    # Abrupt process death, not exception cleanup; all subprocess outputs are CPU fixtures.
+    manifest["plan"]["requests"].extend(
+        [
+            {"task_id": 3, "construction_seed": 5, "reset_seed": 6},
+            {"task_id": 4, "construction_seed": 7, "reset_seed": 8},
+        ]
+    )
+    journal = tmp_path / "attempts"
+    code = """
+import json, os, sys
+from pathlib import Path
+from types import SimpleNamespace
+from cosmos_framework.posttrain.embodied.sims.libero import generated as g
+manifest = json.load(sys.stdin)
+journal, interruption = Path(sys.argv[1]), sys.argv[2]
+publish = g._publish_json
+def retained(path, value):
+    if path.name == '000001.started.json' and interruption == 'between_requests':
+        os._exit(87)
+    publish(path, value)
+def child(command, **kwargs):
+    index = json.loads(kwargs['input'])['index']
+    if index == 1:
+        os._exit(87)
+    return SimpleNamespace(returncode=0, stderr='', stdout=json.dumps(
+        {key: value for key, value in manifest['records'][0].items() if key != 'stderr'}))
+g._publish_json, g.subprocess.run = retained, child
+g.prepare(manifest['plan'], journal=journal)
+"""
+    child = subprocess.run(
+        [sys.executable, "-c", code, str(journal), interruption],
+        input=json.dumps(manifest),
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert child.returncode == 87, child.stderr
+    header = json.loads((journal / "header.json").read_text())
+    assert header["plan"] == manifest["plan"] and header["plan_sha256"] == g.digest(manifest["plan"])
+    completed = json.loads((journal / "000000.result.json").read_text())
+    assert completed == {"index": 0, "plan_sha256": g.digest(manifest["plan"]), "record": manifest["records"][0]}
+    assert (journal / "000001.started.json").exists() == (interruption == "during_request")
+    assert not (journal / "000001.result.json").exists()
+    assert not (journal / "000002.started.json").exists()
+    with pytest.raises(FileExistsError):
+        g.prepare(manifest["plan"], journal=journal)
+
+
+@pytest.mark.parametrize("existing", ["empty", "incomplete", "complete"])
+def test_existing_journal_refuses_before_any_worker(tmp_path, manifest, monkeypatch, existing):
+    journal = tmp_path / "attempts"
+    journal.mkdir()
+    if existing != "empty":
+        (journal / "header.json").write_text("partial" if existing == "incomplete" else json.dumps(manifest["plan"]))
+    before = {path.name: path.read_bytes() for path in journal.iterdir()}
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: pytest.fail("existing attempt must not restart"))
+    with pytest.raises(FileExistsError):
+        g.prepare(manifest["plan"], journal=journal)
+    assert {path.name: path.read_bytes() for path in journal.iterdir()} == before
+
+
+@pytest.mark.parametrize("failure", ["write", "link", "fsync", "existing", "race"])
+def test_atomic_final_publication_retains_journal_without_partial_or_overwrite(
+    tmp_path, manifest, monkeypatch, failure
+):
+    from cosmos_framework.posttrain.checkpoint import io
+
+    plan, output = tmp_path / "plan.json", tmp_path / "scenes.json"
+    plan.write_text(json.dumps(manifest["plan"]))
+    journal = output.with_name(output.name + ".attempts")
+    record = {key: value for key, value in manifest["records"][0].items() if key != "stderr"}
+    calls = []
+
+    def child(*args, **kwargs):
+        calls.append(1)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(record), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", child)
+    monkeypatch.setattr(sys, "argv", [g.MODULE, "--plan", str(plan), "--output", str(output)])
+    original_write, original_link, original_fsync = io.atomic_write_bytes, g.os.link, io.fsync_directory
+
+    def write(path, payload):
+        if failure == "write" and (journal / "000000.result.json").exists() and "scenes.json." in path:
+            with open(path + ".part", "wb") as stream:
+                stream.write(payload[:20])
+            raise KeyboardInterrupt("interrupted final write")
+        original_write(path, payload)
+
+    def link(source, destination):
+        if destination == output:
+            if failure == "link":
+                raise KeyboardInterrupt("interrupted final link")
+            if failure == "race":
+                output.write_bytes(b"another publisher")
+        original_link(source, destination)
+
+    def fsync(path):
+        if failure == "fsync" and path == str(output.parent) and output.exists():
+            raise OSError("final directory fsync failed")
+        original_fsync(path)
+
+    monkeypatch.setattr(io, "atomic_write_bytes", write)
+    monkeypatch.setattr(io, "fsync_directory", fsync)
+    monkeypatch.setattr(g.os, "link", link)
+    if failure == "existing":
+        output.write_bytes(b"original")
+    with pytest.raises((KeyboardInterrupt, FileExistsError, OSError, SystemExit)):
+        g.main()
+    if failure == "existing":
+        assert output.read_bytes() == b"original" and not calls and not journal.exists()
+        return
+    assert calls == [1]
+    assert json.loads((journal / "000000.result.json").read_text())["record"] == manifest["records"][0]
+    if failure == "fsync":
+        assert g.validate_manifest(json.loads(output.read_text())) == manifest
+    elif failure == "race":
+        assert output.read_bytes() == b"another publisher"
+    else:
+        assert not output.exists()
+    assert not list(tmp_path.glob(".scenes.json.*"))
+
+
+def test_atomic_publication_serializes_before_io_and_never_clobbers(tmp_path):
+    output = tmp_path / "result.json"
+    before = set(tmp_path.iterdir())  # repository fixtures create console/debug logs here
+    with pytest.raises(ValueError):
+        g._publish_json(output, {"nonfinite": float("nan")})
+    assert set(tmp_path.iterdir()) == before
+    g._publish_json(output, {"complete": True})
+    previous = output.read_bytes()
+    with pytest.raises(FileExistsError):
+        g._publish_json(output, {"replacement": True})
+    assert output.read_bytes() == previous
+
+
+def test_verified_manifest_publishes_after_complete_plan_bound_journal(tmp_path, manifest, monkeypatch):
+    original, output = tmp_path / "original.json", tmp_path / "verified.json"
+    original.write_text(json.dumps(manifest))
+    record = {key: value for key, value in manifest["records"][0].items() if key != "stderr"}
+    journal = output.with_name(output.name + ".attempts")
+
+    def child(command, **kwargs):
+        payload = json.loads(kwargs["input"])
+        assert payload["expected"] == manifest["records"][0]["evidence"]
+        assert (journal / "header.json").is_file() and (journal / "000000.started.json").is_file()
+        assert not output.exists()
+        return SimpleNamespace(returncode=0, stdout=json.dumps(record), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", child)
+    monkeypatch.setattr(
+        sys, "argv", [g.MODULE, "--verify", str(original), "--sha256", g.file_sha(original), "--output", str(output)]
+    )
+    g.main()
+    assert g.read_manifest(output, g.file_sha(output)) == manifest
+    header = json.loads((journal / "header.json").read_text())
+    assert header["verification_manifest_sha256"] == g.digest(manifest)
+    assert header["plan_sha256"] == g.digest(header["plan"]) == g.digest(manifest["plan"])
+    assert json.loads((journal / "000000.result.json").read_text())["record"] == manifest["records"][0]
+
+
+def test_verification_plan_mismatch_refuses_before_journal_or_worker(tmp_path, manifest, monkeypatch):
+    plan = copy.deepcopy(manifest["plan"])
+    plan["requests"][0]["reset_seed"] += 1
+    journal = tmp_path / "attempts"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: pytest.fail("different verification plan"))
+    with pytest.raises(ValueError, match="verification plan differs"):
+        g.prepare(plan, journal=journal, expected=manifest)
+    assert not journal.exists()

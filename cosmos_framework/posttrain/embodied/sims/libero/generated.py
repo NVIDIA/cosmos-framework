@@ -17,6 +17,7 @@ import random
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -139,6 +140,7 @@ def native_source():
             "embodied/sims/libero/runtime.py",
             "entrypoints/gr00t_rollout.py",
             "model/gr00t/rollout.py",
+            "checkpoint/io.py",
         )
     }
 
@@ -517,10 +519,50 @@ def _worker(payload):
         env.close()
 
 
-def prepare(plan, *, expected=None):
+def _publish_json(path, value):
+    """Publish fully serialized JSON durably, without replacing any existing name."""
+    from cosmos_framework.posttrain.checkpoint.io import atomic_write_bytes, fsync_directory
+
+    path = Path(path)
+    payload = (json.dumps(value, indent=2, allow_nan=False) + "\n").encode()
+    # The existing atomic helper replaces its private staging name; only the final hard link
+    # is visible to consumers. An existing final file (including a symlink) always refuses.
+    with tempfile.TemporaryDirectory(prefix=f".{path.name}.", dir=path.parent) as staging:
+        temporary = Path(staging) / "record.json"
+        atomic_write_bytes(str(temporary), payload)
+        os.link(temporary, path)
+        fsync_directory(str(path.parent))
+
+
+def prepare(plan, *, journal, expected=None):
+    from cosmos_framework.posttrain.checkpoint.io import fsync_directory
+
     validate_plan(plan)
+    if expected is not None:
+        validate_manifest(expected)
+        if expected["plan"] != plan:
+            raise ValueError("verification plan differs from the prepared manifest")
+    journal = Path(journal)
+    journal.mkdir()  # Never reopen or resume a previous attempt, even after interruption.
+    fsync_directory(str(journal.parent))
+    plan_sha256 = digest(plan)
+    _publish_json(
+        journal / "header.json",
+        {
+            "format": "libero-generated-attempts-v1",
+            "plan": plan,
+            "plan_sha256": plan_sha256,
+            "verification_manifest_sha256": digest(expected) if expected is not None else None,
+            "reset_order": RESET_ORDER,
+            "policy_noise": POLICY_NOISE,
+        },
+    )
     records = []
     for index, request in enumerate(plan["requests"]):
+        _publish_json(
+            journal / f"{index:06d}.started.json",
+            {"index": index, "plan_sha256": plan_sha256, "request": request, "status": "started"},
+        )
         payload = {"plan": plan, "index": index}
         if expected is not None:
             payload["expected"] = expected["records"][index]["evidence"]
@@ -546,7 +588,11 @@ def prepare(plan, *, expected=None):
         except (subprocess.TimeoutExpired, ValueError, TypeError, OSError) as exc:
             record = {"status": "error", "error": str(exc)}
         # Every original request remains visible, including a failed worker. Never replace or resample it.
-        records.append({**record, "request": request, "scene_id": scene_id(plan["source"], request)})
+        record = {**record, "request": request, "scene_id": scene_id(plan["source"], request)}
+        _publish_json(
+            journal / f"{index:06d}.result.json", {"index": index, "plan_sha256": plan_sha256, "record": record}
+        )
+        records.append(record)
     return {
         "format": FORMAT,
         "plan": plan,
@@ -576,18 +622,17 @@ def main():
         return
     if args.output is None or args.output.exists():
         parser.error("a new --output path is required")
+    journal = args.output.with_name(args.output.name + ".attempts")
     if args.verify:
         previous = read_manifest(args.verify, args.sha256)
-        result = prepare(previous["plan"], expected=previous)
+        result = prepare(previous["plan"], journal=journal, expected=previous)
     elif args.plan:
-        result = prepare(json.loads(args.plan.read_text()))
+        result = prepare(json.loads(args.plan.read_text()), journal=journal)
     else:
         result = describe_source()
-    with args.output.open("x") as stream:
-        json.dump(result, stream, indent=2, allow_nan=False)
-        stream.write("\n")
     if not args.describe:
-        validate_manifest(result)  # failures are retained before refusing a usable manifest
+        validate_manifest(result)  # failed/duplicate attempts remain in the journal, never a usable manifest
+    _publish_json(args.output, result)
 
 
 if __name__ == "__main__":

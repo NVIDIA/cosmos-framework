@@ -917,9 +917,18 @@ records exactly before exposing its observation to the policy. It never restores
 flattened `time/qpos/qvel`, which omit fixture and controller state. Native task predicates,
 20 Hz controls, eight-action chunks, action decoding and the 256-control limit are unchanged.
 
-All requested seeds and failures remain in the preparation output; a failed/incomplete
-attempt or duplicate physical scene makes the manifest unusable. No success-based filtering
-or resampling occurs. Duplicate physical identities are not counted as independent episodes.
+Before workers start, `<output>.attempts/header.json` durably binds the complete plan and
+its canonical JSON digest. Each request gets create-only `NNNNNN.started.json` and
+`NNNNNN.result.json` records; a result is durable before the next request starts. A started
+request without a result remains uncertain after interruption; requests without a start
+record remain identifiable from the header. Any existing attempt directory refuses reuse:
+there is no resume, replacement-seed or automatic retry path. Keep the complete journal.
+
+All requested seeds and failures remain in that journal. Only a complete, validated manifest
+is published to `--output`, after serialization and fsync, using an atomic no-overwrite link.
+Interrupted staging never leaves partial JSON at the final path. A failed/incomplete attempt
+or duplicate physical scene refuses final publication. No success-based filtering or resampling
+occurs. Duplicate physical identities are not counted as independent episodes.
 Preparation and regeneration seconds measure construction/reset/settling and evidence capture;
 the rollout workflow also includes fresh-process startup and source verification. Neither is
 policy response latency. CPU fixtures cover these contracts; real pinned-runtime preparation,
