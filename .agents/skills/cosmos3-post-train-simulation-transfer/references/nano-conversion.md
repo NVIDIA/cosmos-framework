@@ -41,6 +41,8 @@ Hugging Face and runs Framework's native
 isolated cache because the pinned architecture otherwise resolves that metadata
 through `main`.
 
+> **Skill note (not in the source):** `NANO_HF_DIR` and `NANO_DCP_DIR` do not exist when the command below starts: no `mkdir` for either path. On a path that exists, an empty directory included, the helper stops with `Nano conversion check failed: Fresh conversion requires new source and output directories; use verify for an existing DCP` (measured). After a stopped attempt, remove the two directories of that attempt and run the command again.
+
 ```bash
 export NANO_HF_DIR="${NANO_HF_DIR:?Set a new absolute path for the Nano HF download}"
 export NANO_DCP_DIR="${NANO_DCP_DIR:?Set a new absolute path for the converted DCP}"
@@ -80,6 +82,8 @@ Nano source, auxiliary cache and converted output. The DCP root contains
 also derives the audio checkpoint and configuration under
 `NANO_HF_DIR/sound_tokenizer/` for Stage 0. Its text tokenizer is available at
 `NANO_HF_DIR/text_tokenizer/`.
+
+> **Skill note (not in the source):** measured in four conversions on a host with 1 TB of memory: the command writes a DCP of about 30 GB; it takes 4 min 0 s to 4 min 30 s in the three conversions that time it; peak resident memory is about 37 GiB in the one conversion that records it (`/usr/bin/time -v`). No host with less memory is measured.
 
 Pass `BASE_CKPT_ROOT` to [Stage 0](local-training.md). Keep the entire DCP root;
 training initializes from that root, while model-only loaders use its `model/`

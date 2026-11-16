@@ -63,6 +63,16 @@ training commands from `FRAMEWORK_DIR`.
 
 > **Skill note (not in the source):** "this skill bundle" in the sentence above was the folder of the Sim-Transfer skill family in the source. The setup guide sets `SIM_TRANSFER_SKILL` to the Sim-Transfer inference skill folder (`.agents/skills/cosmos3-inference-simulation-transfer` under `FRAMEWORK_DIR`), which holds the sample-preparation script; keep that value, not the folder of this skill. The commands of this skill address its own scripts (`scripts/qa_transfer_stage.py`, `scripts/prepare_nano_dcp.py` and `scripts/paibench_local_bundle.py`) from `FRAMEWORK_DIR`, under `.agents/skills/cosmos3-post-train-simulation-transfer`.
 
+```bash
+# Skill note (not in the source): the setup guide's block for an existing checkout, from its first line to its install line, without the clone. "Activate the Framework environment" below holds the activation and the other exports of that guide.
+export FRAMEWORK_DIR="${FRAMEWORK_DIR:?set it to the absolute root of the existing Framework checkout}"
+export SIM_TRANSFER_SKILL="$FRAMEWORK_DIR/.agents/skills/cosmos3-inference-simulation-transfer"
+cd "$FRAMEWORK_DIR"
+uvx --from uv==0.11.29 uv sync --locked --python 3.13 --all-extras --group cu130-train
+```
+
+> **Skill note (not in the source):** measured in four runs on H100 NVL GPUs with NVIDIA driver 615.71.10, for which `nvidia-smi` reports `CUDA UMD Version: 13.4`. In the environment that the block above installs (three runs), every step of this Quickstart up to the Stage 0 dry run runs. In the environment of `--group cu128-train` with the same driver (one run), bundle preparation stops with `RuntimeError: cudart shared object not found.`; it runs once `nvidia/cudart` and `nvidia/cuda_cudart` are linked to `nvidia/cuda_runtime` in the `site-packages` of that environment. No other driver is measured.
+
 ## Quickstart: train Stage 0
 
 ### Activate the Framework environment
@@ -122,6 +132,8 @@ Complete [bundle preparation](references/local-dataset.md) and
 Set `IMAGINAIRE_OUTPUT_ROOT` to a writable directory. All model, data and output
 paths must resolve identically on every training rank.
 
+> **Skill note (not in the source):** the block below and the block of "2. Resolve Stage 0" are one shell session. The block below reads `FRAMEWORK_DIR`, `SIM_TRANSFER_TRAINING_BUNDLE`, `NANO_HF_DIR`, `VIDEO_VAE_PATH`, `BASE_CKPT_ROOT` and `IMAGINAIRE_OUTPUT_ROOT`, and it sets `TRANSFER_BUNDLE_PATH`, the two audio paths, `RUN_ID`, `STAGE_HELPER` and `ARGS_FILE` for the block of "2. Resolve Stage 0". None of these exists in a new shell. Where each command starts a new shell, write one file that exports those six variables and `SIM_TRANSFER_SKILL`, then holds the blocks of "Activate the Framework environment", of this section and of "2. Resolve Stage 0", unchanged and in this order, and run it with `bash`: it exits with status 0 (measured). With the exports typed by hand in place of the block below, the stage helper stops with `Local Transfer argument binding failed: Set TRANSFER_BUNDLE_PATH; see references/local-training.md.` (measured).
+
 ```bash
 set -euo pipefail
 export TRANSFER_BUNDLE_PATH="${SIM_TRANSFER_TRAINING_BUNDLE:?Prepare the example2 training bundle first}"
@@ -166,6 +178,20 @@ ARGS=(
 )
 python -m cosmos_framework.scripts.train_experiment \
   --dryrun "${ARGS[@]}" trainer.max_iter=6
+```
+
+> **Skill note (not in the source):** documented result of the Stage 0 command above (measured, four of four): exit status 0 and the output below, which ends with the path of the `config.yaml` that the command writes. The two log lines at level `ERROR` belong to this output: `cosmos_framework/scripts/train_experiment.py` calls `to_yaml`, logs these two lines when `to_yaml` raises, writes `config.yaml` with `LazyConfig.save_yaml` and prints its path. The step is complete with this output: the stage helper, its arguments and the Framework sources stay unchanged, and the dry run is not repeated. The dry runs of Stages 1 to 3 are not measured.
+
+```text
+<time> | ERROR    | __main__:main:258 - to_yaml failed, falling back to LazyConfig.save_yaml:
+<time> | ERROR    | __main__:main:259 - Traceback: Traceback (most recent call last):
+  ...
+omegaconf.errors.ConfigKeyError: Key 'restart_data_iterator_on_handoff' is not in struct
+    full_key: dataloader_train.restart_data_iterator_on_handoff
+    object_type=dict
+
+Config is saved using omegaconf at <IMAGINAIRE_OUTPUT_ROOT>/cosmos3_sim_transfer/local/<RUN_ID>_stage0/config.yaml.
+<IMAGINAIRE_OUTPUT_ROOT>/cosmos3_sim_transfer/local/<RUN_ID>_stage0/config.yaml
 ```
 
 Inspect `config.yaml` under

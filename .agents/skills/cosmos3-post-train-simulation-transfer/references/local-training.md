@@ -136,6 +136,8 @@ writes the resolved configuration without constructing weights or loaders.
 Choose longer durations and parent checkpoints using held-out results on your
 dataset; the recipe defaults are listed in the [method reference](canonical-recipe.md).
 
+> **Skill note (not in the source):** documented result of the Stage 0 dry run (measured, four of four): exit status 0, two log lines at level `ERROR` (`to_yaml failed, falling back to LazyConfig.save_yaml:` and a traceback that ends in `ConfigKeyError: Key 'restart_data_iterator_on_handoff' is not in struct`), then the path of the `config.yaml` that `LazyConfig.save_yaml` writes. `cosmos_framework/scripts/train_experiment.py` logs the two lines when `to_yaml` raises and continues. The helper and its arguments stay unchanged. The dry runs of Stages 1 to 3 are not measured.
+
 | Stage | Native experiment                 | Parents                                                                              |
 | ----- | --------------------------------- | ------------------------------------------------------------------------------------ |
 | 0     | `sim_local_transfer_stage0_bidir` | `BASE_CKPT_ROOT` regular weights                                                     |
