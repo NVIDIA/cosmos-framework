@@ -1,11 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import sys
 import unicodedata
 
 import pytest
 
-from cosmos_framework.auxiliary.guardrail.blocklist.blocklist import Blocklist
+from cosmos_framework.auxiliary.guardrail.blocklist.blocklist import (
+    INVISIBLE_CHARS,
+    SEPARATOR_CHARS,
+    ZERO_WIDTH_CHARS,
+    Blocklist,
+)
 
 
 @pytest.mark.L1
@@ -374,6 +380,139 @@ def test_deleting_invisible_characters_does_not_block_ordinary_text():
     ):
         safe, message = bl.is_safe(prompt)
         assert safe is True, f"{prompt!r} was wrongly reported as blocked: {message}"
+
+
+@pytest.mark.L1
+def test_every_format_character_is_invisible():
+    """Every Unicode format character (Cf) is read as invisible.
+
+    The set is written out rather than built from unicodedata at import, so
+    this pins it to the running Python's Unicode data: a format character added
+    in a later Unicode version fails here instead of passing the blocklist.
+    """
+    missing = [
+        f"U+{code_point:04X}"
+        for code_point in range(sys.maxunicode + 1)
+        if unicodedata.category(chr(code_point)) == "Cf" and not INVISIBLE_CHARS.fullmatch(chr(code_point))
+    ]
+
+    assert missing == []
+
+
+@pytest.mark.L1
+def test_visible_format_characters_are_separators_not_zero_width():
+    """A format character that draws a glyph reads as a gap, never as nothing."""
+    for char in "\u0600\u06dd\u070f\u08e2\U000110bd":
+        assert unicodedata.category(char) == "Cf"
+        assert SEPARATOR_CHARS.fullmatch(char) and not ZERO_WIDTH_CHARS.fullmatch(char), f"U+{ord(char):04X}"
+    for char in "\u200b\u00ad\ufe0f\u034f\U000e0041":
+        assert ZERO_WIDTH_CHARS.fullmatch(char) and not SEPARATOR_CHARS.fullmatch(char), f"U+{ord(char):04X}"
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("blank Braille between, zero width inside", "a snow\u2800whi\u200bte poster"),
+        ("Hangul filler between, zero width inside", "a snow\u3164whi\u200bte poster"),
+        ("halfwidth Hangul filler between", "a snow\uffa0whi\u200bte poster"),
+        ("choseong filler between", "a snow\u115fwhi\u200bte poster"),
+        ("zero width inside, blank Braille between", "a sn\u200bow\u2800white poster"),
+        ("visible format character between", "a snow\u06ddwhi\u200bte poster"),
+        ("blank between, variation selector inside", "a snow\u2800whi\ufe0fte poster"),
+        ("joiner inside, Hangul filler between", "a sn\u034fow\u3164white poster"),
+        ("Hangul filler between, joiner inside", "a snow\u3164whi\u034fte poster"),
+    ],
+)
+def test_blank_between_words_and_zero_width_inside_a_word(name, prompt):
+    """Found in review: a reader sees a gap between the words and nothing inside one.
+
+    Reading every invisible character as a space splits "whi te"; deleting
+    every one fuses "snowwhite". The reader's reading -- the gap a space, the
+    zero-width character nothing -- is checked too.
+    """
+    for lists in ({"words": ["snow white"]}, {"words": [], "exact_match": ["snow white"]}):
+        bl = _blocklist_with_words(lists["words"], exact_match=lists.get("exact_match"))
+        safe, _ = bl.is_safe(prompt)
+        assert safe is False, f"{name} let {prompt!r} through ({lists})"
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "char"),
+    [
+        ("variation selector 16", "\ufe0f"),
+        ("variation selector 1", "\ufe00"),
+        ("variation selector 17", "\U000e0100"),
+        ("combining grapheme joiner", "\u034f"),
+        ("Hangul filler", "\u3164"),
+        ("halfwidth Hangul filler", "\uffa0"),
+        ("Braille pattern blank", "\u2800"),
+        ("tag letter A", "\U000e0041"),
+        ("Mongolian free variation selector", "\u180b"),
+        ("Khmer inherent vowel", "\u17b4"),
+    ],
+)
+def test_other_invisible_characters_inside_one_word_of_an_entry(name, char):
+    """Found in review: characters that draw nothing but were not folded."""
+    bl = _blocklist_with_words(["snow white"])
+
+    for prompt in (f"a sn{char}ow white poster", f"a snow{char}white poster", f"a snow white{char} poster"):
+        safe, _ = bl.is_safe(prompt)
+        assert safe is False, f"{name} let {prompt!r} through"
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("o with stroke", "a sn\u00f8w white poster"),
+        ("small capitals", "a \ua731\u0274\u1d0f\u1d21 \u1d21\u029c\u026a\u1d1b\u1d07 poster"),
+        ("small capital n only", "a s\u0274ow white poster"),
+    ],
+)
+def test_small_capitals_and_stroked_letters_do_not_hide_an_entry(name, prompt):
+    """Found in review: letters missing from confusables.txt."""
+    bl = _blocklist_with_words(["snow white"])
+
+    safe, _ = bl.is_safe(prompt)
+
+    assert safe is False, f"{name} let the entry through"
+
+
+@pytest.mark.L1
+def test_emoji_presentation_selectors_do_not_block_ordinary_text():
+    """Variation selectors and tag sequences in ordinary emoji stay harmless."""
+    bl = _blocklist_with_words(["snow white", "deskin"])
+
+    for prompt in (
+        "a red heart \u2764\ufe0f on a shelf in the corner",
+        "a flag \U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f on a pole",
+        "a snowman \u2603\ufe0f in white snow",
+    ):
+        safe, message = bl.is_safe(prompt)
+        assert safe is True, f"{prompt!r} was wrongly reported as blocked: {message}"
+
+
+@pytest.mark.L1
+def test_ascii_prompt_is_censored_once_per_pass(monkeypatch):
+    """For an ASCII prompt the as-written pass would repeat the to_ascii pass, so it is skipped."""
+    bl = _blocklist_with_words(["snow white"])
+    seen: list[str] = []
+    censor_prompt = bl.censor_prompt
+
+    def counting_censor_prompt(prompt):
+        seen.append(prompt)
+        return censor_prompt(prompt)
+
+    monkeypatch.setattr(bl, "censor_prompt", counting_censor_prompt)
+
+    assert bl.is_safe("a plain ascii prompt") == (True, "Input is safe")
+    assert seen == ["a plain ascii prompt", "a plain ascii prompt"]  # to_ascii pass, lemmatized pass
+
+    seen.clear()
+    bl.is_safe("a caf\u00e9 prompt")
+    assert seen[0] == "a caf\u00e9 prompt"  # the as-written pass still runs on non-ASCII text
 
 
 class _PluralLemmatizer:

@@ -6,9 +6,11 @@ import unicodedata
 import pytest
 
 from cosmos_framework.auxiliary.guardrail.blocklist.lookalikes import (
+    CONFUSABLES,
     LOOKALIKES,
     fold_lookalikes,
     format_table,
+    latin_variants,
     table_from_confusables,
 )
 
@@ -36,9 +38,9 @@ def test_table_from_confusables_keeps_single_letters_nfkc_misses():
 def test_format_table_round_trips():
     """The vendored literal is what format_table prints, so regenerating it is exact."""
     namespace: dict = {}
-    exec(format_table(LOOKALIKES), {"_expand": lambda d: {c: k for k, v in d.items() for c in v}}, namespace)
+    exec(format_table(CONFUSABLES), {"_expand": lambda d: {c: k for k, v in d.items() for c in v}}, namespace)
 
-    assert namespace["LOOKALIKES"] == LOOKALIKES
+    assert namespace["LOOKALIKES"] == CONFUSABLES
 
 
 @pytest.mark.L1
@@ -68,4 +70,37 @@ def test_vendored_table_shape():
 )
 def test_fold_lookalikes_folds_only_disguised_words(prompt, expected):
     """A word is folded when it mixes in Latin letters or is made only of lookalikes."""
+    assert fold_lookalikes(prompt) == expected
+
+
+@pytest.mark.L1
+def test_latin_variants_follow_the_naming_rule():
+    """Small capitals and stroked or barred letters map to their letter; nothing else does."""
+    table = latin_variants([0x00F8, 0x00E9, 0x0142, 0x0274, 0x1D00, 0xA731, 0x0250, 0x0041])
+
+    # o with stroke, l with stroke, small capitals n, a and s. The accented e is
+    # folded by NFKD already, the turned a (U+0250) is not a variant of a
+    # letter by this rule, and ASCII is never a key.
+    assert table == {"\u00f8": "o", "\u0142": "l", "\u0274": "n", "\u1d00": "a", "\ua731": "s"}
+
+
+@pytest.mark.L1
+def test_confusables_letter_wins_over_the_naming_rule():
+    """A character in both tables keeps the confusables.txt letter."""
+    for char, letter in CONFUSABLES.items():
+        assert LOOKALIKES[char] == letter, repr(char)
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [
+        ("a sn\u00f8w poster", "a snow poster"),
+        ("\ua731\u0274\u1d0f\u1d21 \u1d21\u029c\u026a\u1d1b\u1d07", "snow white"),
+        ("\u03c2ar", "car"),
+        ("a s\u00f8ster in Oslo", "a soster in Oslo"),
+    ],
+)
+def test_fold_lookalikes_reads_small_capitals_and_stroked_letters(prompt, expected):
+    """The letters the confusables table misses fold like the ones it has."""
     assert fold_lookalikes(prompt) == expected

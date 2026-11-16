@@ -31,11 +31,40 @@ CENSOR_SENTINEL = "\x00"
 # never used to decide whether something was censored.
 CENSOR = misc.Color.red("*")
 
-# Characters that occupy no width, or that only reorder what is drawn: zero-width
-# spaces and joiners, the soft hyphen, and the bidirectional controls. They render
-# as nothing, so a blocklist entry split by one still reads as the entry to a human
-# while reaching the matcher as a token it does not recognise.
-INVISIBLE_CHARS = re.compile(r"[­​-‏‪-‮⁠-⁤﻿]")
+# Characters a reader does not see as part of a word. A blocklist entry split
+# by one still reads as the entry to a human while reaching the matcher as a
+# token it does not recognise. They come in two kinds, and alternate_spellings
+# reads them both ways, because a prompt can mix them: "snow<U+2800>whi<U+200B>te"
+# shows a gap between the words and nothing inside the second one.
+#
+# Zero-width: they draw nothing. Every format character (Unicode category Cf)
+# except the few that draw a glyph -- zero-width spaces and joiners, the soft
+# hyphen, the bidirectional controls, word joiner and the invisible operators,
+# the byte order mark, the tag characters -- plus the combining grapheme joiner,
+# the variation selectors, the Mongolian free variation selectors and the Khmer
+# inherent vowels. test_every_format_character_is_invisible pins the Cf part to
+# the running Python's Unicode data, so a new Cf character fails a test instead
+# of passing silently.
+_ZERO_WIDTH = (
+    "\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb"
+    "\U00013430-\U0001343f\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0001\U000e0020-\U000e007f"
+    "\u034f"  # combining grapheme joiner
+    "\u17b4\u17b5"  # Khmer inherent vowels
+    "\u180b-\u180d\u180f"  # Mongolian free variation selectors
+    "\ufe00-\ufe0f\U000e0100-\U000e01ef"  # variation selectors
+)
+# Blank or visible separators: they draw a blank gap (the Hangul fillers, the
+# blank Braille pattern) or a mark of their own (the Cf characters that prefix
+# numbers or abbreviations, such as U+0600 and U+06DD). A reader takes them as
+# a gap between words, never as nothing.
+_SEPARATORS = (
+    "\u115f\u1160\u3164\uffa0"  # Hangul fillers
+    "\u2800"  # Braille pattern blank
+    "\u0600-\u0605\u06dd\u070f\u0890\u0891\u08e2\U000110bd\U000110cd"  # visible format characters
+)
+ZERO_WIDTH_CHARS = re.compile(f"[{_ZERO_WIDTH}]")
+SEPARATOR_CHARS = re.compile(f"[{_SEPARATORS}]")
+INVISIBLE_CHARS = re.compile(f"[{_ZERO_WIDTH}{_SEPARATORS}]")
 
 
 class _NoLemmatizer:
@@ -149,7 +178,7 @@ class Blocklist(ContentSafetyGuardrail):
 
     @staticmethod
     def fold_invisible_characters(prompt: str) -> str:
-        """Rewrite zero-width and bidirectional characters to a space."""
+        """Rewrite invisible characters (INVISIBLE_CHARS) to a space."""
         return " ".join(INVISIBLE_CHARS.sub(" ", prompt).split())
 
     def censor_prompt(self, input_prompt: str) -> tuple[bool, str]:
@@ -314,6 +343,10 @@ class Blocklist(ContentSafetyGuardrail):
           space reading catches "snow<U+200B>white" as the entry "snow white",
           but splits "sn<U+200B>ow white" into "sn ow white", which matches
           nothing. Deleting them reads it as the entry.
+        * Zero-width characters deleted and blank or visible separators turned
+          into a space, the way a reader sees them. Neither reading above
+          catches "snow<U+2800>whi<U+200B>te": the space reading splits "whi
+          te", and deleting both fuses "snowwhite".
         * Letters from other scripts drawn like Latin ones ("sn<U+043E>w", with
           a Cyrillic o) folded to Latin. They survive NFKC, and to_ascii deletes
           them, so every pass reads the word with a letter missing. NFKC runs
@@ -324,8 +357,9 @@ class Blocklist(ContentSafetyGuardrail):
         """
         normalized = cls.normalize_code_points(prompt)
         joined = " ".join(INVISIBLE_CHARS.sub("", normalized).split())
+        mixed = " ".join(SEPARATOR_CHARS.sub(" ", ZERO_WIDTH_CHARS.sub("", normalized)).split())
         spellings: list[str] = []
-        for spelling in (normalized, joined, fold_lookalikes(normalized), fold_lookalikes(joined)):
+        for spelling in (normalized, joined, mixed, *(fold_lookalikes(s) for s in (normalized, joined, mixed))):
             if spelling != prompt and spelling not in spellings:
                 spellings.append(spelling)
         return spellings
@@ -337,10 +371,13 @@ class Blocklist(ContentSafetyGuardrail):
         # censor_prompt was taught to fold: a fullwidth or accented letter is
         # gone rather than normalized, so the word it spells never reaches the
         # matcher and the prompt reads as clean. censor_prompt does its own
-        # code-point folding, so it needs the original text to fold.
-        censored, message = self.censor_prompt(input_prompt)
-        if censored:
-            return False, message
+        # code-point folding, so it needs the original text to fold. An ASCII
+        # prompt is left unchanged by to_ascii, so the next pass sees the same
+        # text and this one is skipped.
+        if not input_prompt.isascii():
+            censored, message = self.censor_prompt(input_prompt)
+            if censored:
+                return False, message
 
         # The ASCII pass is kept rather than replaced. Some separators survive the
         # folding -- "boston·dynamics" stays one token on the raw pass -- and

@@ -23,6 +23,7 @@ Latin letter, or every letter in it is a lookalike. The Russian word for
 "pine" contains U+043D, which has no Latin twin, so it is left alone.
 """
 
+import re
 import sys
 import unicodedata
 from collections.abc import Iterable
@@ -153,6 +154,58 @@ LOOKALIKES: dict[str, str] = _expand(
         ),
     }
 )
+
+
+# Latin letters that confusables.txt does not map to a plain letter and NFKC
+# does not fold: the small capitals ("\ua731\u0274\u1d0f\u1d21" reads as
+# "snow") and the letters with a stroke or bar ("sn\u00f8w"). They are found by
+# their Unicode names, so the rule rather than a hand list decides what is in;
+# test_latin_variants_follow_the_naming_rule pins the result. Characters
+# already in LOOKALIKES keep their confusables.txt letter.
+_LATIN_VARIANT_NAME = re.compile(
+    r"^LATIN (?:(?:SMALL|CAPITAL) )?LETTER (?:SMALL CAPITAL ([A-Z])|([A-Z]) WITH (?:STROKE|DIAGONAL STROKE|BAR))$"
+)
+
+# The blocks that hold such letters: Latin-1 Supplement, Latin Extended-A and
+# -B, IPA Extensions, Phonetic Extensions, Latin Extended-C and -D, and Latin
+# Extended-G.
+_LATIN_VARIANT_BLOCKS = (
+    range(0x00C0, 0x0250),
+    range(0x0250, 0x02B0),
+    range(0x1D00, 0x1D80),
+    range(0x2C60, 0x2C80),
+    range(0xA720, 0xA800),
+    range(0x1DF00, 0x1E000),
+)
+
+# Not Latin, but drawn like a Latin letter and missing from confusables.txt:
+# the Greek final sigma is a "c" with a tail.
+_EXTRA_LOOKALIKES = {"\u03c2": "c"}
+
+
+def latin_variants(code_points: Iterable[int]) -> dict[str, str]:
+    """Small-capital and stroked Latin letters, mapped to the plain letter."""
+    table: dict[str, str] = {}
+    for code_point in code_points:
+        char = chr(code_point)
+        match = _LATIN_VARIANT_NAME.match(unicodedata.name(char, ""))
+        if not match:
+            continue
+        letter = (match.group(1) or match.group(2)).lower()
+        if unicodedata.normalize("NFKC", char).lower() == letter:
+            continue
+        table[char] = letter
+    return table
+
+
+# The vendored confusables.txt table on its own, as format_table prints it.
+CONFUSABLES: dict[str, str] = LOOKALIKES
+
+LOOKALIKES = {
+    **latin_variants(code_point for block in _LATIN_VARIANT_BLOCKS for code_point in block),
+    **_EXTRA_LOOKALIKES,
+    **CONFUSABLES,
+}
 
 
 def table_from_confusables(lines: Iterable[str]) -> dict[str, str]:
