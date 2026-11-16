@@ -225,6 +225,7 @@ cu128 = [
 cu128-train = [
   {include-group = "cu128"},
   "torchao==0.16.0+cu128; platform_machine == 'x86_64'", # https://github.com/pytorch/ao/issues/2919
+  "torchao==0.16.0+cpu; platform_machine == 'aarch64'", # pure-Python wheel; enough for ModelOpt FP8 checkpoints
   "transformer-engine==2.12.0+cu128.torch210",
   "triton==3.6.0",
 ]
@@ -262,6 +263,7 @@ cu130 = [
 cu130-train = [
   {include-group = "cu130"},
   "torchao==0.16.0+cu130; platform_machine == 'x86_64'", # https://github.com/pytorch/ao/issues/2919
+  "torchao==0.16.0+cpu; platform_machine == 'aarch64'", # pure-Python wheel; enough for ModelOpt FP8 checkpoints
   "transformer-engine==2.12.0+cu130.torch210",
   "triton==3.6.0",
 ]
@@ -304,6 +306,7 @@ cu130-torch213 = [
 cu130-torch213-train = [
   {include-group = "cu130-torch213"},
   "torchao==0.17.0+cu130; platform_machine == 'x86_64'", # 0.18.0+cu130 not published; no aarch64 build; https://github.com/pytorch/ao/issues/2919
+  "torchao==0.17.0+cpu; platform_machine == 'aarch64'", # pure-Python wheel; enough for ModelOpt FP8 checkpoints
   "transformer-engine==2.12.0+cu130.torch210", # TODO: torch213 build
   "triton==3.7.1", # torch==2.13.0+cu130 pins triton==3.7.1
 ]
