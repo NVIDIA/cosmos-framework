@@ -36,6 +36,17 @@ and mature recovery remain pending. The main recipe still uses fused AdamW
 with FP32 state. The [bound evidence](evidence/native_qlora_family_engineering_4cba88f.json)
 also preserves the earlier pre-model packaging failure (`38611005`).
 
+The first controlled selected-policy response benchmark (`38616477`, 207
+GPU-seconds) failed in its measurement wrapper after the first GR00T worker
+completed 65 response calls and 20 untimed input/task proofs. Torch reported the
+same physical GPU without NVML's `GPU-` prefix, and the wrapper compared the raw
+strings. Frozen/model/RNG integrity passed in that worker, but the original
+wrapper and allocation remain failed; no later case ran. A repair passing five
+captured-identity CPU tests uses the existing physical-UUID normalizer and checks
+ownership before loading.
+All sixteen cases must be rerun together before a matched latency claim. This
+does not change either native model or its historical quality conclusions.
+
 Native commands: [training and recovery](#native-training-and-recovery),
 [fresh-process evaluation](#fresh-process-evaluation),
 [standalone artifacts](#standalone-artifacts), and [LIBERO rollout](#libero-rollout).

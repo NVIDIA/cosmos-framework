@@ -233,6 +233,70 @@
     "scope": "Source CBC only; both precisions benefit. No task-quality or cross-precision speed claim. Same-build own-ON200to300 recovery and current-e64 compatibility remain pending; no promotion."
   },
   "jobs": {
+    "38616477": {
+      "job": "38616477",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "allocated_gpu_seconds": 207,
+      "scope": "Failed selected-policy deployment response measurement; no training or export. Preserve partial first-worker evidence, not matched latency acceptance.",
+      "protocol_sha256": "e0d830f997068a2bde7bb2351d63095d8a12ba9e5c6474595e8ac94a63114a82",
+      "scientific_packet_manifest_sha256": "f6a482402f99946306fa9547c6ea20187dd695b6dc09417f4c20f5fc9dec162f",
+      "operational_manifest_sha256": "387ef15ffab53f05541f6172071681659176dfd9cdaa5032e061a68b87183e08",
+      "admission_sha256": "6f77151ffc7fdd919784b399c58265cdc9501eaf476a4cae104d951575eeb6e8",
+      "receipt_directory": "cosmos-qlora-family-20261113/selected-action-latency-38616477-receipts-v1",
+      "download_manifest_sha256": "b7a4a5deb419896088207566951664fbd9401e54354e92e863d72b4da79643f3",
+      "retained_raw_files": 22,
+      "terminal_release_sha256": "3e72506a67d716c7f335b08b8eccda557f8291184bf387848ba69107426a0992",
+      "native_build": {
+        "manifest_sha256": "b09859f554889afb101f3cba1d9b518b1810d5fd3a8dad0fe8f73f6469eaed4c",
+        "name": "native-64ea823",
+        "revision": "64ea823db4a7978c387d195bb464879b4f4733d0",
+        "wheel_sha256": "f1a3cc7332007881d41e6daef3379d3d08985bc883cebbe21cdc491d18acdaf7"
+      },
+      "case": "gr00t-nf4_lora-portable",
+      "block": 0,
+      "worker_calls": 65,
+      "untimed_input_task_proofs": 20,
+      "worker_integrity_passed": true,
+      "worker_exit_code": 0,
+      "wrapper_complete": false,
+      "wrapper_native_response_complete": false,
+      "failure": "ValueError: actual response GPU differs from the NVML runtime receipt",
+      "actual_torch_uuid": "0bddaa9b-14eb-cf02-7039-3dbd83f19e90",
+      "actual_nvml_uuid": "GPU-0bddaa9b-14eb-cf02-7039-3dbd83f19e90",
+      "cpu_affinity": [
+        0,
+        1,
+        2,
+        3,
+        6,
+        7,
+        8,
+        9,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131
+      ],
+      "node": "batch-block5-03724",
+      "host_gpu_samples": 99,
+      "independent_raw_replay": {
+        "passed": true,
+        "log": "selected-action-latency-38616477-shared-peer.log",
+        "sha256": "36419a6dad0e2fcd460947afe3511396be5ce48bff63a213fe7bbe93d1bb9b1b",
+        "scope": "All22 raw hashes, terminal release, actual65-call/20-proof identities/outputs/clocks and99 strict host/GPU samples; stage/phase reducers replayed. Original wrapper failure retained."
+      },
+      "repair_scope": "Use existing physical-GPU UUID canonicalization and compare to the NVML-verified environment identity before model construction. Preserve native models, artifacts, timers, observations, seeds, order and gates; rerun all16 cases as a fresh matched block.",
+      "limits": [
+        "No later case ran; no matched memory/latency or serving-speed conclusion.",
+        "Original overall/wrapper failure is not retroactively promoted by recognizing the same physical UUID.",
+        "Pre-GPU scheduler timeouts and the corrected source-asset symlink checker are retained in the admission receipt bundles; they consumed no GPU allocation."
+      ]
+    },
     "38612140": {
       "job": "38612140",
       "state": "COMPLETED",
