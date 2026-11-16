@@ -82,6 +82,25 @@ the repeated-container infrastructure for the unchanged sixteen-case benchmark;
 no policies were loaded and no latency or quality result follows from this canary.
 All preceding failed allocations retain their original outcomes.
 
+The subsequent full response study (`38638146`, **5,210 GPU-seconds**) completed
+fifteen of sixteen native cases, all with valid model/output/RNG and memory checks.
+After case fifteen, three quick queries still listed the finishing numeric step;
+two later scheduler queries each timed out at ten seconds. The thirty-second
+release deadline stopped the allocation before the last GR00T NF4 portable case.
+Its eventual step-clearance time is unknown. The allocation remains **failed**;
+the full comparator rejects the missing case, and no matched latency result is
+reported. All 307 files, 975 response calls, 300 input/task-output proofs and 3,234
+raw memory samples were replayed. Thirteen short phase intervals lack samples.
+The eight completed first-block cases remain valid artifact-output references;
+they do not supply a completed timing comparison.
+
+A prospective operational repair extends only the read-only step-release wait to
+180 seconds and 90 attempts, retaining ten-second query limits, two-second
+intervals, exact numeric-step absence, atomic failure records and no `srun` retry.
+Its CPU refusal/timeout tests pass; actual repeated-container execution remains
+to be checked. This does not change either model, a quality margin, or the outcome
+of the failed thirty-second protocol.
+
 Native commands: [training and recovery](#native-training-and-recovery),
 [fresh-process evaluation](#fresh-process-evaluation),
 [standalone artifacts](#standalone-artifacts), and [LIBERO rollout](#libero-rollout).

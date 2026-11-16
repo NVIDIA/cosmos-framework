@@ -32578,6 +32578,447 @@
         "events_per_worker": 99,
         "scope": "Bounded decode/full hashes, exhaustive matched post-seed leaves, and36 final raw image pairs. Wrist differing pairs have exact entire recorded before and after states. Twelve front before-state pairs differ only renderer GL-camera pos/forward/up; all36 after-states exact."
       }
+    },
+    "38638146": {
+      "allocated_gpu_seconds": 5210,
+      "automatic_resubmission": false,
+      "canonical_evidence": {
+        "allocation": {
+          "path": "selected-action-latency-38638146-receipts-v1/allocation.json",
+          "sha256": "8b3298e040913daee7836b34f490f3f9801d41db52a4645ae942f62818490f82"
+        },
+        "archive": {
+          "bytes": 26985876,
+          "path": "selected-action-latency-38638146-receipts-v1.tar.gz",
+          "safe_regular_members": 308,
+          "sha256": "ee6587e2b2dab7469245c725c1614fc2187501c9dcfc438f37fe7794fb79f7a9"
+        },
+        "collector": {
+          "path": "collect-selected-action-full16-v1.py",
+          "sha256": "51bcdb4d639760eff4f9f4438995a4d97b1021c9f63f743728801e8d8a9ea174"
+        },
+        "inventory": {
+          "path": "selected-action-latency-38638146-receipts-v1/download-manifest.json",
+          "sha256": "55a27ece35f8a3fea2e309cdbea958fde50ae93dded777e67b6816e91be2884d"
+        },
+        "raw_bytes": 96453339,
+        "raw_files": 307,
+        "source_and_receipt_hashes_verified": true,
+        "terminal_release": {
+          "path": "selected-action-latency-38638146-receipts-v1/terminal-release-v1.json",
+          "sha256": "dd43fb75ded3a5ac4deafc85a5f0d71814d15db290fd4dd94a54a1ba53674754"
+        }
+      },
+      "decision": "The prospective full16 comparison did not complete. Fifteen successful cases remain integrity-verified retained evidence; no full16 latency comparison, quality promotion or current-loader qualification is inferred.",
+      "exit_code": "1:0",
+      "job_id": "38638146",
+      "local_replay": {
+        "corrected_log": {
+          "path": "selected-action-job38638146-retained-replay-v2.log",
+          "sha256": "725680ec77fcb31d3d67ae5a06237d2bd64bca5de011b0ecb9c4c0c9739ed62e"
+        },
+        "corrected_script": {
+          "path": "selected-action-job38638146-retained-replay-v2.py",
+          "sha256": "5c92a55df09930955d869c2b9687bb8e8c4de82f38b1088bd61d6b7ba49ed388"
+        },
+        "correction": "The local-only absence assertion now names actual response-comparison.json instead of comparison.json. Full comparator missing-workflow refusal was already correct. The v2 rerun produced the identical validated result log; no model, packet or GPU rerun.",
+        "passed": true,
+        "retained_v1_log": {
+          "path": "selected-action-job38638146-retained-replay-v1.log",
+          "sha256": "725680ec77fcb31d3d67ae5a06237d2bd64bca5de011b0ecb9c4c0c9739ed62e"
+        },
+        "retained_v1_script": {
+          "path": "selected-action-job38638146-retained-replay-v1.py",
+          "sha256": "90fe826f37ad1e0890da0f051501561db0b2a7e32919d36511f0a1d1cfae537a"
+        }
+      },
+      "missing": {
+        "case": "block1/gr00t-nf4_lora-portable",
+        "final_step_receipt": "step-15.json",
+        "full_comparator_output": "response-comparison.json",
+        "unchanged_comparator_refuses_missing_case": true,
+        "workflow": "block1/gr00t-nf4_lora-portable/workflow.json"
+      },
+      "next_action": "Review the retained release journal before a bounded operational correction. Any later current-loader parity study must bind explicit valid per-case references under its own prospective protocol and preserve this failed full16 decision. No further GPU job admitted.",
+      "placement": {
+        "cpu_affinity": [
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          142,
+          143,
+          144,
+          145,
+          146,
+          147,
+          148,
+          149
+        ],
+        "cpu_topology": [
+          {
+            "core": 18,
+            "cpu": 18,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "18,146"
+          },
+          {
+            "core": 19,
+            "cpu": 19,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "19,147"
+          },
+          {
+            "core": 20,
+            "cpu": 20,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "20,148"
+          },
+          {
+            "core": 21,
+            "cpu": 21,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "21,149"
+          },
+          {
+            "core": 22,
+            "cpu": 22,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "22,150"
+          },
+          {
+            "core": 23,
+            "cpu": 23,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "23,151"
+          },
+          {
+            "core": 24,
+            "cpu": 24,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "24,152"
+          },
+          {
+            "core": 25,
+            "cpu": 25,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "25,153"
+          },
+          {
+            "core": 14,
+            "cpu": 142,
+            "numa_nodes": [
+              0
+            ],
+            "package": 0,
+            "thread_siblings": "14,142"
+          },
+          {
+            "core": 15,
+            "cpu": 143,
+            "numa_nodes": [
+              0
+            ],
+            "package": 0,
+            "thread_siblings": "15,143"
+          },
+          {
+            "core": 16,
+            "cpu": 144,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "16,144"
+          },
+          {
+            "core": 17,
+            "cpu": 145,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "17,145"
+          },
+          {
+            "core": 18,
+            "cpu": 146,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "18,146"
+          },
+          {
+            "core": 19,
+            "cpu": 147,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "19,147"
+          },
+          {
+            "core": 20,
+            "cpu": 148,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "20,148"
+          },
+          {
+            "core": 21,
+            "cpu": 149,
+            "numa_nodes": [
+              1
+            ],
+            "package": 0,
+            "thread_siblings": "21,149"
+          }
+        ],
+        "gpu_name": "NVIDIA A100-SXM4-80GB",
+        "gpu_uuid": "GPU-ce579deb-3c0e-3625-dce1-9a86400b2f3c",
+        "hostname": "batch-block1-0079",
+        "slurm_job_id": "38638146",
+        "total_memory_bytes": 85174583296
+      },
+      "release_failure": {
+        "elapsed_seconds": 30.003911604057066,
+        "failure": {
+          "message": "Numeric step release was not established within thirty seconds",
+          "type": "DeadlineExceeded"
+        },
+        "index": 14,
+        "journal": {
+          "path": "selected-action-latency-38638146-receipts-v1/step-14-attempts.jsonl",
+          "sha256": "5fafbf3283c057bef7a179aa680002da882b5e9a5a52f1f9c3d59f738fc47dec"
+        },
+        "limits": "The initial step listing and subsequent query timeouts are both observed. Actual controller cleanup/clearance time and scheduler root cause are not established by these records.",
+        "observed_sequence": [
+          "First three successful queries listed numeric step38638146.14; each query completed in about0.14-0.16s.",
+          "Queries4 and5 each timed out at10s without output.",
+          "Thirty-second deadline expired without an empty-numeric-step observation; the dispatch stopped and did not retry srun.",
+          "Later accounting lists step14 COMPLETED0:0 ending14:36:33 UTC and allocation FAILED1:0 ending14:38:59 UTC; fresh c928 release at14:41:12 UTC confirms no active owned steps."
+        ],
+        "policy": {
+          "deadline_seconds": 30,
+          "interval_seconds": 2,
+          "maximum_attempts": 15,
+          "query_timeout_seconds": 10
+        },
+        "record": {
+          "path": "selected-action-latency-38638146-receipts-v1/step-14.json",
+          "sha256": "ebd5106acfa64ab862095b32df245f067c0d5f2e7f0dc569f872523c9755995b"
+        },
+        "srun_exit_code": 0,
+        "worker_success": true
+      },
+      "retained_validation": {
+        "available_representation_pairs_exact": 7,
+        "available_reversed_block_pairs_exact": 7,
+        "case_count": 15,
+        "cases": [
+          {
+            "block": 0,
+            "calls": 65,
+            "case": "gr00t-nf4_lora-portable",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 0,
+            "calls": 65,
+            "case": "gr00t-nf4_lora-unmerged",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 0,
+            "calls": 65,
+            "case": "gr00t-bf16_lora-portable",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 0,
+            "calls": 65,
+            "case": "gr00t-bf16_lora-unmerged",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 0,
+            "calls": 65,
+            "case": "alpamayo-nf4_lora-portable",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 0,
+            "calls": 65,
+            "case": "alpamayo-nf4_lora-unmerged",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 0,
+            "calls": 65,
+            "case": "alpamayo-bf16_lora-portable",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 0,
+            "calls": 65,
+            "case": "alpamayo-bf16_lora-unmerged",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 1,
+            "calls": 65,
+            "case": "alpamayo-bf16_lora-unmerged",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 1,
+            "calls": 65,
+            "case": "alpamayo-bf16_lora-portable",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 1,
+            "calls": 65,
+            "case": "alpamayo-nf4_lora-unmerged",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 1,
+            "calls": 65,
+            "case": "alpamayo-nf4_lora-portable",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 1,
+            "calls": 65,
+            "case": "gr00t-bf16_lora-unmerged",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 1,
+            "calls": 65,
+            "case": "gr00t-bf16_lora-portable",
+            "proofs": 20,
+            "source_integrity_passed": true
+          },
+          {
+            "block": 1,
+            "calls": 65,
+            "case": "gr00t-nf4_lora-unmerged",
+            "proofs": 20,
+            "source_integrity_passed": true
+          }
+        ],
+        "independent_recording_count_inferred": false,
+        "measured_calls": 900,
+        "native_calls": 975,
+        "per_case_input_proofs": 300,
+        "placement_equal_across_cases": true,
+        "raw_memory_reductions_exact": true,
+        "raw_memory_samples": 3234,
+        "retained_step_query_journals": 15,
+        "retained_step_release_records": 15,
+        "successful_step_releases": 14,
+        "tiny_phase_intervals_without_samples_retained": 13,
+        "warmup_calls": 75
+      },
+      "routing": {
+        "account": "edgeai_tao-ptm_image-foundation-model-clip",
+        "authoritative_config_sha256": "7aed588008a6694014cf43c7b54bef5a008f367cf6fbbd596bf216ccd7962cb7",
+        "configured_partitions": "polar,polar3,polar4,grizzly",
+        "cpus": 16,
+        "gpus": 1,
+        "memory_gib": 128,
+        "qos": "normal",
+        "selected_partition": "grizzly",
+        "wall_limit_seconds": 7200
+      },
+      "scope": "Fixed-input native policy response measurement for selected GR00T update200 and Alpamayo update512 artifacts, portable and effective-base unmerged representations. Zero training updates, no new export, no simulator or serving claim.",
+      "source": {
+        "current_loader_build_qualified": false,
+        "external_dispatch": {
+          "path": "selected-action-latency-v2-narrow-release-v1.sbatch",
+          "sha256": "29efed85d2d1caa657c78698cff860ae886f8070003f0b51aadd02db26513d03"
+        },
+        "native_builds": {
+          "alpamayo": {
+            "manifest_sha256": "c4da337957c127151aa5a3e7f2e5b1fc483f395502c13db48d16a7fc4647e36c",
+            "name": "native-02f93ba",
+            "revision": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+            "wheel_sha256": "e951cfc1e31313f78247ddd528146951895bccc8818e4c8aa7b5bfcfcc79de99"
+          },
+          "gr00t": {
+            "manifest_sha256": "b09859f554889afb101f3cba1d9b518b1810d5fd3a8dad0fe8f73f6469eaed4c",
+            "name": "native-64ea823",
+            "revision": "64ea823db4a7978c387d195bb464879b4f4733d0",
+            "wheel_sha256": "f1a3cc7332007881d41e6daef3379d3d08985bc883cebbe21cdc491d18acdaf7"
+          }
+        },
+        "scientific_protocol": {
+          "path": "selected-action-latency-v2/protocol.json",
+          "sha256": "e0d830f997068a2bde7bb2351d63095d8a12ba9e5c6474595e8ac94a63114a82"
+        },
+        "worker": {
+          "path": "selected-action-latency-v2/response.py",
+          "sha256": "76139dd11e6c844db0fedfbcec0a6769c488937df3c101767d853f67b63c07f0"
+        }
+      },
+      "state": "FAILED",
+      "root_independent_checks": {
+        "listed_files": 307,
+        "safe_byte_exact_archive_members": 308,
+        "original_single_case_validators": 15,
+        "block0_representation_pairs": 4,
+        "repeated_case_output_pairs": 7,
+        "memory_replay_log_sha256": "725680ec77fcb31d3d67ae5a06237d2bd64bca5de011b0ecb9c4c0c9739ed62e",
+        "terminal_c928_release_passed": true,
+        "full16_comparison_passed": false,
+        "scope": "Retained successful case evidence only; missing final case and failed allocation not reconstructed."
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
