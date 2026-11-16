@@ -2087,11 +2087,12 @@ top level: `credentials` [`HF_TOKEN`], `gpus` 1, a `setup` block for the reposit
 `sim-auto-stage1-short-train`: four processes under `torchrun`, two iterations and a checkpoint saved at iteration 2, followed by
 the check that the skill requires of such a run, in the first case the same-run reload of that checkpoint (L74 of its
 `references/training-bundle-and-short-check.md`) and in the second the fresh-process resume of the same Stage 1 run (L426 of its
-`SKILL.md`). Each of the two sets `"gpus": 4` and `"shm_size": "32gb"` for itself; no other case sets a key besides `id`, `prompt`,
-`expected_outcome`, `assertions`, `checks` and `stages`. No other case launches training: 8 of the other 10 prompts say so in words,
-`auto-bundle-timestamped-captions` asks only for a training bundle and `nano-conversion-preflight` only for the converter's
-environment check; each of these 10 cases stops at a bundle build, a data check, an environment check or a dry run. Every case has
-the assertion that the documented workflow ran without errors on the first attempt.
+`SKILL.md`). Each of the two sets `"gpus": 4` and `"shm_size": "32gb"` for itself. One other case sets a key of its own:
+`stage0-resolve-dryrun` of the Sim-Transfer skill sets `"gpus": 2`; its prompt says that no training is started. No case sets any
+other key besides `id`, `prompt`, `expected_outcome`, `assertions`, `checks` and `stages`. No other case launches training: 8 of the
+other 10 prompts say so in words, `auto-bundle-timestamped-captions` asks only for a training bundle and `nano-conversion-preflight`
+only for the converter's environment check; each of these 10 cases stops at a bundle build, a data check, an environment check or a
+dry run. Every case has the assertion that the documented workflow ran without errors on the first attempt.
 
 | Skill | Case | Assertions | File checks | Keys of its own | Steps that the case names |
 | --- | --- | --- | --- | --- | --- |
@@ -2106,7 +2107,7 @@ the assertion that the documented workflow ran without errors on the first attem
 | `cosmos3-post-train-simulation-bimanual` | `stage0-initializer-dryrun` | 6 | 4 | — | `framework training environment`; `example bundle download + bind`; `Cosmos3-Nano + VAE download`; `DCP conversion + file checks`; `Stage 0 dry run`; `verify + summarize` |
 | `cosmos3-post-train-simulation-transfer` | `example2-training-bundle` | 6 | 6 | — | `framework setup`; `example2 download + training row`; `tokenizer + bundle build`; `verify + summarize` |
 | `cosmos3-post-train-simulation-transfer` | `nano-conversion-preflight` | 5 | 3 | — | `framework setup`; `converter and runtime check`; `verify + summarize` |
-| `cosmos3-post-train-simulation-transfer` | `stage0-resolve-dryrun` | 6 | 3 | — | `framework setup`; `example2 bundle`; `Nano conversion or blocker analysis`; `Stage 0 arguments + dry run`; `verify + summarize` |
+| `cosmos3-post-train-simulation-transfer` | `stage0-resolve-dryrun` | 6 | 3 | `"gpus": 2` | `framework setup`; `example2 bundle`; `Nano conversion or blocker analysis`; `Stage 0 arguments + dry run`; `verify + summarize` |
 
 ### Known and deliberately unchanged
 
