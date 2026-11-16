@@ -233,6 +233,199 @@
     "scope": "Source CBC only; both precisions benefit. No task-quality or cross-precision speed claim. Same-build own-ON200to300 recovery and current-e64 compatibility remain pending; no promotion."
   },
   "jobs": {
+    "38612140": {
+      "job": "38612140",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 3533,
+      "scope": "Separate integration branch; 14-stage cache-OFF correctness/memory canary only. No quality, time-to-quality, throughput, cache-ON, rollout, dense-export or deployment qualification from this canary.",
+      "branch": "integration/native-action-qlora-bnb8",
+      "native_revision": "1af7d04ec42937d06dfafb8ac6ded46f20aa483f",
+      "native_manifest_sha256": "f55dd7adb817f5e62d13d0b93f19313d352fc9e47e22428a3c4e20c1b0a19a68",
+      "protocol_sha256": "78c433a40fcef01297fd56f45f03215b182f8f72fe3ca3ec9bc61ed25ef70bd2",
+      "payload_manifest_sha256": "b504e75f618e60cca58fc83c0bad2f9a2ae3d3603a0e55950f2aec9ad1d3cf17",
+      "receipt_archive": "cosmos-qlora-family-20261113/gr00t-optimizer-canary-attempt2-38612140-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "06d49ca789d1d8b37d11373b3b6a40e9b29a43cedca6f810d1c5416c8d84727e",
+      "inventory_sha256": "f65f85c4510ba27c94026977ab1d05f63150cbb2f018595a32d0dcb73b56fd7b",
+      "receipt_files_including_inventory": 306,
+      "release_sha256": "f759a47629f1a8cdbfea4eb6b013409893b873bb70e25371cc470a39205b1ac5",
+      "acceptance_sha256": "7a202364e140305ef4c5c788c609754671f3cbf1c70771f82ce9315a79d3f299",
+      "model_stages": [
+        "bf16_direct-full",
+        "bf16_direct-resumed",
+        "bf16_direct-portable",
+        "nf4_bnb8-full",
+        "nf4_bnb8-interrupted",
+        "nf4_bnb8-resumed",
+        "nf4_bnb8-portable",
+        "nf4_direct-full",
+        "nf4_direct-resumed",
+        "nf4_direct-portable",
+        "bf16_bnb8-full",
+        "bf16_bnb8-interrupted",
+        "bf16_bnb8-resumed",
+        "bf16_bnb8-portable"
+      ],
+      "contract": {
+        "base_modes": [
+          "bf16_lora",
+          "nf4_lora"
+        ],
+        "optimizer_modes": [
+          "direct_fused_adamw_fp32",
+          "nonpaged_bnb_adamw8bit_fp32_owner"
+        ],
+        "rank": 32,
+        "alpha": 64,
+        "seed": 17,
+        "learning_rate": 1e-05,
+        "horizon": 300,
+        "pause_after_update": 10,
+        "evaluation_and_save_every": 5,
+        "full_development_rows": 160,
+        "train_manifest_rows": 1280,
+        "evaluation_reuse": false,
+        "backbone_evaluation_reuse": false,
+        "native_40_10_8_horizons": true,
+        "flow_sampling_steps": 4,
+        "frozen_language_matrices": 112,
+        "trainable_factors": 224,
+        "trainable_head_tensors": 537,
+        "trainable_elements": 1640438912,
+        "processed_token_range": [
+          151,
+          156
+        ],
+        "processed_pixels_shape": [
+          512,
+          1536
+        ],
+        "two_camera_grid_shape": [
+          2,
+          3
+        ],
+        "model_action_shape": [
+          1,
+          40,
+          132
+        ],
+        "training_observations_per_full_arm": 10,
+        "evaluation_pack_observations_per_full_arm": 960
+      },
+      "correctness": {
+        "same_base_pristine_parameters_rng_identity_and_full160_scores_equal": true,
+        "four_arm_processed_input_logs_byte_identical": true,
+        "exact_optimizer_membership_count": 761,
+        "first_A_gradients_zero_as_expected": true,
+        "final_A_B_head_nonzero_gradient_counts": [
+          112,
+          112,
+          537
+        ],
+        "each_own5_to10_and_next5updates_exact": true,
+        "all761_portable_tensors_exact": true,
+        "fresh_portable_rows_per_arm": 2,
+        "fresh_rows_are_not_full160_quality_evidence": true,
+        "all_parameters_A_B_head_changed_5_to10": [
+          112,
+          112,
+          537
+        ],
+        "frozen_base_and_quantization_state_unchanged": true,
+        "both_bnb8_partial_update6_exit86_no_checkpoint": true,
+        "torchrun_expected_interruption_exit": 1,
+        "metadata_only_incomplete_publication_rejected": true
+      },
+      "optimizer_storage": {
+        "bf16_bnb8": {
+          "blocks": 6406289,
+          "fp32_parameters": 234,
+          "metadata_bytes": 52329608,
+          "moment_bytes": 3283452160,
+          "quantized_parameters": 527,
+          "serialized_master_bytes": 6561755648
+        },
+        "bf16_direct": {
+          "blocks": 0,
+          "fp32_parameters": 761,
+          "metadata_bytes": 3044,
+          "moment_bytes": 13123511296,
+          "quantized_parameters": 0,
+          "serialized_master_bytes": 0
+        },
+        "nf4_bnb8": {
+          "blocks": 6406289,
+          "fp32_parameters": 234,
+          "metadata_bytes": 52329608,
+          "moment_bytes": 3283452160,
+          "quantized_parameters": 527,
+          "serialized_master_bytes": 6561755648
+        },
+        "nf4_direct": {
+          "blocks": 0,
+          "fp32_parameters": 761,
+          "metadata_bytes": 3044,
+          "moment_bytes": 13123511296,
+          "quantized_parameters": 0,
+          "serialized_master_bytes": 0
+        }
+      },
+      "memory_limits": [
+        "Sampled peaks are lower bounds, not total weight-size estimates.",
+        "Observer starts after controller imports/storage/cohort admission; worker preparation/loading/training/evaluation/checkpoint/export are observed.",
+        "Total-host values include the retained controller and sequential diagnostic tensor audits; differences are not clean isolated worker-host effects.",
+        "Tiny phase intervals may contain no NVML/host sample. Abrupt-interruption allocator summaries cover only completed phase records, not an unobserved ending peak.",
+        "No smaller-GPU support or cache-enabled optimizer combination is established."
+      ],
+      "independent_raw_replay": {
+        "passed": true,
+        "log": "gr00t-optimizer-canary-38612140-shared-peer.log",
+        "log_sha256": "dd696b33adede33cf9c4133659470e7e807f9e587e5c8f069a71198c2050c584",
+        "scope": "Canonical inventory/release/runtime and actual v11 whole/stage/phase reductions; 36 small metadata/trainer/data controls; own5-to10 numerical updates/history/160 rows/input/fresh2/source and same-base initial state. Full model/moment/frozen tensor equality remains the bound on-node attestation.",
+        "raw_samples": 2515,
+        "native_model_stages": 14,
+        "tiny_intervals_without_samples": 52,
+        "prior_peer_script_schema_corrections_preserved": true
+      },
+      "evidence_revision": "517f24027701e1cf272b0df6dc4c35e548531066",
+      "main_baseline_optimizer_unchanged": true,
+      "full_stage_peaks": {
+        "bf16_bnb8": {
+          "allocator_peak_allocated_bytes": 22269736960,
+          "allocator_peak_reserved_bytes": 22858956800,
+          "sampled_owned_gpu_bytes": 23932698624
+        },
+        "bf16_direct": {
+          "allocator_peak_allocated_bytes": 32039697920,
+          "allocator_peak_reserved_bytes": 32765902848,
+          "sampled_owned_gpu_bytes": 33839644672
+        },
+        "nf4_bnb8": {
+          "allocator_peak_allocated_bytes": 21078981632,
+          "allocator_peak_reserved_bytes": 21669871616,
+          "sampled_owned_gpu_bytes": 22745710592
+        },
+        "nf4_direct": {
+          "allocator_peak_allocated_bytes": 30844224000,
+          "allocator_peak_reserved_bytes": 31578914816,
+          "sampled_owned_gpu_bytes": 32654753792
+        }
+      },
+      "whole_diagnostic_memory": {
+        "samples": 2515,
+        "host_pss_complete": true,
+        "gpu_memory_evidence_valid": true,
+        "host_pss_sum_peak_bytes": 74984236032,
+        "host_rss_sum_peak_bytes": 75573035008,
+        "peaks_are_sampled_lower_bounds": true
+      },
+      "failed_attempt_retained_as_job": "38611005",
+      "next_gates": [
+        "Conditional fixed300 cache-OFF factorial development screen, unchanged quality/memory/600s rules; not yet admitted.",
+        "Own current1af200-to300 recovery before any selected-recipe promotion.",
+        "Paired-seed quality, independent task confirmation, rollout/serving and combined cache-enabled operation remain separately unqualified."
+      ]
+    },
     "38611005": {
       "job": "38611005",
       "state": "FAILED",

@@ -21,6 +21,21 @@ Detailed results below preserve the original builds, negative trials, uncertaint
 procedure and resource accounting. Optimizer quantization is a separately identified
 integration and is not included in these baseline memory or quality results.
 
+The separate `integration/native-action-qlora-bnb8` branch now has an A100
+four-cell base-precision × optimizer-precision canary on native build `1af7d04`
+(evidence `517f240`, job `38612140`). All fourteen training, own-update-5-to-10
+recovery, interruption and fresh-portable stages passed. Over the ten-update
+training stages, sampled owned GPU peaks were 31.516/22.289 GiB for BF16 with
+FP32/eight-bit AdamW and 30.412/21.184 GiB for NF4. The approximately 9.23 GiB
+within-base reduction belongs to optimizer compression, not NF4. Serialized
+FP32 masters add 6.111 GiB to the resumable payload; the complete diagnostic
+process tree reached 70.383 GiB host RSS. This separate canary establishes
+correctness and measured memory savings, not quality, speed, cache-enabled
+operation or rollout qualification. Its fixed-300-update development screen
+and mature recovery remain pending. The main recipe still uses fused AdamW
+with FP32 state. The [bound evidence](evidence/native_qlora_family_engineering_4cba88f.json)
+also preserves the earlier pre-model packaging failure (`38611005`).
+
 Native commands: [training and recovery](#native-training-and-recovery),
 [fresh-process evaluation](#fresh-process-evaluation),
 [standalone artifacts](#standalone-artifacts), and [LIBERO rollout](#libero-rollout).
