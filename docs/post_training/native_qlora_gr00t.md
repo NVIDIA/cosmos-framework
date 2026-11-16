@@ -101,6 +101,17 @@ Its CPU refusal/timeout tests pass; actual repeated-container execution remains
 to be checked. This does not change either model, a quality margin, or the outcome
 of the failed thirty-second protocol.
 
+The legacy-inference loader `374cee0` then passed its fresh-process qualification
+(`38642797`, one A100 80GB, 53 min 31 s, **3,211 GPU-seconds**). All eight retained
+selected policies (GR00T and Alpamayo × BF16/NF4 LoRA × portable/standalone
+unmerged) loaded through the current native evaluation entrypoints and reproduced
+their twenty reference task-score rows, with model, RNG and module modes unchanged.
+All four GR00T policies also reloaded through the normal rollout-policy loader.
+Every container step released within the 180-second bounded wait. This checks
+current-build artifact compatibility against the eight first-block references of
+`38638146`; it is not a latency, quality or training result, and the matched
+sixteen-case latency study still requires a clean full rerun.
+
 Native commands: [training and recovery](#native-training-and-recovery),
 [fresh-process evaluation](#fresh-process-evaluation),
 [standalone artifacts](#standalone-artifacts), and [LIBERO rollout](#libero-rollout).

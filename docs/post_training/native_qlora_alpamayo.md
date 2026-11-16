@@ -239,6 +239,12 @@ failed job or create its missing original acceptance. All 1,388 observed host
 collections were complete, while some short phase intervals had no sample.
 This extends current-source reliability, not the historical quality or timing results.
 
+The retained BF16/NF4 portable and standalone unmerged Alpamayo policies also load
+through the current native evaluator after the inference-only legacy-identity change
+`374cee0`: all four reproduced their reference trajectory-score rows with model, RNG
+and module modes unchanged in fresh processes (`38642797`). Resume and export keep
+their strict identity checks.
+
 Both own-update-2 BF16/NF4 policies subsequently passed current-build standalone
 export and reload in `38578617`, using unchanged `e64a735` model code. Their two
 native trajectory-score rows, controlled outputs and processor inputs matched
