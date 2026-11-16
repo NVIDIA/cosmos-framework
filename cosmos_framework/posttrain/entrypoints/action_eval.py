@@ -78,12 +78,14 @@ def run(
     if destination.exists():
         raise FileExistsError(f"native evaluation preserves earlier results; choose a new output: {destination}")
     destination.mkdir(parents=True)
+    compatibility = None
     if dense or unmerged:
         if not config.dense_policy_factory:
             raise ValueError("this native action family has no dense policy loader")
         options = {"unmerged": True} if unmerged else {}
         policy = _factory(config.dense_policy_factory)(config, checkpoint, device=device, output=destination, **options)
         metadata = (policy.unmerged_manifest if unmerged else policy.dense_manifest)["source_metadata"]
+        compatibility = getattr(policy, "inference_compatibility", None)
         codec = None
     else:
         policy = _factory(config.policy_factory)(config, device=device, output=destination)
@@ -91,7 +93,12 @@ def run(
         if base:
             metadata = {"identity": codec.identity}
         else:
-            load_adapter_weights(checkpoint, codec, manager=manager)
+            compatibility = codec.validate_metadata(metadata, purpose="inference")
+            if compatibility and rl.reuse_gr00t_evaluation_backbone:
+                raise ValueError(
+                    "legacy family inference compatibility requires GR00T evaluation backbone reuse disabled"
+                )
+            compatibility = load_adapter_weights(checkpoint, codec, manager=manager, purpose="inference")
     record_qlora_phase("family_evaluation_loading_complete", reset_peak=True)
     source = _Source(_factory(config.data_factory)(config, "validation", policy))
     validate_evaluation_input_reuse(config, rl, source)
@@ -132,6 +139,8 @@ def run(
             "scoring_seconds": time.monotonic() - loaded,
             "workflow_seconds": time.monotonic() - start,
         }
+        if compatibility is not None:
+            result["inference_compatibility"] = compatibility
         _json(destination / "evaluation.json", result)
         record_qlora_phase("family_evaluation_publication_complete", reset_peak=True)
         return result

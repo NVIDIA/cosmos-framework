@@ -118,6 +118,20 @@ def build_policy(config, artifact, *, device, output, unmerged=False):
         expected["adapter"] = {
             name: getattr(model.backbone_adaptation, name) for name in ("mode", "rank", "alpha", "dropout", "seed")
         }
+    compatibility = None
+    if unmerged:
+        from cosmos_framework.posttrain.checkpoint.family_inference import (
+            INFERENCE_COMPATIBILITY,
+            gr00t_unmerged_inference_identity_for_read,
+        )
+        from cosmos_framework.posttrain.model.quantization.family import _implementation_identity
+
+        adjusted = gr00t_unmerged_inference_identity_for_read(
+            manifest["source_metadata"]["identity"], expected, implementation=_implementation_identity()
+        )
+        if adjusted is not expected:
+            compatibility = INFERENCE_COMPATIBILITY
+        expected = adjusted
     _require_subset(manifest["source_metadata"]["identity"], expected)
     task = manifest["source_metadata"]["identity"]["task_contract"]
     precision = task["precision"]
@@ -169,6 +183,7 @@ def build_policy(config, artifact, *, device, output, unmerged=False):
     )
     if unmerged:
         policy.unmerged_manifest = manifest
+        policy.inference_compatibility = compatibility
     else:
         policy.dense_manifest = manifest
     return policy

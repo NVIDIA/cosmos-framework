@@ -169,21 +169,34 @@ class AdapterCheckpointCodec:
         metadata: Mapping[str, Any],
         optimizer: torch.optim.Optimizer | None = None,
         *,
-        purpose: Literal["reload", "resume"] = "reload",
-    ) -> None:
+        purpose: Literal["reload", "resume", "inference"] = "reload",
+    ) -> str | None:
         """Compare model identity for reload, and the complete training contract for exact resume."""
-        if purpose not in ("reload", "resume"):
+        if purpose not in ("reload", "resume", "inference"):
             raise ValueError(f"unsupported adapter checkpoint purpose: {purpose!r}")
+        if purpose == "inference" and optimizer is not None:
+            raise ValueError("inference compatibility cannot validate an optimizer or training resume")
         if purpose == "resume" and optimizer is None:
             raise ValueError("adapter resume validation requires the live optimizer")
         expected = self.metadata(optimizer)
+        compatibility = None
         for key in ("protocol", "identity", "topology", "parameters"):
             saved_value, expected_value = metadata.get(key), expected[key]
             if key == "identity" and isinstance(saved_value, Mapping):
                 from cosmos_framework.posttrain.model.quantization.loader import legacy_default_identity_for_read
 
                 expected_value = legacy_default_identity_for_read(dict(saved_value), expected_value)
-            if key == "identity" and purpose == "reload":
+                if purpose == "inference":
+                    from cosmos_framework.posttrain.checkpoint.family_inference import (
+                        INFERENCE_COMPATIBILITY,
+                        family_inference_identity_for_read,
+                    )
+
+                    adjusted = family_inference_identity_for_read(saved_value, expected_value)
+                    if adjusted is not expected_value:
+                        compatibility = INFERENCE_COMPATIBILITY
+                    expected_value = adjusted
+            if key == "identity" and purpose in ("reload", "inference"):
                 # Dataset, batching, and schedule do not define the reloaded numerical model. All
                 # base, processor, quantization, adapter, dependency, and hardware identities do.
                 if not isinstance(saved_value, Mapping):
@@ -194,6 +207,7 @@ class AdapterCheckpointCodec:
                 raise ValueError(f"adapter checkpoint {key} differs from the constructed model")
         if optimizer is not None and metadata.get("optimizer") != expected["optimizer"]:
             raise ValueError("adapter checkpoint optimizer identity differs from the configured optimizer")
+        return compatibility
 
 
 def build_adapter_checkpoint_codec(net: nn.Module, *, identity: Mapping[str, Any]) -> AdapterCheckpointCodec:

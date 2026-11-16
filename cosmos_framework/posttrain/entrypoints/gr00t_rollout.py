@@ -73,8 +73,8 @@ def load_rollout_policy(config, checkpoint=None, *, device, output, dense=False,
             raise ValueError("native GR00T source policy differs from its immutable untrained source contract")
         codec.validate_frozen_base()
     else:
-        codec.validate_metadata(metadata, purpose="reload")
-        load_adapter_weights(checkpoint, codec, manager=manager)
+        codec.validate_metadata(metadata, purpose="inference")
+        policy.inference_compatibility = load_adapter_weights(checkpoint, codec, manager=manager, purpose="inference")
     policy.net.eval()
     return policy
 
@@ -302,6 +302,11 @@ def main():
                 else policy.dense_manifest["source_metadata"]["identity"]
                 if args.dense
                 else policy.net._cosmos_adapter_checkpoint_codec.identity,
+                **(
+                    {"inference_compatibility": policy.inference_compatibility}
+                    if getattr(policy, "inference_compatibility", None) is not None
+                    else {}
+                ),
                 "cases": [asdict(case) for case in cases],
                 **(
                     {

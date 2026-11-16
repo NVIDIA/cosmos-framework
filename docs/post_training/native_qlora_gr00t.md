@@ -798,6 +798,17 @@ full-cohort quality, mature recovery or deployment-speed qualification. The earl
 
 ## Fresh-process evaluation
 
+The native evaluation and rollout loaders now have a narrow inference-only path
+for the selected full-head rank-32/alpha-64, zero-dropout native64 artifacts. It
+accepts only the reviewed native64-to-e64 model-source closure, unchanged LIBERO
+task settings and the matching adapter seed/runtime. Base, processor, tensor and
+trainable identities remain strict. The same check covers standalone unmerged
+GR00T artifacts; it does not enable legacy merged loading, export or cross-build
+training resume. GR00T evaluation-backbone reuse must remain disabled for this
+transition. Evaluation records the compatibility identifier without rewriting the
+artifact identity. CPU contract tests pass; current-build accelerator comparison
+against the retained selected policies is still required before claiming parity.
+
 Every checkpoint/portable policy includes all trained action-head/projector tensors alongside LoRA,
 with source, model, quantization, processor/statistics, embodiment, action settings, resolved targets,
 implementation hashes and dtype identities. Portable reload reconstructs the same quantized base.

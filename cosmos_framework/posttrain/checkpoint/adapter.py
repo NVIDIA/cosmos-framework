@@ -232,15 +232,15 @@ def load_adapter_weights(
     codec: AdapterCheckpointCodec,
     *,
     manager: CheckpointManager,
-    purpose: Literal["reload", "resume"] = "reload",
-) -> None:
+    purpose: Literal["reload", "resume", "inference"] = "reload",
+) -> str | None:
     """Reload only adapters onto the independently reconstructed, identical frozen base."""
     from torch.distributed.checkpoint.state_dict import get_model_state_dict, set_model_state_dict
 
-    if purpose != "reload":
+    if purpose not in ("reload", "inference"):
         raise ValueError("use trainer.load for exact resume; load_adapter_weights only reloads the numerical model")
     metadata = read_adapter_metadata(path, manager=manager)
-    codec.validate_metadata(metadata, purpose=purpose)
+    compatibility = codec.validate_metadata(metadata, purpose=purpose)
     if os.path.isfile(os.path.join(path, CHECKPOINT_ARTIFACT_MANIFEST)):
         state = _consolidated_adapter_state(path)
     else:
@@ -251,6 +251,7 @@ def load_adapter_weights(
     set_model_state_dict(codec.view, state)
     codec.assert_live()
     codec.validate_frozen_base()
+    return compatibility
 
 
 def save_adapter_artifact(

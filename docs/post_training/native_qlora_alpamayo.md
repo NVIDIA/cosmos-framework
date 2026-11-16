@@ -200,6 +200,14 @@ torchrun --standalone --nproc-per-node=1 \
 Use the `checkpoint` field instead for DCP reload. Choose a new evaluation output
 directory and preserve the artifact's mode, adapter seed and task settings.
 
+Current native evaluation also recognizes the reviewed native02-to-e64 shared
+installer-source change for the selected full-head rank-32/alpha-64, zero-dropout
+portable policies. This inference-only comparison preserves every other identity
+check and records its compatibility identifier; export and training resume remain
+strict. Alpamayo's standalone unmerged loader already binds its unchanged native
+model source and needs no migration. CPU contracts pass; selected-policy task
+parity on the current accelerator build remains a separate qualification step.
+
 From `cbe368d`, exact resume also binds 25 explicit training/recovery source files.
 Changed sources or a legacy checkpoint without this contract fail before data/model
 construction and before state restoration. Use the original qualified build for
