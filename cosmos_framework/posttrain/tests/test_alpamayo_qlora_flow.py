@@ -342,3 +342,106 @@ def test_expert_lr_multiplier_groups_schedule_and_checkpoint_identity(tmp_path):
         (g["lr"], g["lr_multiplier"]) for g in optimizer.param_groups
     ]
     assert state.codec.optimizer_identity(restored) == identity
+
+
+@pytest.mark.parametrize("unmerged_reload", [False, True])
+def test_frozen_expert_trains_only_language_adapters_and_reloads_exactly(tmp_path, unmerged_reload):
+    """train_action_head=false: the source expert/projections stay frozen in their source dtype."""
+    from accelerate import init_empty_weights
+
+    from cosmos_framework.posttrain.checkpoint.adapter import save_adapter_artifact
+    from cosmos_framework.posttrain.checkpoint.family_dense import export_family_unmerged, load_family_unmerged
+    from cosmos_framework.posttrain.checkpoint.manager import CheckpointManager
+    from cosmos_framework.posttrain.config.build import build_optimizer
+    from cosmos_framework.posttrain.config.rl import OptimizerConfig
+    from cosmos_framework.posttrain.model.alpamayo.policy import AlpamayoSFTNet
+    from cosmos_framework.posttrain.model.alpamayo.runtime import bind_rotary_aliases
+    from cosmos_framework.posttrain.model.alpamayo.source import auxiliary_parameters
+
+    net = source(tmp_path)
+    targets = {
+        name: tuple(module.weight.shape)
+        for name, module in net.named_modules()
+        if type(module) is torch.nn.Linear
+        and name.startswith("vlm.model.language_model.layers.")
+        and (".layers.0." in name or name.endswith(("k_proj", "v_proj")))
+    }
+    assert auxiliary_parameters(net, train_action_head=False) == ()
+    head = {n: p.detach().clone() for n, p in net.named_parameters() if n.startswith(tuple(EXPERT_LR_MULTIPLIERS))}
+    state = install_family_backbone(
+        net,
+        config=FamilyBackboneConfig(mode="bf16_lora", rank=2, alpha=4, seed=9),
+        targets=targets,
+        auxiliary_parameters=auxiliary_parameters(net, train_action_head=False),
+        source_identity={"fixture": "actual-public-Alpamayo"},
+        task_identity={"loss": "native-flow", "train_action_head": False},
+        device=torch.device("cpu"),
+    )
+    bind_rotary_aliases(net)
+    assert set(state.codec.parameters) == {
+        f"{name}.{factor}.weight" for name in targets for factor in ("lora_A", "lora_B")
+    }
+    for name, value in head.items():
+        parameter = net.get_parameter(name)
+        assert not parameter.requires_grad and parameter.dtype == torch.bfloat16, name
+    with pytest.raises(ValueError, match="explicitly trained auxiliary"):
+        build_optimizer(net, OptimizerConfig(name="adamw", impl="fused", lr=1e-4, lr_multipliers={"expert": 0.1}))
+    optimizer = build_optimizer(net, OptimizerConfig(name="adamw", impl="fused", lr=1e-3, weight_decay=0.0))
+    state.assert_optimizer(optimizer)
+    policy, data = AlpamayoSFTPolicy(net), batch()
+    before = {name: p.detach().clone() for name, p in state.codec.parameters.items()}
+    for step in range(3):
+        optimizer.zero_grad(set_to_none=True)
+        out = policy.flow_matching_loss(data)
+        assert torch.isfinite(out.loss)
+        out.loss.backward()
+        for name, p in state.codec.parameters.items():
+            assert p.grad is not None and torch.isfinite(p.grad).all(), name
+            if "lora_A" not in name or step > 0:
+                assert p.grad.abs().sum() > 0, name  # the flow loss reaches adapters through the frozen expert
+        optimizer.step()
+    assert all(not torch.equal(before[name], p) for name, p in state.codec.parameters.items())
+    for name, value in head.items():
+        assert torch.equal(net.get_parameter(name), value), name
+    state.validate_frozen_base()
+    reference = policy.flow_matching_loss(data).prediction.detach()
+    checkpoint = save_adapter_artifact(
+        str(tmp_path / "portable" / "iter_000003"),
+        state.codec.view.state_dict(),
+        state.codec.metadata(),
+        manager=CheckpointManager(checkpoint_format="consolidated"),
+    )
+    assert state.codec.metadata()["identity"]["auxiliary_parameters"] == []
+    if not unmerged_reload:
+        (tmp_path / "again").mkdir()
+        fresh = source(tmp_path / "again")
+        restored = install_family_backbone(
+            fresh,
+            config=FamilyBackboneConfig(mode="bf16_lora", rank=2, alpha=4, seed=9),
+            targets=targets,
+            auxiliary_parameters=(),
+            source_identity={"fixture": "actual-public-Alpamayo"},
+            task_identity={"loss": "native-flow", "train_action_head": False},
+            device=torch.device("cpu"),
+        )
+        bind_rotary_aliases(fresh)
+        restored.codec.validate_metadata(state.codec.metadata(), purpose="reload")
+        restored.codec.view.load_state_dict(state.codec.view.state_dict())
+        prediction = AlpamayoSFTPolicy(fresh).flow_matching_loss(data).prediction.detach()
+        torch.testing.assert_close(prediction, reference, atol=0, rtol=0)
+        return
+    destination = tmp_path / "unmerged"
+    export_family_unmerged(
+        net,
+        checkpoint=checkpoint,
+        output=str(destination),
+        exporter_build={"code_revision": "a" * 40, "wheel_sha256": "b" * 64},
+        max_shard_size_bytes=65536,
+    )
+    with init_empty_weights(include_buffers=False):
+        reconstructed = AlpamayoSFTNet(net.config)
+    load_family_unmerged(reconstructed, destination, device="cpu", expected_identity=state.codec.identity)
+    for name, value in head.items():
+        assert torch.equal(reconstructed.get_parameter(name), value), name
+    prediction = AlpamayoSFTPolicy(reconstructed).flow_matching_loss(data).prediction.detach()
+    torch.testing.assert_close(prediction, reference, atol=0, rtol=0)
