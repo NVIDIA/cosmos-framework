@@ -204,17 +204,22 @@ other [Advanced Profile Controls](#advanced-profile-controls) instead.
 
 | Name | Default | Use |
 | --- | --- | --- |
-| `NIM_MULTIVIEW_LAYER_OFFLOAD` | Unset: follows the selected profile (on for `layer` profiles) | Override DiT layer offload for the selected profile without changing profile selection; set `false` to keep the transformer on the GPU. Two-GPU tensor-parallel `layer` profiles reject `false` |
-| `NIM_MULTIVIEW_VAE_TILING` | Unset: follows the selected profile (on for `layer` profiles) | Override VAE tiling for the selected profile; set `false` to encode and decode whole frames |
-| `VLLM_OMNI_COSMOS3_MULTIVIEW_VAE_OFFLOAD` | `1` on single-GPU `layer` engines, otherwise `0` | Keep the camera VAE and the LiDAR encoder and decoder in host memory except while they encode or decode; set `0` to keep them on the GPU, or `1` to use it on any profile |
-| `VLLM_OMNI_COSMOS3_MASKLESS_HEAD_GROUPS` | `8` on single-GPU engines, otherwise `1` | Split each attention pass into this many KV-head groups to bound attention working memory; set `1` for a single pass |
+| `NIM_MULTIVIEW_LAYER_OFFLOAD` | Unset: follows the selected profile (on for `layer` profiles) | Turn DiT layer offload and VAE tiling on or off together without changing profile selection; set `false` on any `layer` profile, tensor-parallel profiles included, to keep the transformer on the GPU and process whole frames |
+| `VLLM_OMNI_COSMOS3_MULTIVIEW_VAE_OFFLOAD` | `1` on `layer` profiles, otherwise `0` | Keep the camera VAE and the LiDAR encoder and decoder in host memory except while they encode or decode; set `0` to keep them on the GPU, or `1` to use it on any profile |
+| `VLLM_OMNI_COSMOS3_MASKLESS_HEAD_GROUPS` | `8` on `layer` profiles, otherwise `1` | Split each attention pass into this many KV-head groups to bound attention working memory; set `1` for a single pass |
 | `VLLM_OMNI_COSMOS3_FA3_NUM_SPLITS` | `1` | FlashAttention 3 split count for maskless attention passes on Hopper GPUs; `1` avoids the slower split-KV kernel on long K/V sequences such as LiDAR. Set `0` for automatic split selection or another non-negative integer to force that count. A blank value counts as unset; the NIM rejects other invalid values at startup |
-| `VLLM_OMNI_COSMOS3_FUSED_INDEXED_MERGE` | `false` | Experimental. Use a fused Triton kernel for the gather, FP32 log-sum-exp merge, and indexed accumulator writes of maskless attention passes. Accepts `1/0/true/false/yes/no`. Unsupported devices or layouts fall back to the default path |
-| `VLLM_OMNI_SEACACHE_HISTORY_DEVICE` | `cpu` on single-GPU engines, otherwise `cuda` | Keep SeaCache residual history in pinned host memory; set `cuda` to keep it on the GPU |
-| `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` on single-GPU engines, otherwise unset | PyTorch allocator settings; expandable segments reduce memory fragmentation |
+| `VLLM_OMNI_COSMOS3_FUSED_INDEXED_MERGE` | `true` | Use a fused Triton kernel for the gather, FP32 log-sum-exp merge, and indexed accumulator writes of maskless attention passes; set `0` to turn it off. Accepts `1/0/true/false/yes/no`; the NIM rejects other values at startup. Unsupported devices or layouts fall back to the unfused path |
+| `VLLM_OMNI_SEACACHE_HISTORY_DEVICE` | `cpu` on `layer` profiles, otherwise `cuda` | Keep SeaCache residual history in pinned host memory; set `cuda` to keep it on the GPU |
+| `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` on `layer` profiles, otherwise unset | PyTorch allocator settings; expandable segments reduce memory fragmentation |
 
-A single-GPU engine is a multiview profile whose engine runs on one GPU: the
-one-GPU `layer` profile and `throughput` profiles that run one replica per GPU.
+Resident profiles run without these reductions. The host-memory reductions are
+not settings: on `layer` profiles the NIM keeps the transformer's pinned host
+copy at its actual size, and SeaCache stores history only for the rows the
+model uses, split across Ulysses GPUs. The
+[multiview system-memory floors](support-matrix.md#multiview-profiles) include
+both. Turning layer offload off (`NIM_MULTIVIEW_LAYER_OFFLOAD=false`) drops the
+pinned weight copy, and `VLLM_OMNI_SEACACHE_HISTORY_DEVICE=cuda` moves the
+history from host memory to the GPU.
 
 The NIM sets these variables automatically for the selected profile, so most
 deployments do not need to set any of them. Override them only for advanced
