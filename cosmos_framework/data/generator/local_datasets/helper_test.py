@@ -10,6 +10,8 @@ import pytest
 
 from cosmos_framework.data.generator.local_datasets import helper
 
+pytestmark = [pytest.mark.L0, pytest.mark.CPU]
+
 # ffprobe -show_streams -show_format -select_streams v:0 output (trimmed) for the same
 # 90-frame clip in different containers.
 _MP4 = {
@@ -40,19 +42,32 @@ _MKV_BAD_TRACK_TAG = {
     "streams": [{"width": 320, "height": 240, "r_frame_rate": "30/1", "tags": {"DURATION": "N/A"}}],
     "format": {"format_name": "matroska,webm", "duration": "3.000000"},
 }
+# 61 frames at 30 fps: Matroska stores 2.0333... s as 2.033 s, so duration * fps = 60.99.
+_MKV_61_FRAMES = {
+    "streams": [{"width": 320, "height": 240, "r_frame_rate": "30/1", "tags": {"DURATION": "00:00:02.033000000"}}],
+    "format": {"format_name": "matroska,webm", "duration": "2.033000"},
+}
 
 
 @pytest.mark.parametrize(
-    "probe",
-    [_MP4, _MKV, _WEBM, _MKV_LONGER_AUDIO, _MKV_NO_TRACK_TAG, _MKV_BAD_TRACK_TAG],
-    ids=["mp4", "mkv", "webm", "mkv_longer_audio", "mkv_no_track_tag", "mkv_bad_track_tag"],
+    ("probe", "total_frames"),
+    [
+        (_MP4, 90),
+        (_MKV, 90),
+        (_WEBM, 90),
+        (_MKV_LONGER_AUDIO, 90),
+        (_MKV_NO_TRACK_TAG, 90),
+        (_MKV_BAD_TRACK_TAG, 90),
+        (_MKV_61_FRAMES, 61),
+    ],
+    ids=["mp4", "mkv", "webm", "mkv_longer_audio", "mkv_no_track_tag", "mkv_bad_track_tag", "mkv_61_frames"],
 )
-def test_get_video_metadata_total_frames(monkeypatch: pytest.MonkeyPatch, probe: dict) -> None:
+def test_get_video_metadata_total_frames(monkeypatch: pytest.MonkeyPatch, probe: dict, total_frames: int) -> None:
     def fake_run(cmd, **kwargs):
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(probe), stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    assert helper.get_video_metadata("clip")["total_frames"] == 90
+    assert helper.get_video_metadata("clip")["total_frames"] == total_frames
 
 
 def test_get_video_metadata_real_mkv(tmp_path) -> None:

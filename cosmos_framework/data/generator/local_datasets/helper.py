@@ -107,7 +107,9 @@ def get_video_metadata(video_path: str) -> dict:
         total_frames = int(stream["nb_frames"])
     else:
         duration = _stream_duration(stream, probe_data.get("format", {}))
-        total_frames = int(duration * video_fps)
+        # Matroska durations are rounded to 1 ms, so duration * fps can land just below the frame
+        # count; round() as in scripts/video_metadata.py.
+        total_frames = round(duration * video_fps)
 
     return dict(width=width, height=height, fps=video_fps, total_frames=total_frames)
 
