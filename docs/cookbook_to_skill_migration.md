@@ -1424,7 +1424,7 @@ Files that moved as files. Five of them are byte-identical to their source; the 
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L1-54 | `cosmos3-post-train-simulation-bimanual/references/environment.md` | L1-54 | 3 link targets re-pointed; 1 skill note of the previous section reworded; 5 table lines re-padded |
 | `cosmos3-nano-sim-bimanual/post-training/references/multinode-launcher.md` | L1-36 | `cosmos3-post-train-simulation-bimanual/references/multinode-launcher.md` | L1-36 | 1 link target re-pointed |
 | `cosmos3-nano-sim-bimanual/post-training/references/parameter-guide.md` | L1-25 | `cosmos3-post-train-simulation-bimanual/references/parameter-guide.md` | L1-25 | byte-identical |
-| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L1-246 | `cosmos3-post-train-simulation-transfer/SKILL.md` | L1-345 | 14 link targets re-pointed; 1 command line re-pointed to the new scripts folder; 3 skill notes of the previous section reworded; 4 table lines re-padded; edited in place: new frontmatter and new sections around the carried body (next table) |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L1-246 | `cosmos3-post-train-simulation-transfer/SKILL.md` | L1-352 | 14 link targets re-pointed; 1 command line re-pointed to the new scripts folder; 3 skill notes of the previous section reworded; 4 table lines re-padded; edited in place: new frontmatter and new sections around the carried body (next table) |
 | `cosmos3-nano-sim-transfer/post-training/references/canonical-recipe.md` | L1-227 | `cosmos3-post-train-simulation-transfer/references/canonical-recipe.md` | L1-227 | 2 link targets re-pointed |
 | `cosmos3-nano-sim-transfer/post-training/references/caption-manifest.md` | L1-54 | `cosmos3-post-train-simulation-transfer/references/caption-manifest.md` | L1-54 | 1 link target re-pointed |
 | `cosmos3-nano-sim-transfer/post-training/references/checkpoint-and-resume.md` | L1-149 | `cosmos3-post-train-simulation-transfer/references/checkpoint-and-resume.md` | L1-149 | 2 link targets re-pointed |
@@ -1479,8 +1479,8 @@ blank lines are not counted, and a new line of the destination (a pointer, a new
 | `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L32-89 | "Quickstart: train Stage 0" to "1. Bind local resources" (5 headings) | `cosmos3-post-train-simulation-transfer/SKILL.md` L76-133 |
 | `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L91-135 | code block from `set -euo pipefail`; "2. Resolve Stage 0" | `cosmos3-post-train-simulation-transfer/SKILL.md` L137-181 |
 | `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L137-232 | from `` Inspect `config.yaml` under ``; "3. Train, save and resume" to "Run inference from your trained checkpoint" (4 headings) | `cosmos3-post-train-simulation-transfer/SKILL.md` L197-292 |
-| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L234 | "References" (the heading) | replaced by the heading `## Reference files` (`cosmos3-post-train-simulation-transfer/SKILL.md` L304) |
-| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L236-246 | from `- [Framework environment setup](../../cosmos3-inference-simulation-transfer/references/setup.md)` | `cosmos3-post-train-simulation-transfer/SKILL.md` L325-335 |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L234 | "References" (the heading) | replaced by the heading `## Reference files` (`cosmos3-post-train-simulation-transfer/SKILL.md` L311) |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L236-246 | from `- [Framework environment setup](../../cosmos3-inference-simulation-transfer/references/setup.md)` | `cosmos3-post-train-simulation-transfer/SKILL.md` L332-342 |
 
 The troubleshooting files. Each block skill has one `references/troubleshooting.md`: the body of the old troubleshooting `SKILL.md`,
 then its playbook or symptom guide under its own heading; in the Auto file the Transfer-Auto material comes first, then the Sim-Auto
@@ -1522,7 +1522,7 @@ sections; the runs are in the table above), each behind a one-line pointer in `S
 blocks followed each other). The Sim-Auto part still opens with the rule that the student starts from a Transfer-Auto checkpoint
 (L249-252, source L8-11).
 
-The Sim-Bimanual and Sim-Transfer bodies were edited in place (346 and 345 lines). In both, "Set up the environment" is one level
+The Sim-Bimanual and Sim-Transfer bodies were edited in place (346 and 352 lines). In both, "Set up the environment" is one level
 down under a new `## Prerequisites`, and `## References` is `## Reference files` with the source list kept under it. In the
 Sim-Bimanual body one block changed place: "Activate the Framework environment" (source L37-57) closes "Prerequisites" (L59-79)
 instead of opening "Quickstart: train Stage 0". No block of the Sim-Transfer body or of the two Auto bodies changed its order. The
@@ -1573,7 +1573,7 @@ levels down so that the file has one first-level heading.
 | `cosmos3-nano-sim-bimanual/post-training/SKILL.md` L29                         | `## Set up the environment`                                           | `### Set up the environment`                                            | `cosmos3-post-train-simulation-bimanual/SKILL.md` L47                       | level  |
 | `cosmos3-nano-sim-bimanual/post-training/SKILL.md` L266                        | `## References`                                                       | `## Reference files`                                                    | `cosmos3-post-train-simulation-bimanual/SKILL.md` L317                      | title  |
 | `cosmos3-nano-sim-transfer/post-training/SKILL.md` L22                         | `## Set up the environment`                                           | `### Set up the environment`                                            | `cosmos3-post-train-simulation-transfer/SKILL.md` L56                       | level  |
-| `cosmos3-nano-sim-transfer/post-training/SKILL.md` L234                        | `## References`                                                       | `## Reference files`                                                    | `cosmos3-post-train-simulation-transfer/SKILL.md` L304                      | title  |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` L234                        | `## References`                                                       | `## Reference files`                                                    | `cosmos3-post-train-simulation-transfer/SKILL.md` L311                      | title  |
 
 ### Removed text
 
@@ -1884,34 +1884,34 @@ training half of troubleshooting in the post-train skills (2 links of the Sim-Tr
 
 ### Skill notes
 
-The four post-train skills and the three tests hold 44 notes marked `Skill note (not in the source)` in 21 files: 28 added by this
+The four post-train skills and the three tests hold 45 notes marked `Skill note (not in the source)` in 21 files: 29 added by this
 change, 9 of the previous section that were reworded so that they are true for the new layout, 3 whose link target alone changed,
-and 4 carried unchanged. 30 are blockquotes in Markdown and 14 are code comments. Text that is new as a whole (frontmatter, new
+and 4 carried unchanged. 31 are blockquotes in Markdown and 14 are code comments. Text that is new as a whole (frontmatter, new
 sections, the entry skill) is not marked line by line; it is under "New text".
 
-| File                                                                                | Added                | Reworded        | Link target only | Unchanged |
-| ----------------------------------------------------------------------------------- | -------------------- | --------------- | ---------------- | --------- |
-| `cosmos3-post-train-simulation-auto/SKILL.md`                                       | L62, L275            | —               | —                | —         |
-| `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md`     | L3                   | —               | —                | —         |
-| `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`          | L3                   | —               | —                | —         |
-| `cosmos3-post-train-simulation-auto/references/troubleshooting.md`                  | L3                   | —               | —                | —         |
-| `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md`              | L3                   | —               | L92              | L13       |
-| `cosmos3-post-train-simulation-transfer/references/troubleshooting.md`              | L3                   | —               | —                | —         |
-| `cosmos3-post-train-simulation-auto/references/data-contract.md`                    | —                    | —               | L170             | —         |
-| `cosmos3-post-train-simulation-auto/references/runtime.md`                          | —                    | —               | —                | L3        |
-| `cosmos3-post-train-simulation-auto/references/sim-auto-model-contract.md`          | —                    | —               | —                | L11       |
-| `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md`  | L42, L60, L76, L104  | —               | —                | L3        |
-| `cosmos3-post-train-simulation-bimanual/SKILL.md`                                   | L53, L100, L106      | —               | —                | —         |
-| `cosmos3-post-train-simulation-bimanual/references/data-contract.md`                | —                    | —               | L147             | —         |
-| `cosmos3-post-train-simulation-bimanual/references/environment.md`                  | —                    | L3              | —                | —         |
-| `cosmos3-post-train-simulation-transfer/SKILL.md`                                   | L67, L74, L135, L183 | L64, L149, L269 | —                | —         |
-| `cosmos3-post-train-simulation-transfer/references/environment.md`                  | —                    | L3              | —                | —         |
-| `cosmos3-post-train-simulation-transfer/references/local-dataset.md`                | —                    | L20             | —                | —         |
-| `cosmos3-post-train-simulation-transfer/references/local-training.md`               | L139                 | L41             | —                | —         |
-| `cosmos3-post-train-simulation-transfer/references/nano-conversion.md`              | L44, L86             | L29, L49        | —                | —         |
-| `tests/skills/cosmos3-post-train-simulation-transfer/test_nano_conversion.py`       | L18                  | —               | —                | —         |
-| `tests/skills/cosmos3-post-train-simulation-transfer/test_paibench_local_bundle.py` | L10, L18, L20        | —               | —                | —         |
-| `tests/skills/cosmos3-post-train-simulation-transfer/test_qa_transfer_stage.py`     | L10, L17, L19        | —               | —                | —         |
+| File                                                                                | Added                      | Reworded        | Link target only | Unchanged |
+| ----------------------------------------------------------------------------------- | -------------------------- | --------------- | ---------------- | --------- |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                       | L62, L275                  | —               | —                | —         |
+| `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md`     | L3                         | —               | —                | —         |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`          | L3                         | —               | —                | —         |
+| `cosmos3-post-train-simulation-auto/references/troubleshooting.md`                  | L3                         | —               | —                | —         |
+| `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md`              | L3                         | —               | L92              | L13       |
+| `cosmos3-post-train-simulation-transfer/references/troubleshooting.md`              | L3                         | —               | —                | —         |
+| `cosmos3-post-train-simulation-auto/references/data-contract.md`                    | —                          | —               | L170             | —         |
+| `cosmos3-post-train-simulation-auto/references/runtime.md`                          | —                          | —               | —                | L3        |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-model-contract.md`          | —                          | —               | —                | L11       |
+| `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md`  | L42, L60, L76, L104        | —               | —                | L3        |
+| `cosmos3-post-train-simulation-bimanual/SKILL.md`                                   | L53, L100, L106            | —               | —                | —         |
+| `cosmos3-post-train-simulation-bimanual/references/data-contract.md`                | —                          | —               | L147             | —         |
+| `cosmos3-post-train-simulation-bimanual/references/environment.md`                  | —                          | L3              | —                | —         |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                                   | L67, L74, L135, L183, L294 | L64, L149, L269 | —                | —         |
+| `cosmos3-post-train-simulation-transfer/references/environment.md`                  | —                          | L3              | —                | —         |
+| `cosmos3-post-train-simulation-transfer/references/local-dataset.md`                | —                          | L20             | —                | —         |
+| `cosmos3-post-train-simulation-transfer/references/local-training.md`               | L139                       | L41             | —                | —         |
+| `cosmos3-post-train-simulation-transfer/references/nano-conversion.md`              | L44, L86                   | L29, L49        | —                | —         |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_nano_conversion.py`       | L18                        | —               | —                | —         |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_paibench_local_bundle.py` | L10, L18, L20              | —               | —                | —         |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_qa_transfer_stage.py`     | L10, L17, L19              | —               | —                | —         |
 
 Notes added:
 
@@ -1935,6 +1935,7 @@ Notes added:
 | `cosmos3-post-train-simulation-transfer/SKILL.md`                                   | L74  | note in the text: a requirement the sources do not state | `measured in four runs on H100 NVL GPUs with NVIDIA driver 615.71.10, …`                         |
 | `cosmos3-post-train-simulation-transfer/SKILL.md`                                   | L135 | note in the text: a requirement the sources do not state | `the block below and the block of "2. Resolve Stage 0" are …`                                    |
 | `cosmos3-post-train-simulation-transfer/SKILL.md`                                   | L183 | note in the text: a requirement the sources do not state | `documented result of the Stage 0 command above (measured, four of four): …`                     |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                                   | L294 | note in the text: a requirement the sources do not state | `this route needs one more override, which the block below adds. Here …`                         |
 | `cosmos3-post-train-simulation-transfer/references/local-training.md`               | L139 | note in the text: a requirement the sources do not state | `documented result of the Stage 0 dry run (measured, four of four): …`                           |
 | `cosmos3-post-train-simulation-transfer/references/nano-conversion.md`              | L44  | note in the text: a requirement the sources do not state | `` `NANO_HF_DIR` and `NANO_DCP_DIR` do not exist when the command below starts: no … ``          |
 | `cosmos3-post-train-simulation-transfer/references/nano-conversion.md`              | L86  | note in the text: a requirement the sources do not state | `measured in four conversions on a host with 1 TB of memory: …`                                  |
@@ -2006,7 +2007,7 @@ state: each of its statements rests on text of the three block skills, of `cosmo
 `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md`, `cosmos3-post-train-simulation-transfer/SKILL.md` and
 `cosmos3-post-train-simulation-transfer/references/troubleshooting.md`.
 
-New lines in the files that carry source text (252 non-blank lines). Every other non-blank line of these files is a source line
+New lines in the files that carry source text (257 non-blank lines). Every other non-blank line of these files is a source line
 (tables above) or one of the three descriptions carried as a paragraph ("Removed text"). The new descriptions are 930 (Auto), 920
 (Sim-Bimanual) and 929 (Sim-Transfer) characters long. The "Prerequisites" section of the Sim-Transfer `SKILL.md` quotes four
 passages (five sentences) of its references in quotation marks (L47-54); they stay in the references as well. The "Prerequisites"
@@ -2057,9 +2058,10 @@ paragraph of the Auto `SKILL.md` (L37) quotes two phrases of its `references/run
 | `cosmos3-post-train-simulation-transfer/SKILL.md`                                  | L66-74   | 8 lines from ```` ```bash ````                                                                    |
 | `cosmos3-post-train-simulation-transfer/SKILL.md`                                  | L135     | 1 line from `> **Skill note (not in the source):** …`                                             |
 | `cosmos3-post-train-simulation-transfer/SKILL.md`                                  | L183-195 | 11 lines from `> **Skill note (not in the source):** …`                                           |
-| `cosmos3-post-train-simulation-transfer/SKILL.md`                                  | L294-302 | section "Troubleshooting": heading and 7 lines                                                    |
-| `cosmos3-post-train-simulation-transfer/SKILL.md`                                  | L306-323 | table ("File", "Read it when") of 14 rows, then 1 line                                            |
-| `cosmos3-post-train-simulation-transfer/SKILL.md`                                  | L337-345 | section "Related skills": heading and a table of 5 rows                                           |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                                  | L294-299 | 5 lines from `> **Skill note (not in the source):** …`                                            |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                                  | L301-309 | section "Troubleshooting": heading and 7 lines                                                    |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                                  | L313-330 | table ("File", "Read it when") of 14 rows, then 1 line                                            |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                                  | L344-352 | section "Related skills": heading and a table of 5 rows                                           |
 | `cosmos3-post-train-simulation-transfer/references/local-training.md`              | L139     | 1 line from `> **Skill note (not in the source):** …`                                             |
 | `cosmos3-post-train-simulation-transfer/references/nano-conversion.md`             | L44      | 1 line from `> **Skill note (not in the source):** …`                                             |
 | `cosmos3-post-train-simulation-transfer/references/nano-conversion.md`             | L86      | 1 line from `> **Skill note (not in the source):** …`                                             |
