@@ -283,7 +283,7 @@ for camera_dir in sorted(camera_root.iterdir()):
 
 Policy rolls out future video and the action chunk together from one conditioning frame, a task instruction, and the domain metadata, so it passes no `raw_actions`. `height`, `width`, and `num_frames` stay unset: the pipeline derives the frame count from `chunk_size + 1` and the conditioning canvas from `resolution_tier`.
 
-DROID conditions on a single frame that concatenates three camera views, which is what `view_point="concat_view"` describes to the model. `build_concat_frame` composes it from the first frame of each clip.
+DROID conditions on a single frame that concatenates three camera views, which is what `view_point="concat_view"` describes to the model. `build_concat_frame` composes it from the first frame of each clip with the training layout: the full wrist view on top and the two exterior views at half size below it, nothing cropped.
 
 The task instruction is the prompt; override it with `COSMOS3_POLICY_PROMPT`. Predicted actions come back as `result.action` and are written next to the video as JSON.
 
@@ -303,7 +303,7 @@ import torch
 from IPython.display import HTML, Image, display
 from matplotlib.collections import LineCollection
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
-from PIL import Image as PILImage, ImageOps
+from PIL import Image as PILImage
 
 if "COSMOS3_DIFFUSERS_ACTION_VENV" not in os.environ:
     raise RuntimeError("Run the Restore Environment cell after switching to the Diffusers kernel.")
@@ -518,30 +518,34 @@ def case_output_dir(case: str) -> Path:
     return output_dir
 
 
-def build_concat_frame(case: str) -> Path:
-    """Compose the first frame of each camera clip into the policy conditioning canvas."""
-    width, height = CONCAT_SIZE
-    top_height = height // 2
-    bottom_height = height - top_height
-    half_width = width // 2
+def resize_like_training(frame: PILImage.Image, size: tuple[int, int]) -> PILImage.Image:
+    """Resize with the bilinear filter DROID training uses (F.interpolate, align_corners=False)."""
+    width, height = size
+    pixels = torch.from_numpy(np.asarray(frame.convert("RGB"))).permute(2, 0, 1).unsqueeze(0).float()
+    resized = torch.nn.functional.interpolate(pixels, size=(height, width), mode="bilinear", align_corners=False)
+    return PILImage.fromarray(resized[0].permute(1, 2, 0).round().clamp(0, 255).to(torch.uint8).numpy())
 
+
+def build_concat_frame(case: str) -> Path:
+    """Compose the first frame of each camera clip into the policy conditioning canvas.
+
+    Matches the training-time concat_view (DROIDLeRobotDataset._compose_multi_view): the wrist
+    view unchanged on top, each exterior view resized to half its width and height below it,
+    nothing cropped. The 640x360 DROID clips give a 640x540 canvas.
+    """
     frames = {
-        name: load_video(str(asset_path(relative_path)))[0]
+        name: load_video(str(asset_path(relative_path)))[0].convert("RGB")
         for name, relative_path in CAMERA_VIDEOS.items()
     }
+    wrist = frames["wrist"]
+    half_width, half_height = wrist.width // 2, wrist.height // 2
 
-    canvas = PILImage.new("RGB", CONCAT_SIZE)
-    tiles = [
-        ("wrist", (width, top_height), (0, 0)),
-        ("exterior_1", (half_width, bottom_height), (0, top_height)),
-        ("exterior_2", (half_width, bottom_height), (half_width, top_height)),
-    ]
-
-    for name, size, position in tiles:
-        canvas.paste(
-            ImageOps.fit(frames[name], size, method=PILImage.Resampling.BICUBIC),
-            position,
-        )
+    canvas = PILImage.new("RGB", (wrist.width, wrist.height + half_height))
+    canvas.paste(wrist, (0, 0))
+    canvas.paste(resize_like_training(frames["exterior_1"], (half_width, half_height)), (0, wrist.height))
+    canvas.paste(resize_like_training(frames["exterior_2"], (half_width, half_height)), (half_width, wrist.height))
+    if canvas.size != CONCAT_SIZE:
+        raise ValueError(f"expected a {CONCAT_SIZE} concat_view from 640x360 clips, got {canvas.size}")
 
     frame_path = case_output_dir(case) / f"{case}_input.png"
     canvas.save(frame_path)

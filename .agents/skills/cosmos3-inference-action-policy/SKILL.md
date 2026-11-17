@@ -227,8 +227,9 @@ droid_policy_output = run_policy("droid_policy")
 view_policy("droid_policy")
 ```
 
-What § 7 does: `build_concat_frame` composes the first frame of each clip onto a 640x540 canvas (wrist on top, the two
-exterior views below); `run_policy` loads the checkpoint in `torch.bfloat16` with `enable_safety_checker=GUARDRAILS`, swaps
+What § 7 does: `build_concat_frame` composes the first frame of each clip onto a 640x540 canvas with the training-time
+`concat_view` layout (the full 640x360 wrist view on top, each exterior view bilinear-resized to 320x180 below it, nothing
+cropped); `run_policy` loads the checkpoint in `torch.bfloat16` with `enable_safety_checker=GUARDRAILS`, swaps
 in `UniPCMultistepScheduler` (`flow_shift=5.0`) and calls the pipeline with `CosmosActionCondition(mode="policy",
 chunk_size=16, domain_name="droid_lerobot", resolution_tier=480, image=image, view_point="concat_view")`, `fps=15`, 30
 steps, `guidance_scale=1.0`, `use_system_prompt=False`, seed 0 — "it passes no `raw_actions`. `height`, `width`, and
