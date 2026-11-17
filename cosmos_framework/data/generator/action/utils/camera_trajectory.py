@@ -16,21 +16,12 @@ bit-identical: both runtimes execute this module, not two transcriptions of it.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 from cosmos_framework.data.generator.action.utils.pose_utils import pose_abs_to_rel
-from cosmos_framework.utils import log
-
-# The commands parse_camera_string understands; anything else is a typo, not a request to stay.
-_CAMERA_COMMANDS = frozenset(
-    {"w", "s", "a", "d", "u", "n", "up", "down", "left", "right", "cw", "ccw", "stay", "pano", "orbit"}
-)
-# ASCII digits only: int() would also take "+5", " 5" or other scripts' digits.
-_FRAME_COUNT = re.compile(r"[0-9]+")
 
 __all__ = [
     "CameraTrainParams",
@@ -61,7 +52,7 @@ def parse_camera_string(
 ) -> np.ndarray:
     """
     Parses a camera string into a sequence of camera-to-world poses.
-    Format: "<cmd>-<frame>,<cmd>-<frame>,..."
+    Format: "<cmd>-<frame>,<cmd>-<frame>,...|<cmd>-<frame>,<cmd>-<frame>,..."
     Example: "w-46,right-46"
 
     cmd (translation):
@@ -77,10 +68,8 @@ def parse_camera_string(
     - down: pitch down
     - left: yaw left
     - right: yaw right
-    - cw: roll clockwise, as seen by the camera. The horizon therefore appears to
-        rotate counter-clockwise in the rendered frame, which reads as an inverted
-        sign unless the frame of reference is stated.
-    - ccw: roll counter-clockwise, as seen by the camera.
+    - cw: roll clockwise
+    - ccw: roll counter-clockwise
 
     cmd (special):
     - stay: hold current pose (no movement)
@@ -93,15 +82,7 @@ def parse_camera_string(
 
     frame: duration in number of frames
 
-    This function parses ONE trajectory and does not split on '|'; a string containing
-    '|' is rejected as a malformed command. :func:`parse_custom_trajectories` splits a
-    '|'-separated string into one trajectory per segment. Inference uses one trajectory
-    per sample and keeps only the first segment.
-
-    Raises:
-        ValueError: for an unknown command, a frame count that is not a whole number, an
-            extra field (only ``orbit`` takes a radius), or a ``pano``/``orbit`` of 0 frames.
-            Empty segments, from a trailing or doubled comma, are skipped.
+    Multiple trajectories are separated by '|'.
     """
     commands = [x.strip() for x in camera_string.split(",")]
 
@@ -110,29 +91,14 @@ def parse_camera_string(
     poses = [current_pose.copy()]
 
     for cmd in commands:
-        # An empty segment is how a trailing or doubled comma arrives; that is harmless and
-        # stays silent. Anything else that fails to parse is a typo, and dropping it quietly
-        # produces a shorter trajectory that looks like a model failure to the caller.
-        if not cmd:
+        if "-" not in cmd:
             continue
-        parts = [part.strip() for part in cmd.split("-")]
-        action_type = parts[0]
-        if action_type not in _CAMERA_COMMANDS:
-            raise ValueError(
-                f"Unknown camera command {action_type!r} in {cmd!r}: expected one of "
-                f"{', '.join(sorted(_CAMERA_COMMANDS))}, as '<cmd>-<frames>', e.g. 'w-60'."
-            )
-        max_parts = 3 if action_type == "orbit" else 2
-        if not 2 <= len(parts) <= max_parts:
-            expected = "'orbit-<frames>' or 'orbit-<frames>-<radius>'" if action_type == "orbit" else "'<cmd>-<frames>'"
-            raise ValueError(f"Malformed camera command {cmd!r} in {camera_string!r}: expected {expected}.")
-        if not _FRAME_COUNT.fullmatch(parts[1]):
-            raise ValueError(
-                f"Malformed frame count {parts[1]!r} in camera command {cmd!r}: expected a whole number of frames."
-            )
-        num_frames = int(parts[1])
-        if action_type in ("pano", "orbit") and num_frames == 0:
-            raise ValueError(f"Camera command {cmd!r} needs at least 1 frame for a full turn.")
+        parts = cmd.split("-")
+        action_type = parts[0].strip()
+        try:
+            num_frames = int(parts[1].strip())
+        except ValueError:
+            continue
 
         # Local velocity
         trans_vel = np.zeros(3)  # x, y, z
@@ -190,13 +156,11 @@ def parse_camera_string(
             # Sign: OpenCV frame has +Y pointing down, so CCW as viewed from
             # above corresponds to a NEGATIVE rotation around +Y.
             orbit_radius = 1.0
-            if len(parts) == 3:
+            if len(parts) >= 3:
                 try:
-                    orbit_radius = float(parts[2])
-                except ValueError as exc:
-                    raise ValueError(
-                        f"Malformed orbit radius {parts[2]!r} in camera command {cmd!r}: expected a number."
-                    ) from exc
+                    orbit_radius = float(parts[2].strip())
+                except ValueError:
+                    pass
             dtheta = -2.0 * np.pi / num_frames  # negative => CCW from above
             delta_rot = R.from_euler("xyz", [0.0, dtheta, 0.0]).as_matrix()
             delta_trans = np.array([-orbit_radius * np.sin(dtheta), 0.0, orbit_radius * (1.0 - np.cos(dtheta))])
@@ -262,21 +226,12 @@ def parse_custom_trajectories(camera_string: str) -> list[np.ndarray]:
     return trajectories
 
 
-def _frames(count: int) -> str:
-    return f"{count} frame" if count == 1 else f"{count} frames"
-
-
 def trajectory_to_action(
     poses_abs: np.ndarray,
     num_video_frames: int,
     params: CameraTrainParams,
 ) -> np.ndarray:
     """Convert absolute poses to relative action vectors, truncating/padding to *num_video_frames*.
-
-    A trajectory shorter than *num_video_frames* is padded by repeating the last pose, which holds
-    the camera still for the remainder; a longer one is truncated, discarding the motion past the
-    cut. Both are reported, because neither is visible in the output and both look like the model
-    ignoring the request rather than the request not matching the frame budget.
 
     Returns:
         ``action_np`` with shape ``(num_video_frames - 1, D)``.
@@ -285,19 +240,9 @@ def trajectory_to_action(
     T_have = poses_abs.shape[0]
 
     if T_have < T_needed:
-        log.warning(
-            f"Camera trajectory supplies {T_have} poses for {T_needed} frames; padding by repeating "
-            f"the last pose, so the camera holds still for the final {_frames(T_needed - T_have)}.",
-            rank0_only=False,
-        )
         pad = np.tile(poses_abs[-1:], (T_needed - T_have, 1, 1))
         poses_abs = np.concatenate([poses_abs, pad], axis=0)
     elif T_have > T_needed:
-        log.warning(
-            f"Camera trajectory supplies {T_have} poses for {T_needed} frames; truncating, so the "
-            f"last {_frames(T_have - T_needed)} of requested motion are discarded.",
-            rank0_only=False,
-        )
         poses_abs = poses_abs[:T_needed]
 
     return pose_abs_to_rel(

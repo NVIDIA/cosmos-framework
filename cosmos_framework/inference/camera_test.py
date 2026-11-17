@@ -10,6 +10,7 @@ message, because the first sample is resolved twice per run without keep_going.
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from cosmos_framework.inference import camera
@@ -119,3 +120,78 @@ def test_a_malformed_command_is_an_error_not_a_shorter_trajectory(seen) -> None:
             camera._resolve_camera_trajectory_poses(spec, 61)
     with pytest.raises(ValueError, match="Malformed frame count 'xx'"):
         camera._resolve_camera_trajectory_poses("w-30,a-xx", 61)
+
+
+# The command checks live here, not in parse_camera_string, because that parser is synced from
+# an upstream copy. These tests pin what inference rejects before the parser sees the string.
+
+
+def test_a_command_without_a_frame_count_is_rejected() -> None:
+    """A typo must fail loudly. The parser skips it silently, which shortens the trajectory."""
+    with pytest.raises(ValueError, match="expected '<cmd>-<frames>'"):
+        camera.check_camera_trajectory("w-30,stay")
+
+
+def test_a_non_integer_frame_count_is_rejected() -> None:
+    """`w-6l` (letter l for 1) used to vanish from the trajectory and report success."""
+    with pytest.raises(ValueError, match="expected a whole number of frames"):
+        camera.check_camera_trajectory("w-6l")
+
+
+@pytest.mark.parametrize("command", ["rigth-46", "turnleft-30", "foo-10", "W-30", "-30"])
+def test_an_unknown_command_is_rejected(command) -> None:
+    """The parser runs a misspelled command as `stay`: the camera holds still and nothing says why."""
+    with pytest.raises(ValueError, match="Unknown camera command"):
+        camera.check_camera_trajectory(f"w-30,{command}")
+
+
+@pytest.mark.parametrize("count", ["1.5", "+5", "1_0", "1e2", "٣", "", "-5"])
+def test_a_frame_count_that_is_not_ascii_digits_is_rejected(count) -> None:
+    """int() alone would accept '+5', '1_0' or other scripts' digits; a float or a negative is a typo."""
+    with pytest.raises(ValueError, match="Malformed"):
+        camera.check_camera_trajectory(f"w-{count}")
+
+
+@pytest.mark.parametrize("cmd", ["w-30-40", "orbit-60-1-2"])
+def test_extra_fields_are_rejected(cmd) -> None:
+    """Only orbit takes a third field (its radius); the parser ignores any other extra part."""
+    with pytest.raises(ValueError, match="Malformed camera command"):
+        camera.check_camera_trajectory(cmd)
+
+
+@pytest.mark.parametrize("radius", ["abc", "nan", "inf"])
+def test_a_malformed_orbit_radius_is_rejected(radius) -> None:
+    """The parser falls back to radius 1.0 for 'abc', and would build NaN poses for 'nan' or 'inf'."""
+    with pytest.raises(ValueError, match="Malformed orbit radius"):
+        camera.check_camera_trajectory(f"orbit-60-{radius}")
+
+
+@pytest.mark.parametrize("cmd", ["pano-0", "orbit-0"])
+def test_a_full_turn_in_zero_frames_is_rejected(cmd) -> None:
+    """The parser divides 360 degrees by the frame count, which raises ZeroDivisionError."""
+    with pytest.raises(ValueError, match="at least 1 frame"):
+        camera.check_camera_trajectory(cmd)
+
+
+def test_every_command_with_spaces_and_an_orbit_radius_is_accepted() -> None:
+    spec = " , ".join(f"{c}-4" for c in sorted(camera._CAMERA_COMMANDS)) + ",orbit-4-1.5, w - 2"
+    camera.check_camera_trajectory(spec)
+
+
+def test_empty_segments_are_still_accepted() -> None:
+    """Trailing and doubled commas are harmless separators, which the parser skips."""
+    camera.check_camera_trajectory("w-30,,")
+    camera.check_camera_trajectory("w-30,")
+
+
+def test_the_accepted_commands_match_the_parser() -> None:
+    """Every accepted name must move the camera in the parser, except `stay`.
+
+    The parser runs an unknown name as `stay`, so a name the parser dropped or renamed would show
+    up here as a pose sequence identical to `stay`.
+    """
+    still = camera.parse_camera_string("stay-4")
+    for name in sorted(camera._CAMERA_COMMANDS - {"stay"}):
+        poses = camera.parse_camera_string(f"{name}-4")
+        assert poses.shape == still.shape, name
+        assert not np.allclose(poses, still), f"{name!r} does not move the camera in parse_camera_string"

@@ -915,6 +915,8 @@ def test_sample_output_dir_rejects_a_symlink_out_of_the_root(tmp_path: Path) -> 
         sample_output_dir(root, "link")
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
 @pytest.mark.parametrize("camera_trajectory", ["w-30,rigth-20", "w-6l"])
 def test_a_malformed_camera_trajectory_fails_while_sample_args_are_built(camera_trajectory) -> None:
     """Building every sample's arguments precedes generation, so a typo fails before any video is made."""
@@ -929,6 +931,8 @@ def test_a_malformed_camera_trajectory_fails_while_sample_args_are_built(camera_
         )
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_a_valid_camera_trajectory_still_builds() -> None:
     import types
 

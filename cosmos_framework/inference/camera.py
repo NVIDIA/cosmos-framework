@@ -16,6 +16,8 @@ transcribed -- is what makes camera conditioning reproduce across runtimes.
 from __future__ import annotations
 
 import json
+import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -79,8 +81,60 @@ def _frames(count: int) -> str:
     return f"{count} frame" if count == 1 else f"{count} frames"
 
 
+# The command names ``parse_camera_string`` understands. That parser is kept in sync with an
+# upstream copy, so it is left as it is: it runs an unknown name as ``stay``, skips a command it
+# cannot read and ignores extra fields, which turns a typo into a different camera path with no
+# error. Inference therefore checks the string here before handing it to the parser.
+_CAMERA_COMMANDS = frozenset(
+    {"w", "s", "a", "d", "u", "n", "up", "down", "left", "right", "cw", "ccw", "stay", "pano", "orbit"}
+)
+# ASCII digits only: int() would also take "+5", "1_0" or other scripts' digits.
+_FRAME_COUNT = re.compile(r"[0-9]+")
+
+
+def _check_camera_commands(segment: str) -> None:
+    """Raise ValueError for a command in one ``'|'``-free trajectory that the parser would misread.
+
+    Rejected: an unknown command name, a missing frame count or one that is not ASCII digits, an
+    extra field (only ``orbit`` takes a radius), a radius that is not a finite number, and a
+    ``pano`` or ``orbit`` of 0 frames. Empty segments, from a trailing or doubled comma, are allowed,
+    as the parser skips them.
+    """
+    for cmd in (part.strip() for part in segment.split(",")):
+        if not cmd:
+            continue
+        parts = [part.strip() for part in cmd.split("-")]
+        action_type = parts[0]
+        if action_type not in _CAMERA_COMMANDS:
+            raise ValueError(
+                f"Unknown camera command {action_type!r} in {cmd!r}: expected one of "
+                f"{', '.join(sorted(_CAMERA_COMMANDS))}, as '<cmd>-<frames>', e.g. 'w-60'."
+            )
+        max_parts = 3 if action_type == "orbit" else 2
+        if not 2 <= len(parts) <= max_parts:
+            expected = (
+                "'orbit-<frames>' or 'orbit-<frames>-<radius>'" if action_type == "orbit" else "'<cmd>-<frames>'"
+            )
+            raise ValueError(f"Malformed camera command {cmd!r} in {segment!r}: expected {expected}.")
+        if not _FRAME_COUNT.fullmatch(parts[1]):
+            raise ValueError(
+                f"Malformed frame count {parts[1]!r} in camera command {cmd!r}: expected a whole number of frames."
+            )
+        if action_type in ("pano", "orbit") and int(parts[1]) == 0:
+            raise ValueError(f"Camera command {cmd!r} needs at least 1 frame for a full turn.")
+        if len(parts) == 3:
+            try:
+                radius = float(parts[2])
+            except ValueError:
+                radius = math.nan
+            if not math.isfinite(radius):
+                raise ValueError(
+                    f"Malformed orbit radius {parts[2]!r} in camera command {cmd!r}: expected a finite number."
+                )
+
+
 def check_camera_trajectory(camera_trajectory: str) -> None:
-    """Raise ValueError if a camera trajectory command string cannot be parsed.
+    """Raise ValueError if a camera trajectory command string would be misread.
 
     Called while sample arguments are built, so a typo fails before any sample is generated
     rather than when its batch is prepared. A JSON pose path is checked when it is loaded.
@@ -90,7 +144,7 @@ def check_camera_trajectory(camera_trajectory: str) -> None:
     segment = camera_trajectory.split("|", 1)[0].strip()
     if not segment:
         raise ValueError("camera_trajectory is empty")
-    parse_camera_string(segment)
+    _check_camera_commands(segment)
 
 
 def _resolve_camera_trajectory_poses(camera_trajectory: str, target_frames: int) -> np.ndarray:
@@ -120,6 +174,7 @@ def _resolve_camera_trajectory_poses(camera_trajectory: str, target_frames: int)
                 f"trajectory per sample. Only {segment!r} is generated; the rest is discarded. "
                 "'|'-separated batching is an evaluation-only feature."
             )
+        _check_camera_commands(segment)
         poses_abs = parse_camera_string(segment)
 
     t_have = poses_abs.shape[0]
