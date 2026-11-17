@@ -26,10 +26,10 @@ on the selected remote login/compute frame. Model-specific inspectors may be
 streamed from the installed skill over SSH stdin; do not stage an ad-hoc source
 patch or treat the launch host as the SLURM frame.
 For private `nvcr.io` images, install `~/.config/enroot/.credentials` on the
-cluster once per (cluster, user): Pyxis/Enroot does not read `NGC_KEY` from the
+cluster once per (cluster, user): Pyxis/Enroot does not read `NGC_API_KEY` from the
 job env, and without persistent credentials, auth-gated pulls fail with "Could
 not process JSON input" at job startup. Install it via the `printf | ssh`
-heredoc so the `NGC_KEY` value never lands in shell history, intermediate files,
+heredoc so the `NGC_API_KEY` value never lands in shell history, intermediate files,
 or chat output; never `cat`/`echo` the value.
 
 If a preflight check fails, the agent prompts the user to authorize the
@@ -153,9 +153,10 @@ Same four verbs, with three additions at submit:
    ~120s timeout. The probe reads torchrun's standard global and local rank
    variables directly. `NCCL_PROBE_OK` → proceed.
    **Timed out** (the collective hung)
-   → set the cluster's NCCL knob in `EXTRA_ENV` and re-probe — on CS-OCI-ORD that
-   is `export NCCL_P2P_DISABLE=1` (the intra-node P2P hang), often with
-   `NCCL_SOCKET_IFNAME=eth0` / `NCCL_IB_DISABLE=1`. **Cache the working env per
+   → set the cluster's NCCL knob in `EXTRA_ENV` and re-probe. For an intra-node
+   P2P hang that is usually `export NCCL_P2P_DISABLE=1`; clusters without a
+   working InfiniBand fabric may also need `NCCL_SOCKET_IFNAME=<interface>` /
+   `NCCL_IB_DISABLE=1`. **Cache the working env per
    cluster** so later jobs skip the probe. Gate on **`gpus_per_node > 1` too** —
    the P2P hang triggers on a single node with 2+ GPUs.
 3. Tier-A Lustre, sidecar creds, record, and lint are unchanged.

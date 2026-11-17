@@ -9,6 +9,7 @@ MIN_CUDA_VERSION="${COSMOS_MIN_CUDA_VERSION:-13.0}"
 MIN_CONTAINER_TOOLKIT_VERSION="${COSMOS_MIN_CONTAINER_TOOLKIT_VERSION:-1.19.0}"
 DOCKER_PACKAGE_DEBIAN="${DOCKER_PACKAGE_DEBIAN:-${DOCKER_PACKAGE:-docker.io}}"
 BACKEND="docker"
+REQUIRE_CUDA_TOOLKIT=0
 INSTALL=0
 YES=0
 CONFIGURE_DOCKER=1
@@ -27,15 +28,16 @@ usage() {
   cat <<'USAGE'
 Usage: setup-nvidia-gpu-host.sh [--backend docker|kubernetes] [--check-only|--install] [--yes]
                                 [--min-driver-version VERSION]
-                                [--min-cuda-version VERSION]
+                                [--require-cuda-toolkit] [--min-cuda-version VERSION]
                                 [--min-container-toolkit-version VERSION]
                                 [--skip-docker-install] [--skip-docker-config] [--skip-docker-group]
 
 Checks and (with --install) installs the Cosmos GPU host runtime:
   - NVIDIA driver >= 580 (open kernel module preferred)
-  - CUDA Toolkit >= 13.0
   - NVIDIA Container Toolkit >= 1.19.0
   - Docker engine (installed on demand for the docker / local-docker backend)
+  - Host CUDA Toolkit >= 13.0, only with --require-cuda-toolkit. Container
+    workflows bring CUDA in the image and need only the driver.
 
 Those are the workflow defaults. A selected model skill may override any
 minimum with the three --min-*-version flags. Newer compatible versions pass;
@@ -88,6 +90,10 @@ while [[ $# -gt 0 ]]; do
       MIN_DRIVER_VERSION="${2:-}"
       shift 2
       ;;
+    --require-cuda-toolkit)
+      REQUIRE_CUDA_TOOLKIT=1
+      shift
+      ;;
     --min-cuda-version)
       MIN_CUDA_VERSION="${2:-}"
       shift 2
@@ -135,6 +141,10 @@ DRIVER_PACKAGE_RHEL="${NVIDIA_DRIVER_PACKAGE_RHEL:-nvidia-driver-cuda}"
 DRIVER_KMOD_RHEL="${NVIDIA_DRIVER_KMOD_RHEL:-kmod-nvidia-open-dkms}"
 DRIVER_PACKAGE_SUSE="${NVIDIA_DRIVER_PACKAGE_SUSE:-nvidia-open-driver-G06-signed-kmp-default}"
 CUDA_PACKAGE="${NVIDIA_CUDA_PACKAGE:-cuda-toolkit-${MIN_CUDA_VERSION//./-}}"
+CUDA_PACKAGES=()
+if [[ "$REQUIRE_CUDA_TOOLKIT" -eq 1 ]]; then
+  CUDA_PACKAGES=("$CUDA_PACKAGE")
+fi
 CUDA_PATH="${NVIDIA_CUDA_PATH:-/usr/local/cuda-${MIN_CUDA_VERSION}}"
 
 case "$BACKEND" in
@@ -369,7 +379,9 @@ print_status() {
     echo "MISSING: visible GPU with NVIDIA driver >= ${MIN_DRIVER_VERSION} (detected: ${detected_driver:-none})"
   fi
 
-  if cuda_ok; then
+  if [[ "$REQUIRE_CUDA_TOOLKIT" -eq 0 ]]; then
+    echo "INFO: host CUDA Toolkit not required for container backends (detected: ${detected_cuda:-none})"
+  elif cuda_ok; then
     echo "OK: CUDA Toolkit ${detected_cuda} >= ${MIN_CUDA_VERSION}"
   else
     echo "MISSING: CUDA Toolkit >= ${MIN_CUDA_VERSION} (detected: ${detected_cuda:-none})"
@@ -435,7 +447,7 @@ print_status() {
 }
 
 runtime_ok() {
-  driver_ok && cuda_ok && container_toolkit_ok || return 1
+  driver_ok && { [[ "$REQUIRE_CUDA_TOOLKIT" -eq 0 ]] || cuda_ok; } && container_toolkit_ok || return 1
   if [[ "$BACKEND" == "docker" || "$BACKEND" == "local-docker" ]]; then
     docker_runtime_ok
     return $?
@@ -479,7 +491,7 @@ confirm_install() {
   case "$PKG_FAMILY" in
     debian)
       driver_line="${DRIVER_PACKAGE_DEBIAN} (must provide driver >= ${MIN_DRIVER_VERSION})"
-      cuda_line="${CUDA_PACKAGE}"
+      cuda_line="${CUDA_PACKAGES[*]:-not required}"
       nct_line="current nvidia-container-toolkit packages (must be >= ${MIN_CONTAINER_TOOLKIT_VERSION})"
       if [[ ( "$BACKEND" == "docker" || "$BACKEND" == "local-docker" ) \
             && "$INSTALL_DOCKER" -eq 1 ]] && ! have docker; then
@@ -489,7 +501,7 @@ confirm_install() {
       ;;
     rhel)
       driver_line="${DRIVER_PACKAGE_RHEL} + ${DRIVER_KMOD_RHEL} (must provide driver >= ${MIN_DRIVER_VERSION})"
-      cuda_line="${CUDA_PACKAGE}"
+      cuda_line="${CUDA_PACKAGES[*]:-not required}"
       nct_line="current nvidia-container-toolkit packages (must be >= ${MIN_CONTAINER_TOOLKIT_VERSION})"
       if [[ ( "$BACKEND" == "docker" || "$BACKEND" == "local-docker" ) \
             && "$INSTALL_DOCKER" -eq 1 ]] && ! have docker; then
@@ -503,7 +515,7 @@ confirm_install() {
       ;;
     suse)
       driver_line="${DRIVER_PACKAGE_SUSE} (must provide driver >= ${MIN_DRIVER_VERSION})"
-      cuda_line="${CUDA_PACKAGE}"
+      cuda_line="${CUDA_PACKAGES[*]:-not required}"
       nct_line="current nvidia-container-toolkit packages (must be >= ${MIN_CONTAINER_TOOLKIT_VERSION})"
       if [[ ( "$BACKEND" == "docker" || "$BACKEND" == "local-docker" ) \
             && "$INSTALL_DOCKER" -eq 1 ]] && ! have docker; then
@@ -655,7 +667,7 @@ install_runtime_packages() {
       "${SUDO[@]}" apt-get install -y --allow-downgrades \
         "$kernel_headers" \
         "$DRIVER_PACKAGE_DEBIAN" \
-        "$CUDA_PACKAGE" \
+        ${CUDA_PACKAGES[@]+"${CUDA_PACKAGES[@]}"} \
         nvidia-container-toolkit \
         nvidia-container-toolkit-base \
         libnvidia-container-tools \
@@ -669,7 +681,7 @@ install_runtime_packages() {
       "${SUDO[@]}" "$PKG_MANAGER" -y install --allowerasing \
         "$DRIVER_PACKAGE_RHEL" \
         "$DRIVER_KMOD_RHEL" \
-        "$CUDA_PACKAGE" \
+        ${CUDA_PACKAGES[@]+"${CUDA_PACKAGES[@]}"} \
         nvidia-container-toolkit \
         nvidia-container-toolkit-base \
         libnvidia-container-tools \
@@ -679,7 +691,7 @@ install_runtime_packages() {
       "${SUDO[@]}" zypper --non-interactive install --allow-downgrade \
         "kernel-default-devel" \
         "$DRIVER_PACKAGE_SUSE" \
-        "$CUDA_PACKAGE" \
+        ${CUDA_PACKAGES[@]+"${CUDA_PACKAGES[@]}"} \
         nvidia-container-toolkit \
         nvidia-container-toolkit-base \
         libnvidia-container-tools \

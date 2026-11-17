@@ -282,7 +282,7 @@ def test_inference_contract_calls_native_cli_with_dcp_options(monkeypatch):
     assert parsed.export_dir == "/checkpoints/exported"
     assert parsed.vit_checkpoint_path == "/checkpoints/base"
     assert parsed.num_frames == 8
-    assert not parsed.enable_lora
+    assert not hasattr(parsed, "enable_lora")  # PEFT checkpoints are merged at export
 
 
 @pytest.mark.parametrize("dataset", ["video_conversation", "task_aware_video_reasoning"])

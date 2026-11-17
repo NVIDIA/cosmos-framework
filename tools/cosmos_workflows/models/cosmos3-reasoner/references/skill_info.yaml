@@ -1,12 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-network_arch: cosmos-reason
+network_arch: cosmos3-reasoner
 huggingface_model_ids:
 - nvidia/Cosmos3-Nano
 - nvidia/Cosmos3-Edge
 aliases:
-- Cosmos Reason 3
 - Cosmos3 Nano Reasoner
 - Cosmos3-Nano
 - Cosmos3-Edge
@@ -15,13 +14,12 @@ training_contract: references/training-contract.yaml
 required_credentials: []
 conditional_credentials:
   HF_TOKEN: required only when fetching a gated Hugging Face checkpoint; not required for a complete local checkpoint
-  NGC_KEY: required only when pulling or converting an authenticated nvcr.io image; not required for an existing local image or SQSH
+  NGC_API_KEY: required only when pulling or converting an authenticated nvcr.io image; not required for an existing local image or SQSH
 gpu_spec_key: model.parallelism.data_parallel_shard_degree
 node_spec_key: model.parallelism.data_parallel_replicate_degree
 runtime_requirements:
   gpu_host:
     min_driver_version: '580'
-    min_cuda_version: '13.0'
     min_container_toolkit_version: '1.19.1'
 workflow_contract:
   planner: scripts/cosmos_workflow.py

@@ -17,10 +17,14 @@ this managed workflow layer.
 
 ## Intake and planning
 
+Script paths below (`scripts/...`) are relative to this component,
+`$COSMOS_WORKFLOWS_ROOT/models/cosmos3-reasoner`; `source tools/cosmos_workflows/env.sh`
+from the repository root sets `COSMOS_WORKFLOWS_ROOT`.
+
 Resolve the model before selecting an image or constructing a spec:
 
 ```bash
-python scripts/cosmos_workflow.py resolve --model nvidia/Cosmos3-Nano --action train
+python "$COSMOS_WORKFLOWS_ROOT/models/cosmos3-reasoner/scripts/cosmos_workflow.py" resolve --model nvidia/Cosmos3-Nano --action train
 ```
 
 For Nano, ask for the explicit source checkpoint format: `qwen3_vl` for a

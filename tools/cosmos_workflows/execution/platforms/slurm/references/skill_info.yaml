@@ -25,7 +25,7 @@ optional_credentials:
 - name: SLURM_CONTAINER_MOUNTS
   source: env_var
   only_when: required explicit host-to-container path mapping
-- name: NGC_KEY
+- name: NGC_API_KEY
   source: env_var
   only_when: private nvcr.io image pulls require NGC auth
 - name: HF_TOKEN

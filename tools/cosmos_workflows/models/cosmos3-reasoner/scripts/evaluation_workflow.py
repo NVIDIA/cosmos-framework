@@ -358,7 +358,7 @@ def _evaluation_spec_bundle(plan: Mapping[str, Any], config: Mapping[str, Any]) 
     runtime_spec = copy.deepcopy(dict(config))
     runtime_spec["results_dir"] = "{results_dir}"
     return {
-        "network_arch": "cosmos-reason",
+        "network_arch": "cosmos3-reasoner",
         "action": "evaluate",
         "image": image,
         "mode": "config",

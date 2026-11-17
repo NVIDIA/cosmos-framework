@@ -4,11 +4,11 @@
 type: platform
 # Local Docker daemon (or a remote box via DOCKER_HOST=ssh://). No credential is
 # required to run — hence required_credentials is empty and the launch preflight's
-# credential gate is a no-op for docker. NGC_KEY / HF_TOKEN / AWS_* are pulled in
+# credential gate is a no-op for docker. NGC_API_KEY / HF_TOKEN / AWS_* are pulled in
 # only when the image or data actually needs them.
 required_credentials: []
 optional_credentials:
-- name: NGC_KEY
+- name: NGC_API_KEY
   source: env_var
   only_when: private nvcr.io image pulls require NGC auth
 - name: HF_TOKEN

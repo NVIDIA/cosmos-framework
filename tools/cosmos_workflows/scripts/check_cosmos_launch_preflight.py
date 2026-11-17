@@ -1353,28 +1353,16 @@ def check_brev(platform: dict[str, Any], skip_access: bool) -> bool:
         print("brev CLI not found. Install from https://docs.nvidia.com/brev/.")
         return False
 
-    token = os.environ.get("BREV_API_TOKEN")
-    if token:
-        login = run([brev, "login", "--token", token], timeout=45)
-        if login.returncode != 0:
-            detail = (login.stderr or login.stdout).strip().splitlines()
-            reason = detail[-1] if detail else "exit " + str(login.returncode)
-            print(f"Brev token login failed: {reason}")
-            return False
-
+    # Read-only: use the existing CLI session. Logging in here would rewrite the
+    # user's Brev state and put the token on argv, visible in the process table.
     result = run([brev, "ls", "--json"], timeout=60)
-    if result.returncode != 0 and token:
-        # Headless `brev ls` occasionally hits an auth-EOF even after a
-        # successful token login — the cached session desyncs. Force one
-        # refresh and retry before declaring failure.
-        run([brev, "login", "--token", token], timeout=45)
-        result = run([brev, "ls", "--json"], timeout=60)
     if result.returncode == 0:
         print("Brev CLI/API OK")
         return True
     detail = (result.stderr or result.stdout).strip().splitlines()
     reason = detail[-1] if detail else "exit " + str(result.returncode)
     print(f"Brev CLI/API check failed: {reason}")
+    print("If the session is not logged in, ask the user to run `brev login` themselves, then rerun this check.")
     return False
 
 

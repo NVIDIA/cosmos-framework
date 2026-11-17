@@ -22,18 +22,18 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "${SLURM_USER}@${SLURM_HOST}" "true" 2
 
 # 2. Enroot credentials on the cluster for private nvcr.io images.
 # Pyxis on the compute nodes invokes enroot to import the Docker image. Enroot
-# does NOT read NGC_KEY from the SLURM job env — it requires persistent
+# does NOT read NGC_API_KEY from the SLURM job env — it requires persistent
 # credentials in ~/.config/enroot/.credentials on the login/compute nodes.
 # Without this, anonymous pulls of auth-gated nvcr.io paths (e.g. any
 # pre-release staging org) fail with "Could not process JSON input" at job
 # startup. Skip if the image is from a public repo.
-if [ -n "$NGC_KEY" ]; then
+if [ -n "$NGC_API_KEY" ]; then
   REMOTE_CRED_OK=$(ssh -o BatchMode=yes "${SLURM_USER}@${SLURM_HOST}" \
     'test -s ~/.config/enroot/.credentials && echo OK || echo MISSING' 2>/dev/null)
   if [ "$REMOTE_CRED_OK" != "OK" ]; then
     echo "MISSING: ~/.config/enroot/.credentials not set on ${SLURM_HOST}."
-    echo "After user approval, install it from NGC_KEY (no value echoed):"
-    echo "  printf 'machine nvcr.io login \$oauthtoken password %s\\nmachine authn.nvidia.com login \$oauthtoken password %s\\n' \"\$NGC_KEY\" \"\$NGC_KEY\" \\"
+    echo "After user approval, install it from NGC_API_KEY (no value echoed):"
+    echo "  printf 'machine nvcr.io login \$oauthtoken password %s\\nmachine authn.nvidia.com login \$oauthtoken password %s\\n' \"\$NGC_API_KEY\" \"\$NGC_API_KEY\" \\"
     echo "    | ssh -o BatchMode=yes \"\${SLURM_USER}@\${SLURM_HOST}\" '"
     echo "        mkdir -p ~/.config/enroot && umask 077 && cat > ~/.config/enroot/.credentials && chmod 600 ~/.config/enroot/.credentials"
     echo "      '"
@@ -46,7 +46,7 @@ If a check fails, the agent prompts the user to authorize the install/fix via Ba
 
 The enroot-credentials step (#2) only needs to run **once per (cluster, user)** —
 subsequent SLURM sessions inherit the file. Use the `printf | ssh` heredoc
-pattern above so the `NGC_KEY` value never lands in shell history, intermediate
+pattern above so the `NGC_API_KEY` value never lands in shell history, intermediate
 files, or chat output. Do not `cat` or `echo` the value at any step. After the
 file is in place, both the SQSH pre-conversion job (which runs on
 `sqsh_conversion_partition`) and the actual training job's Pyxis pull will
@@ -121,7 +121,7 @@ handler via `SSH_AUTH_SOCK`.
 - **SLURM_HOSTNAME**: comma-separated login hosts for failover.
 - **SSH_KEY_PATH**: private-key path for non-interactive public-key auth;
   **SSH_AUTH_SOCK** is an alternative when an accepted key is already loaded.
-- **NGC_KEY**: needed only for authenticated registry pulls. Use stdin when
+- **NGC_API_KEY**: needed only for authenticated registry pulls. Use stdin when
   installing Enroot credentials after approval; never log credential contents.
 
 Cluster partition/account selection and shared output roots belong to the

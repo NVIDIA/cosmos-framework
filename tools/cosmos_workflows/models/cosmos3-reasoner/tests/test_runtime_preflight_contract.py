@@ -114,7 +114,7 @@ def test_slurm_renderer_creates_writable_mount_roots_before_pyxis() -> None:
         nodes=1,
         gpus_per_node=8,
         cpus_per_task=64,
-        cosmos_job_id="cosmos-reason-train-test",
+        cosmos_job_id="cosmos3-reasoner-train-test",
         experiment_id="test",
         time_limit="00:15:00",
         stdout_path="/runs/logs/main.out",
@@ -163,7 +163,7 @@ def _omni_preparation_args(platform: str) -> SimpleNamespace:
         sqsh_path="/images/cosmos-framework.sqsh" if platform == "slurm" else "",
         platform=platform,
         results_dir="/results",
-        cosmos_job_id="cosmos-reason-prepare-test",
+        cosmos_job_id="cosmos3-reasoner-prepare-test",
         experiment_id="prepare-test",
         container_mount=[
             "/results:/results",

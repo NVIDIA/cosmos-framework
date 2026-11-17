@@ -11,6 +11,9 @@ on:
       - 'examples/automl/**'
       - '.github/workflows/automl-helpers.yml'
       - '.pytest.toml'
+      - '.agents/skills/**'
+      - '.claude/skills/**'
+      - 'AGENTS.md'
 permissions:
   contents: read
 jobs:
@@ -27,3 +30,5 @@ jobs:
         run: >-
           python -m pytest -o addopts= --confcutdir=tools/cosmos_workflows
           -o 'python_files=test_*.py *_test.py' tools/cosmos_workflows
+      - name: Check that version pins in docs and skills match versions.yaml
+        run: python tools/cosmos_workflows/scripts/stamp_versions.py --check --strict-strays

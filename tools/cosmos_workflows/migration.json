@@ -323,11 +323,6 @@
       "source_sha256": "5aea2bbd3d3eed55fbdf968c32e1a5463a44cad2ff20791ffdab00705ff37a46"
     },
     {
-      "source": "skills/platform/tao-run-on-kubernetes/config.json",
-      "destination": "execution/platforms/kubernetes/config.json",
-      "source_sha256": "0a4633719d029de036465375ff7a2c03ee1200337542fafddb06845708aeccc1"
-    },
-    {
       "source": "skills/platform/tao-run-on-kubernetes/references/action-request.md",
       "destination": "execution/platforms/kubernetes/references/action-request.md",
       "source_sha256": "9202c2b49b48c2522e2e523cf0ee05fc586d6783ebe90894b30b72f277c24cd3"
@@ -610,6 +605,11 @@
       "source": "skills/data/tao-generate-video-reasoning-annotations/references/skill_info.yaml",
       "source_sha256": "ed07fdb6d524630735cae97da9ededeeeccebffb7c60f51b1ac6f5d07d741f8d",
       "reason": "Video reasoning-QA annotation is a separate data-generation workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/platform/tao-run-on-kubernetes/config.json",
+      "source_sha256": "0a4633719d029de036465375ff7a2c03ee1200337542fafddb06845708aeccc1",
+      "reason": "Unused platform config; no helper, test or guide reads it."
     }
   ]
 }

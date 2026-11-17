@@ -72,7 +72,7 @@ too-big Job would sit `Pending` forever).
   - In-cluster service account — used when running inside a pod (no kubeconfig needed)
 - **COSMOS_K8S_NAMESPACE** (optional): default namespace for Job submission. Defaults to `default`.
 - **COSMOS_K8S_CONTEXT** (optional): kubeconfig context name to switch clusters.
-- **NGC_KEY** (optional): for nvcr.io image pulls. If you've pre-created an image-pull secret in the target namespace, reference its name in the rendered manifest's `imagePullSecrets`.
+- **NGC_API_KEY** (optional): for nvcr.io image pulls. If you've pre-created an image-pull secret in the target namespace, reference its name in the rendered manifest's `imagePullSecrets`.
 - **AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / S3_BUCKET_NAME / S3_ENDPOINT_URL** (optional): for S3 dataset I/O (storage tier C), injected into the pod via the per-job Secret (`envFrom.secretRef`), never inline. Legacy `ACCESS_KEY`/`SECRET_KEY` are mapped by `execution/data-io/guide.md`.
 
 Do not ask for Brev or SLURM credentials for Kubernetes runs. Ask for
@@ -288,7 +288,7 @@ This skill's Indexed Job path is intentionally simple and dependency-free; if yo
 **`No nvidia.com/gpu resources allocatable on the cluster`** — the GPU Operator (or NVIDIA Device Plugin) isn't installed. Install per the link above; verify with `kubectl get nodes -o jsonpath='{.items[*].status.allocatable}'`.
 
 **`ImagePullBackOff` / `ErrImagePull`** — the cluster can't pull the image. For nvcr.io: pre-create an image-pull secret in the namespace and reference it as the pod's `imagePullSecrets` in the rendered manifest:
-Feed the key over stdin — `--docker-password=$NGC_KEY` would put the secret in
+Feed the key over stdin — `--docker-password=$NGC_API_KEY` would put the secret in
 argv, where it is visible in the host's process table and shell history:
 
 ```bash
@@ -296,7 +296,7 @@ set -a; source /path/to/.env; set +a   # omit if already exported
 kubectl create secret generic ngc-pull-secret -n cosmos-jobs \
   --type=kubernetes.io/dockerconfigjson \
   --from-file=.dockerconfigjson=/dev/stdin <<EOF
-{"auths": {"nvcr.io": {"username": "\$oauthtoken", "password": "${NGC_KEY}"}}}
+{"auths": {"nvcr.io": {"username": "\$oauthtoken", "password": "${NGC_API_KEY}"}}}
 EOF
 # Verify without reading the secret back:
 kubectl get secret ngc-pull-secret -n cosmos-jobs >/dev/null && echo SECRET_OK
@@ -313,4 +313,4 @@ kubectl get secret ngc-pull-secret -n cosmos-jobs >/dev/null && echo SECRET_OK
 - **Elastic / fault-tolerant training.** Indexed Job has `backoff_limit=0` — failures fail the whole training run. For elastic restart (e.g., resume from checkpoint after a node death), use Kubeflow's `PyTorchJob` operator instead.
 - **Gang scheduling.** Indexed Job pods are scheduled independently — no all-or-nothing. Multi-node training will *partially* start if only some pods can be scheduled (rank-0 will hang waiting for peers). For all-or-nothing scheduling on shared clusters, use Volcano or Kueue.
 - **MPI / Horovod.** Use the MPI Operator. The Indexed Job path here is PyTorch-distributed-shaped (env-var rendezvous on `MASTER_ADDR:MASTER_PORT`).
-- **Auto-creating image-pull secrets from `$NGC_KEY`.** You pre-create the secret in the target namespace and pass the name. K8s namespace conventions vary widely, so we keep secret creation explicit.
+- **Auto-creating image-pull secrets from `$NGC_API_KEY`.** You pre-create the secret in the target namespace and pass the name. K8s namespace conventions vary widely, so we keep secret creation explicit.

@@ -108,16 +108,16 @@ instances `<inst> docker inspect` plus command `"$JOB_ID"`, and fails with
 an error that reads like an instance or SSH fault but is a syntax fault. Quote
 every remote command as a single string, exactly as `brev exec --help` shows.
 
-NGC auth once per instance — **never put `NGC_KEY` on argv** (it lands in the
+NGC auth once per instance — **never put `NGC_API_KEY` on argv** (it lands in the
 remote process table); pipe it to `--password-stdin`:
 
 ```bash
 IMG=${COSMOS_IMAGE:?Select an accessible registry image built from this checkout}
 
 # NGC auth (one-time per instance) — value never on argv.
-# Single-quoted locally so $NGC_KEY expands in the instance's shell; export it
+# Single-quoted locally so $NGC_API_KEY expands in the instance's shell; export it
 # there first (or pipe it in from the local shell, if the instance has no copy).
-brev exec <instance> 'printf %s "$NGC_KEY" | docker login nvcr.io -u \$oauthtoken --password-stdin'
+brev exec <instance> 'printf %s "$NGC_API_KEY" | docker login nvcr.io -u \$oauthtoken --password-stdin'
 
 # Verify auth without reading ~/.docker/config.json. Failure before a successful
 # login = not authenticated; failure after = the key's org lacks entitlement.
@@ -130,7 +130,7 @@ brev exec <instance> "docker manifest inspect $IMG >/dev/null && echo AUTH_OK ||
 brev exec <instance> "docker image inspect $IMG >/dev/null 2>&1 || docker pull $IMG"
 
 # Run a Cosmos job (the docker `submit` verb, over brev exec)
-brev exec <instance> "docker inspect '$JOB_ID' >/dev/null 2>&1 && { echo '$JOB_ID already submitted'; exit 0; }; docker run -d --name '$JOB_ID' --label 'cosmos-job=$JOB_ID' --gpus all -v ~/data:/data -e NGC_KEY '$IMG' python -m cosmos_framework.scripts.inference -i /data/input.json -o /data/results --checkpoint-path /data/model --seed 42"
+brev exec <instance> "docker inspect '$JOB_ID' >/dev/null 2>&1 && { echo '$JOB_ID already submitted'; exit 0; }; docker run -d --name '$JOB_ID' --label 'cosmos-job=$JOB_ID' --gpus all -v ~/data:/data '$IMG' python -m cosmos_framework.scripts.inference -i /data/input.json -o /data/results --checkpoint-path /data/model --seed 42"
 ```
 
 ## Multi-GPU and multi-node

@@ -252,7 +252,7 @@ RECORD = {
     "image": "cosmos-framework:local",  # unpinned: test fixture
     "network_arch": "cosmos3",
     "action": "train",
-    "results_dir": "/lustre/fsw/portfolios/users/me/results/cosmos3-train-a1b2c3",
+    "results_dir": "/shared/users/me/results/cosmos3-train-a1b2c3",
     "storage_tier": "A",
     "upload_excludes": ["inputs/"],
     "submitted_at": "2026-07-09T18:00:00+00:00",

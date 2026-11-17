@@ -9,7 +9,8 @@ Use this setup skill before Cosmos workflows run on the `docker`, `local-docker`
 or `kubernetes` backend. The workflow default minimums are:
 
 - NVIDIA driver `>=580` (open kernel module preferred)
-- CUDA Toolkit `>=13.0`
+- CUDA Toolkit `>=13.0` on the host, only with `--require-cuda-toolkit`; container
+  workflows get CUDA from the image and need only the driver
 - NVIDIA Container Toolkit `>=1.19.0`
 - Docker engine — only installed for `docker` / `local-docker` backends and
   only when Docker is missing. The package picked depends on the distro
@@ -111,8 +112,9 @@ Common steps (all families):
 3. Installs the matching kernel header / devel package for the running
    kernel.
 4. Installs the current open-driver and Container Toolkit packages from the
-   configured repositories plus the CUDA Toolkit package selected by
-   `--min-cuda-version`, then verifies all three against the active minimums.
+   configured repositories (plus the CUDA Toolkit package selected by
+   `--min-cuda-version` when `--require-cuda-toolkit` is given), then verifies
+   them against the active minimums.
 5. For Docker backends and when Docker is missing, installs Docker
    (override / opt-out flags below), enables/starts the daemon, then runs
    `nvidia-ctk runtime configure --runtime=docker` and restarts Docker
@@ -140,12 +142,12 @@ After installation, verify:
 
 ```bash
 nvidia-smi
-nvcc --version
 docker info --format '{{json .Runtimes}}' | grep nvidia
 sudo docker run --rm --runtime=nvidia --gpus all "$COSMOS_IMAGE" nvidia-smi -L
 ```
 
-The detected driver, CUDA Toolkit, and Container Toolkit versions must meet the
+The detected driver and Container Toolkit versions (and the host CUDA Toolkit,
+when required) must meet the
 active workflow or model-specific minimums. Then run the selected image's GPU
 smoke test; version comparison alone is not sufficient compatibility proof.
 

@@ -369,7 +369,7 @@ def test_node_exclusions_are_live_filtered_and_rendered_without_hand_patch(
     args.timeout = "03:48:00"
     args.time_limit = "04:00:00"
     args.exclusive = True
-    args.cosmos_job_id = "cosmos-reason-train-node-check"
+    args.cosmos_job_id = "cosmos3-reasoner-train-node-check"
     script = workflow.render_slurm(args, plan)
     assert "#SBATCH --exclude=batch-block5-00002,batch-block5-00003,batch-block5-00004,batch-block5-00005" in script
     assert "batch-block5-00006" not in script
@@ -389,7 +389,7 @@ def test_node_exclusions_are_live_filtered_and_rendered_without_hand_patch(
             "--plan-artifact",
             str(artifact),
             "--cosmos-job-id",
-            "cosmos-reason-train-node-check-render",
+            "cosmos3-reasoner-train-node-check-render",
             "--render-output",
             str(rendered_path),
         ],
@@ -438,7 +438,7 @@ def test_retry_helper_reuses_sealed_inspection_and_refreshes_job_identity(
     inventory = tmp_path / "nodes.txt"
     inventory.write_text("batch-block5-00002\nbatch-block5-00003\n", encoding="utf-8")
     retry_output = tmp_path / "retry-plan.json"
-    retry_root = tmp_path / "training" / "cosmos-reason-train-retry01"
+    retry_root = tmp_path / "training" / "cosmos3-reasoner-train-retry01"
     retry_spec = retry_root / "config" / "train.toml"
     retry_spec.parent.mkdir(parents=True)
     completed = subprocess.run(
@@ -449,7 +449,7 @@ def test_retry_helper_reuses_sealed_inspection_and_refreshes_job_identity(
             "--prior-plan",
             str(prior_output),
             "--job-id",
-            "cosmos-reason-train-retry01",
+            "cosmos3-reasoner-train-retry01",
             "--write-spec",
             str(retry_spec),
             "--exclude-node",
@@ -467,7 +467,7 @@ def test_retry_helper_reuses_sealed_inspection_and_refreshes_job_identity(
     )
     assert completed.returncode == 0, completed.stderr
     retry = json.loads(retry_output.read_text(encoding="utf-8"))
-    assert retry["experiment_id"] == "cosmos-reason-train-retry01"
+    assert retry["experiment_id"] == "cosmos3-reasoner-train-retry01"
     assert retry["retry_preparation"]["inspection_reused"] is True
     assert retry["slurm_node_exclusions"]["validated"] == ["batch-block5-00002"]
     assert retry["slurm_node_exclusions"]["retired_or_missing"] == ["retired-node-99999"]
@@ -969,7 +969,7 @@ def test_framework_task_aware_slurm_uses_native_runtime_without_decoder_artifact
     args.partition = "compute"
     args.account = "project"
     args.container_mount = [f"{tmp_path}:{tmp_path}"]
-    args.cosmos_job_id = "cosmos-reason-train-framework-task"
+    args.cosmos_job_id = "cosmos3-reasoner-train-framework-task"
     plan = workflow.build_plan(args)
 
     script = workflow.render_slurm(args, plan)
@@ -1200,7 +1200,7 @@ def test_omni_conversion_uses_platform_checkpoint_storage_and_rebinds_training_m
     assert "--backend" not in preparation["platform_action"]["container_command"]
     workflow.write_spec(args, plan)
     workflow.verify_model_preparation_helper(args, plan)
-    args.cosmos_job_id = "cosmos-reason-train-omni-prepare"
+    args.cosmos_job_id = "cosmos3-reasoner-train-omni-prepare"
     slurm = workflow.render_slurm(args, plan)
     assert "COSMOS_MODEL_PREPARATION_OK" in slurm
     assert preparation["platform_action"]["helper_container_path"] in slurm
@@ -1498,7 +1498,7 @@ def test_slurm_script_is_bash_sqsh_no_requeue_and_preserves_failure(tmp_path):
     args.stderr_path = str(tmp_path / "stderr.log")
     args.container_mount = [f"{tmp_path}:{tmp_path}"]
     args.timeout = "03:48:00"
-    args.cosmos_job_id = "cosmos-reason-train-render-test"
+    args.cosmos_job_id = "cosmos3-reasoner-train-render-test"
     plan = workflow.build_plan(args)
     workflow.write_spec(args, plan)
     assert "--no-container-remap-root" in plan["preflight"]["container_runtime"]
@@ -1549,7 +1549,7 @@ def test_single_node_exclusive_slurm_step_uses_allocated_cpus(tmp_path):
     args.container_mount = [f"{tmp_path}:{tmp_path}"]
     args.cpus_per_task = 16
     args.exclusive = True
-    args.cosmos_job_id = "cosmos-reason-train-cpu-test"
+    args.cosmos_job_id = "cosmos3-reasoner-train-cpu-test"
     plan = workflow.build_plan(args)
     workflow.write_spec(args, plan)
 
@@ -1573,7 +1573,7 @@ def test_slurm_script_rejects_invalid_child_timeout(tmp_path):
     args.stdout_path = str(tmp_path / "stdout.log")
     args.stderr_path = str(tmp_path / "stderr.log")
     args.container_mount = [f"{tmp_path}:{tmp_path}"]
-    args.cosmos_job_id = "cosmos-reason-train-timeout-test"
+    args.cosmos_job_id = "cosmos3-reasoner-train-timeout-test"
     plan = workflow.build_plan(args)
     workflow.write_spec(args, plan)
     args.timeout = "03:99:00"
@@ -1624,7 +1624,7 @@ def test_requeue_rejected(tmp_path):
     args.account = "a"
     args.use_requeue = True
     args.container_mount = [f"{tmp_path}:{tmp_path}"]
-    args.cosmos_job_id = "cosmos-reason-train-requeue-test"
+    args.cosmos_job_id = "cosmos3-reasoner-train-requeue-test"
     plan = workflow.build_plan(args)
     workflow.write_spec(args, plan)
     with pytest.raises(common.WorkflowError, match="requeue"):
@@ -1696,7 +1696,7 @@ def test_remote_slurm_rejects_unbuilt_local_target_and_accepts_registry_image(tm
     assert "enroot import" in plan["image"]["sqsh"]["command"]
     expected_enroot_uri = "docker://" + expected_image.replace("registry.example.com/", "registry.example.com#", 1)
     assert expected_enroot_uri in plan["image"]["sqsh"]["command"]
-    preflight = workflow.local_preflight(args, plan, env={"NGC_KEY": "SET"})
+    preflight = workflow.local_preflight(args, plan, env={"NGC_API_KEY": "SET"})
     assert not any("source" in error or "repository" in error for error in preflight["errors"])
     assert any("must be converted once" in warning for warning in preflight["warnings"])
 

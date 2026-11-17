@@ -19,6 +19,7 @@ def write_executable(path: Path, content: str) -> None:
 
 
 def fake_runtime(tmp_path: Path, *, driver: str, cuda: str, toolkit: str) -> dict[str, str]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     bin_dir = tmp_path / "bin"
     cuda_bin = tmp_path / "cuda" / "bin"
     bin_dir.mkdir()
@@ -84,8 +85,17 @@ def test_default_runtime_minimums_accept_newer_versions(tmp_path):
     result = run_check(tmp_path, driver="595.58.03", cuda="13.2", toolkit="1.19.1")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "NVIDIA driver 595.58.03 >= 580" in result.stdout
-    assert "CUDA Toolkit 13.2 >= 13.0" in result.stdout
+    assert "host CUDA Toolkit not required for container backends" in result.stdout
     assert "NVIDIA Container Toolkit 1.19.1 >= 1.19.0" in result.stdout
+
+
+def test_host_cuda_toolkit_is_checked_only_when_required(tmp_path):
+    assert run_check(tmp_path / "default", driver="595.58.03", cuda="12.9", toolkit="1.19.1").returncode == 0
+    required = run_check(
+        tmp_path / "required", driver="595.58.03", cuda="13.2", toolkit="1.19.1", args=("--require-cuda-toolkit",)
+    )
+    assert required.returncode == 0, required.stdout + required.stderr
+    assert "CUDA Toolkit 13.2 >= 13.0" in required.stdout
 
 
 def test_model_runtime_overrides_accept_versions_at_or_above_bounds(tmp_path):
@@ -95,6 +105,7 @@ def test_model_runtime_overrides_accept_versions_at_or_above_bounds(tmp_path):
         cuda="13.2",
         toolkit="1.19.1",
         args=(
+            "--require-cuda-toolkit",
             "--min-driver-version",
             "580",
             "--min-cuda-version",
@@ -126,6 +137,7 @@ def test_model_runtime_overrides_reject_versions_below_bounds(tmp_path, driver, 
         cuda=cuda,
         toolkit=toolkit,
         args=(
+            "--require-cuda-toolkit",
             "--min-driver-version",
             "580",
             "--min-cuda-version",

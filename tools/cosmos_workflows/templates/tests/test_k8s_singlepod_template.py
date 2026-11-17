@@ -78,14 +78,14 @@ def test_creds_via_secretref_never_inline():
     # the only inline env is the non-secret results root
     inline = {e["name"] for e in c.get("env", [])}
     assert inline == {"COSMOS_RESULTS_ROOT"}
-    assert not any(k in inline for k in ("AWS_SECRET_ACCESS_KEY", "NGC_KEY", "HF_TOKEN"))
+    assert not any(k in inline for k in ("AWS_SECRET_ACCESS_KEY", "NGC_API_KEY", "HF_TOKEN"))
 
 
 def test_rendered_manifest_lints_clean():
     # even a literal secret smuggled into the command must be caught by the gate,
     # and a clean render must pass
     assert redact_secrets.scan(render()) == []
-    bad = render({"COMMAND": "train -e s.yaml && export NGC_KEY=nvapi-LEAKED1234567890"})
+    bad = render({"COMMAND": "train -e s.yaml && export NGC_API_KEY=nvapi-LEAKED1234567890"})
     assert redact_secrets.scan(bad)
 
 

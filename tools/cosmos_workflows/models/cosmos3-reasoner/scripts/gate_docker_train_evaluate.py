@@ -209,7 +209,7 @@ def open_eval_record(args: argparse.Namespace) -> tuple[str, Path]:
         "--image",
         args.image,
         "--network-arch",
-        "cosmos-reason",
+        "cosmos3-reasoner",
         "--action",
         "evaluate",
         "--storage-tier",

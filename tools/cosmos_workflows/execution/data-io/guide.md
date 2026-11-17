@@ -36,7 +36,7 @@ If a session provides only the alternate names (`ACCESS_KEY`, `SECRET_KEY`,
 `S3_ENDPOINT_URL`, `CLOUD_REGION`), map them once, scoped to the command:
 `AWS_ACCESS_KEY_ID="$ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$SECRET_KEY" aws s3 ...`
 
-`HF_TOKEN` / `NGC_KEY` pass through unchanged for PTM pulls. Never pass a
+`HF_TOKEN` / `NGC_API_KEY` pass through unchanged for PTM pulls. Never pass a
 credential as a CLI argument (`-p`, `--token`, `-e KEY=value`); use
 `--password-stdin` or `-e VAR` (no value).
 

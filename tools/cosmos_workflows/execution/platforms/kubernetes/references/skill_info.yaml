@@ -13,7 +13,7 @@ optional_credentials:
 - name: KUBECONFIG
   source: env_var
   description: Alternate kubeconfig path (defaults to ~/.kube/config).
-- name: NGC_KEY
+- name: NGC_API_KEY
   source: env_var
   description: For nvcr.io image pulls (use with image_pull_secret).
 - name: ACCESS_KEY

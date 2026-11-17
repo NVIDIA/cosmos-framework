@@ -7,7 +7,14 @@ when their GPU/network prerequisites fit the selected service.
 
 ## Reasoner (Cosmos3 Nano / Edge and compatible Qwen checkpoints)
 
-Install Framework's `workflows` extra into the selected GPU environment. Prepare
+Install Framework's `workflows` extra into the selected GPU environment, from
+the repository root:
+
+```bash
+uv sync --extra workflows --group=cu130   # CUDA 12.8: --group=cu128
+```
+
+Use `--group=cu130-train` instead when the same environment also trains. Prepare
 a complete Hugging Face export first: use the reasoner checkpoint helpers for
 DCP and PEFT inputs. Do not point the HTTP server at an unmerged adapter.
 

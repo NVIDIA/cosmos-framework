@@ -58,8 +58,8 @@ Set `TMPDIR=/tmp` and both `ENROOT_TEMP_PATH` and
 variables; node-local unique paths avoid cleanup races and unsupported shared
 overlay whiteouts.
 
-Do not inherit a training job's CPU count: omitted memory is charged per CPU on
-this cluster, so oversized requests can remain pending with `QOSGrpMemLimit`.
+Do not inherit a training job's CPU count: on sites that charge omitted memory
+per CPU, oversized requests can remain pending with `QOSGrpMemLimit`.
 Inspect `ReqCPUS` and `ReqMem` with `scontrol`/`sacct`, cancel the pending job,
 and retry with a new job record and the explicit profile above. Do not wait for
 the QOS condition to clear or move conversion into a GPU allocation.

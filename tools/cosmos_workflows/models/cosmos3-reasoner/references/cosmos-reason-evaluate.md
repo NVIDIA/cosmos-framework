@@ -92,7 +92,7 @@ First run with the selected training artifacts and whatever evaluation inputs
 are already known:
 
 ```bash
-python scripts/evaluation_workflow.py \
+python "$COSMOS_WORKFLOWS_ROOT/models/cosmos3-reasoner/scripts/evaluation_workflow.py" \
   --training-plan <sealed-training-plan.json> \
   --training-status <structured-training-status.json-or-jsonl> \
   --results-dir <new-evaluation-results-dir> \

@@ -17,7 +17,7 @@ Sources: official Docker CLI reference (<https://docs.docker.com/reference/cli/d
 
 ## Prerequisites
 
-1. **Host GPU runtime** — by default, NVIDIA driver `>=580`, CUDA Toolkit `>=13.0`, and NVIDIA Container Toolkit `>=1.19.0`. If the selected model's `references/skill_info.yaml` declares `runtime_requirements.gpu_host`, pass those values to `execution/gpu-host/guide.md` instead. Model requirements override the defaults for that workflow.
+1. **Host GPU runtime** — by default, NVIDIA driver `>=580` and NVIDIA Container Toolkit `>=1.19.0` (the image supplies CUDA; a host CUDA Toolkit is not needed). If the selected model's `references/skill_info.yaml` declares `runtime_requirements.gpu_host`, pass those values to `execution/gpu-host/guide.md` instead. Model requirements override the defaults for that workflow.
 2. **Docker** — `docker --version` must return ≥ 20.10. Install: <https://docs.docker.com/engine/install/>.
 3. **NGC API key** for `nvcr.io/*` pulls. Get from <https://ngc.nvidia.com/>.
 
@@ -34,20 +34,23 @@ bash "$SETUP_SCRIPT" --backend docker --check-only || {
 }
 
 docker --version
-docker run --rm --runtime=nvidia --gpus all ubuntu nvidia-smi
-[ -n "$NGC_KEY" ] || echo "NGC_KEY unset — cannot pull nvcr.io images"
+docker info --format '{{json .Runtimes}}' | grep -q nvidia && echo "NVIDIA runtime registered"
+# GPU smoke with an image that is already local (never pulls); select GPUs by id on shared hosts.
+docker image inspect "$COSMOS_IMAGE" >/dev/null 2>&1 \
+  && docker run --rm --pull=never --runtime=nvidia --gpus '"device=0"' "$COSMOS_IMAGE" nvidia-smi -L
+[ -n "$NGC_API_KEY" ] || echo "NGC_API_KEY unset — cannot pull nvcr.io images"
 ```
 
 If the selected model declares `runtime_requirements.gpu_host`, append the
-corresponding `--min-driver-version`, `--min-cuda-version`, and
-`--min-container-toolkit-version` values to both the check and any approved
+corresponding `--min-driver-version` and `--min-container-toolkit-version`
+values (and `--require-cuda-toolkit --min-cuda-version` only when the model needs a host CUDA Toolkit) to both the check and any approved
 install command. Do not apply one model's override to unrelated workflows.
 
 ## NGC authentication
 
 ```bash
 set -a; source /path/to/.env; set +a   # omit if already exported
-echo "$NGC_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
+echo "$NGC_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
 ```
 
 Persists in `~/.docker/config.json` across reboots. Re-run on `unauthorized` errors.
@@ -86,7 +89,7 @@ below, with the raw state carried in the transition `message`. `$COSMOS_WORKFLOW
    CID=$(docker run -d --name "$JOB_ID" --label "cosmos-job=$JOB_ID" \
      --gpus "$GPUS" --ipc=host \
      -v "$STAGE:/workspace" \
-     -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e HF_TOKEN -e NGC_KEY \
+     -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e HF_TOKEN -e NGC_API_KEY \
      "$IMAGE" <bundle command, reading /workspace/spec.yaml>)
    ```
 
@@ -166,7 +169,7 @@ docker run \
   -e TRITON_CACHE_DIR=/results/.cosmos-runtime/home/.cache/triton \
   -e TORCHINDUCTOR_CACHE_DIR=/results/.cosmos-runtime/home/.cache/torchinductor \
   -e MPLCONFIGDIR=/results/.cosmos-runtime/home/.cache/matplotlib \
-  -e HF_TOKEN -e NGC_KEY \
+  -e HF_TOKEN -e NGC_API_KEY \
   <image> \
   <command>
 ```
@@ -280,7 +283,7 @@ exception. Never substitute `chmod 777` as the normal fix.
 
 Common passthrough vars for containerized workloads (the calling skill declares which it needs):
 
-- `NGC_KEY` — `nvcr.io` pulls; some runtimes also read at runtime
+- `NGC_API_KEY` — `nvcr.io` pulls; some runtimes also read at runtime
 - `HF_TOKEN` — gated HuggingFace model downloads
 - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL` — S3 I/O inside the container
 - `WANDB_API_KEY` — optional W&B logging

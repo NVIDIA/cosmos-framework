@@ -6,7 +6,7 @@ required_credentials:
 - name: BREV_API_TOKEN
   source: env_var
 optional_credentials:
-- name: NGC_KEY
+- name: NGC_API_KEY
   source: env_var
 - name: ACCESS_KEY
   source: env_var

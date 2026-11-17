@@ -31,7 +31,7 @@ SLURM_VALS = {
     "GPUS_PER_NODE": "8",
     "CPUS_PER_TASK": "16",
     "TIME": "04:00:00",
-    "LOG_DIR": "/lustre/fsw/users/me/results/cosmos3-train-a1b2c3/slurm-logs",
+    "LOG_DIR": "/shared/users/me/results/cosmos3-train-a1b2c3/slurm-logs",
     "SBATCH_EXTRA": "#SBATCH --account=edgeai\n#SBATCH --partition=batch",
     "ENV_FILE": "",
     "EXTRA_ENV": "export NCCL_P2P_DISABLE=1",
@@ -155,7 +155,7 @@ def test_k8s_gpu_limit_and_shm_and_secretref():
 def test_k8s_no_inline_creds():
     _, job = k8s_docs()
     env = {e["name"] for e in job["spec"]["template"]["spec"]["containers"][0]["env"]}
-    assert not any(k in env for k in ("AWS_SECRET_ACCESS_KEY", "NGC_KEY", "HF_TOKEN"))
+    assert not any(k in env for k in ("AWS_SECRET_ACCESS_KEY", "NGC_API_KEY", "HF_TOKEN"))
     assert redact_secrets.scan(render(K8S, K8S_VALS)) == []
 
 

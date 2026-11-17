@@ -353,11 +353,7 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 def model_tier(model: str) -> str:
     normalized = model.casefold().replace("_", "-")
-    if "nano" in normalized or normalized in {
-        "cosmos3",
-        "cosmos-reason",
-        "cosmos reason 3",
-    }:
+    if "nano" in normalized or normalized in {"cosmos3", "cosmos3-reasoner"}:
         return "nano"
     if "edge" in normalized:
         return "edge"
@@ -2724,7 +2720,7 @@ def render_docker(args: argparse.Namespace, plan: Mapping[str, Any]) -> str:
     }
     for name, value in {**dict(plan.get("environment", {})), **identity_env}.items():
         command.extend(["-e", f"{name}={value}"])
-    for name in ("HF_TOKEN", "NGC_KEY"):
+    for name in ("HF_TOKEN", "NGC_API_KEY"):
         command.extend(["-e", name])
     command.extend([image, "bash", "-lc", str(plan.get("command") or "")])
     rendered = shlex.join(command).replace("'\"${HOST_IDENTITY_ARGS[@]}\"'", '"${HOST_IDENTITY_ARGS[@]}"')
@@ -3385,9 +3381,9 @@ def local_preflight(
     if (
         plan["image"].get("mode") != "existing-sqsh"
         and plan["image"]["tag"].startswith("nvcr.io/")
-        and not env.get("NGC_KEY")
+        and not env.get("NGC_API_KEY")
     ):
-        warnings.append("NGC_KEY is unset; it is required only if this image tag must be pushed or pulled")
+        warnings.append("NGC_API_KEY is unset; it is required only if this image tag must be pushed or pulled")
     if args.gpu_architecture and args.gpu_architecture.casefold() not in {
         "a100",
         "h100",
