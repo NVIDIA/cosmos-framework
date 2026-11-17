@@ -291,6 +291,13 @@ loaders, parent initialization and teacher/score-model construction. The native
 route selects EMA from the checkpoint's `model/` child. Earlier stages use
 their own [inference profiles](references/canonical-recipe.md#check-intermediate-training-models).
 
+> **Skill note (not in the source):** this route needs one more override, which the block below adds. Here the model configuration comes from the recipe (`--config-file` with `--experiment`), and Framework inference sets the key `_auto_camera_fps` on the model configuration of every checkpoint it loads. The recipe's configuration does not declare that key, so the run stops before generation with `Key '_auto_camera_fps' not in 'SelfForcingDMDConfig'`. Measured on eight H200 GPUs with a Stage 3 checkpoint of the training walkthrough: the run stops with that message without the override and completes with `+model.config._auto_camera_fps=null`; `++` adds the key the same way and replaces it where it already exists. Run the block in the shell of the Hugging Face block of step 1, which defines `SIM_TRANSFER_RESOURCE_OVERRIDES`, and for this route only: the release directory is loaded with its own `config.json` and needs no such override.
+
+```bash
+: "${SIM_TRANSFER_RESOURCE_OVERRIDES:?Run the Hugging Face block of step 1 in this shell first}"
+SIM_TRANSFER_RESOURCE_OVERRIDES+=("++model.config._auto_camera_fps=null")
+```
+
 ## Troubleshooting
 
 Start with [`references/troubleshooting.md`](references/troubleshooting.md): the training-state symptoms (full-state
