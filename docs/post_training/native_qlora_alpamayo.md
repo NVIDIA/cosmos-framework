@@ -1044,3 +1044,30 @@ owned-process difference was 9.137 GiB, the same as the LR-only screen. Native
 evaluation stage (2,254 s vs 1,899 s) dominated this difference; training stages
 were 409/400 s. Sequential cases share one allocation but not one clock, so this
 is not a deployment-speed claim.
+
+A frozen-expert seed-17 screen on build `06a2b84` (`38660258`, **5,903 GPU-seconds**)
+set `model.train_action_head=false`. Only the 494 FP32 language LoRA factors trained at
+`1e-4`. The source expert and action projections stayed frozen with no optimizer state.
+The schedule, pause at update 128 and all thresholds were unchanged. Both update-0
+evaluations matched the retained FP32-expert controls exactly. The CPU test
+`test_frozen_expert_trains_only_language_adapters_and_reloads_exactly` covers this path.
+
+| Arm | ADE 6.4s (m) | vs own source | FDE 6.4s (m) | vs own source | Flow loss | vs own source |
+|---|---:|---:|---:|---:|---:|---:|
+| NF4 LoRA | 1.95797 | -0.74% | 6.08811 | -0.24% | 0.273826 | +2.52% |
+| BF16 LoRA | 1.96814 | +0.62% | 6.13038 | +0.92% | 0.273431 | +2.56% |
+
+The screen is **rejected**. The 11.70% training-row ADE gain from the component
+diagnostic did not transfer to development data: frozen-expert training was weaker
+than the expert-LR 0.1x screen (-2.51%/-1.67%) and flow loss rose in both arms. NF4
+point estimates were within all four paired margins. Across the three update-128 screens,
+the 1e-5 LR, 0.1x expert LR and frozen expert, no learning placement moved development
+ADE by more than 2.6% in either direction. This one-seed evidence is consistent with the
+1,024-row cohort not supporting a 5% source improvement at this horizon. It is not a
+confidence statement.
+
+Freezing the expert removes its FP32 master weights, gradients and AdamW moments. Native
+allocator peaks were **36.473/45.818 GiB** NF4/BF16 (10.03-GiB difference), and sampled owned
+peaks were 37.676/47.006 GiB, all host samples complete. With trained FP32 heads they were
+64.664/74.009 GiB. Training stages took 391/378 s and full native workflows 2,704/2,629 s
+(NF4 +2.9%), sequential in one allocation.
