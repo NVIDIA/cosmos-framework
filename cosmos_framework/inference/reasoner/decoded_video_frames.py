@@ -5,9 +5,31 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 from typing import Any
 
 from cosmos_framework.inference.reasoner.video_pixel_bounds import normalize_video_pixel_bounds
+
+logger = logging.getLogger(__name__)
+
+_REPORTED_LIMITS: set[tuple[float, float]] = set()
+_REPORTED_LIMITS_LOCK = threading.Lock()
+
+
+def _report_max_pixels_limit(requested: float, limit: float) -> None:
+    """Warn, once per distinct pair, that a per-frame maximum was lowered to the limit."""
+    signature = (requested, limit)
+    with _REPORTED_LIMITS_LOCK:
+        if signature in _REPORTED_LIMITS:
+            return
+        _REPORTED_LIMITS.add(signature)
+    logger.warning(
+        "The given max_pixels[%s] exceeds limit[%s]. Frames are resized within the limit, "
+        "which is not the training size if training used the larger budget.",
+        requested,
+        limit,
+    )
 
 
 def is_decoded_frames(video: Any) -> bool:
@@ -39,10 +61,26 @@ def fetch_decoded_video(
     its own readers returns, on the same grid and with the same pixel bounds,
     and records the sampled frame rate that the Framework decoder measured. The
     resize itself is the uint8 bicubic resize of the Hugging Face video
-    processor, so an evaluation whose per-frame ``max_pixels`` times the frame
-    count equals the training pixel budget feeds the model the pixels it was
-    trained on. The frames are not padded: the video processor completes an odd
+    processor. The frames are not padded: the video processor completes an odd
     count itself, which is also what training relies on.
+
+    The bounds here are per frame. The training video processor budgets the
+    whole clip: ``shortest_edge`` and ``longest_edge`` bound frames times height
+    times width. The evaluation feeds the model the pixels it was trained on
+    when all of these hold:
+
+    * ``min_pixels`` and ``max_pixels`` times the frame count equal the
+      training ``shortest_edge`` and ``longest_edge``. A clip that yields fewer
+      frames than the bounds were derived for keeps the per-frame size here,
+      while training spends the unused budget on larger frames.
+    * The frame count is even. Training rounds an odd count to an even one,
+      ``round(T / 2) * 2``, when it tests the budget, so close to the budget an
+      odd count can resize differently.
+    * ``max_pixels`` does not exceed the per-frame limit of ``fetch_video``:
+      ``VIDEO_MAX_TOKEN_NUM`` merged patches, 786432 pixels for patch 16, or
+      the share of ``total_pixels`` that falls to one frame if that is lower.
+      A larger value is lowered to the limit, as ``fetch_video`` does, and
+      reported with a warning once per distinct value.
     """
     import numpy as np
     import torch
@@ -68,11 +106,14 @@ def fetch_decoded_video(
     budget_frames = vision_process.ceil_by_factor(frame_count, frame_factor)
     min_pixels = element.get("min_pixels", vision_process.VIDEO_MIN_TOKEN_NUM * factor * factor)
     total_pixels = element.get("total_pixels", vision_process.MODEL_SEQ_LEN * factor * factor * 0.9)
-    max_pixels = max(
+    limit = max(
         min(vision_process.VIDEO_MAX_TOKEN_NUM * factor * factor, total_pixels / budget_frames * frame_factor),
         int(min_pixels * 1.05),
     )
-    max_pixels = min(element.get("max_pixels", max_pixels), max_pixels)
+    max_pixels = element.get("max_pixels", limit)
+    if max_pixels > limit:
+        _report_max_pixels_limit(max_pixels, limit)
+        max_pixels = limit
     resized_height, resized_width = vision_process.smart_resize(
         height,
         width,

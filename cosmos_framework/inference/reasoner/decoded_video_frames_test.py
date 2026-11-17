@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pytest
 import torch
@@ -137,6 +139,41 @@ def test_decoded_frames_preserve_an_explicit_maximum_below_the_default_minimum()
     video, _ = fetch_decoded_video(element, _PATCH_SIZE, vision_process)
 
     assert video.shape[-2] * video.shape[-1] <= 65536
+
+
+def _limit_warnings(caplog) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.name == decoded_video_frames.__name__]
+
+
+def test_a_maximum_above_the_per_frame_limit_is_lowered_and_reported_once(monkeypatch, caplog):
+    # examples/automl/evaluation.toml: 8 frames, 200704 to 1003520 pixels per frame.
+    monkeypatch.setattr(decoded_video_frames, "_REPORTED_LIMITS", set())
+    limit = vision_process.VIDEO_MAX_TOKEN_NUM * (_PATCH_SIZE * vision_process.SPATIAL_MERGE_SIZE) ** 2
+    frames = _frames(1280, 720)
+    requested = {"type": "video", "video": frames, "fps": 2.0, "min_pixels": 200704, "max_pixels": 1003520}
+    at_the_limit = {**requested, "max_pixels": limit}
+
+    with caplog.at_level(logging.WARNING, logger=decoded_video_frames.__name__):
+        video, _ = fetch_decoded_video(dict(requested), _PATCH_SIZE, vision_process)
+        fetch_decoded_video(dict(requested), _PATCH_SIZE, vision_process)
+        expected, _ = fetch_decoded_video(at_the_limit, _PATCH_SIZE, vision_process)
+
+    # Training with longest_edge = 8 * 1003520 keeps 704x1280 for this clip.
+    assert tuple(video.shape[-2:]) == (640, 1152)
+    assert torch.equal(video, expected)
+    messages = _limit_warnings(caplog)
+    assert len(messages) == 1
+    assert "max_pixels[1003520]" in messages[0]
+    assert f"limit[{limit}]" in messages[0]
+
+
+def test_a_maximum_within_the_per_frame_limit_is_not_reported(monkeypatch, caplog):
+    monkeypatch.setattr(decoded_video_frames, "_REPORTED_LIMITS", set())
+
+    with caplog.at_level(logging.WARNING, logger=decoded_video_frames.__name__):
+        fetch_decoded_video(_element(_frames(1280, 720)), _PATCH_SIZE, vision_process)
+
+    assert _limit_warnings(caplog) == []
 
 
 def test_is_decoded_frames_only_accepts_pil_frame_sequences():
