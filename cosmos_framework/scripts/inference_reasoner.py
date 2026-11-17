@@ -42,7 +42,6 @@ from cosmos_framework.utils.workflow_status import (
     monitor_status,
 )
 
-ROOT = Path(__file__).parents[1]
 SEPARATOR = "-" * 20
 COMPONENT_NAME = "Cosmos Framework Inference"
 
@@ -65,7 +64,9 @@ def str_to_bool(value):
 
 def parse_args():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Cosmos-Reason1 inference script")
+    parser = argparse.ArgumentParser(
+        description="Cosmos3 reasoner inference over an image, a video, or a folder of them"
+    )
 
     parser.add_argument("--model_path", type=str, required=True, help="Path to the model directory")
     parser.add_argument(
@@ -78,7 +79,7 @@ def parse_args():
         "--num_gpus",
         type=int,
         default=None,
-        help="Number of GPUs to use for tensor parallelism (requires device_map='auto')",
+        help="Must be 1 when set: one model replica per process (use torchrun for data-parallel inference)",
     )
     parser.add_argument(
         "--type", type=str, default="video", choices=["video", "image"], help="Input type (video or image)"
@@ -93,10 +94,6 @@ def parse_args():
     parser.add_argument("--prompt", type=str, required=True, help="Text prompt for the model")
     parser.add_argument("--max_new_tokens", type=int, default=4096, help="Maximum number of new tokens to generate")
     parser.add_argument("--results_dir", type=str, required=True, help="Results directory")
-    parser.add_argument("--enable_lora", type=str_to_bool, default=False, help="Enable LoRA model merging")
-    parser.add_argument(
-        "--base_model_path", type=str, help="Base model path for LoRA merging (required if enable_lora is True)"
-    )
     parser.add_argument(
         "--config_file",
         type=str,
@@ -150,6 +147,11 @@ def get_media_files(media_path: str, media_type: str) -> list[Path]:
             raise ValueError(
                 f"No {media_type} files found in directory: {media_path}. Supported extensions: {sorted(extensions)}"
             )
+        stems = [f.stem for f in media_files]
+        duplicates = sorted({stem for stem in stems if stems.count(stem) > 1})
+        if duplicates:
+            # Results are written as <stem>_result.{txt,json}; same-stem files would overwrite each other.
+            raise ValueError(f"Media files share a name stem and would overwrite results: {duplicates}")
         return sorted(media_files)
 
     raise ValueError(f"Path is neither a file nor a directory: {media_path}")
@@ -182,7 +184,7 @@ def process_single_media(
         s_logger: Status logger
 
     Returns:
-        Dict with keys: file, prompt, response, tokens_generated, inference_time_s
+        Dict with keys: file, prompt, response, words_generated, inference_time_s
     """
     media_str = str(media_file)
     s_logger.write(status_level=Status.RUNNING, message=f"Processing {media_type}: {media_file.name}")
@@ -203,13 +205,13 @@ def process_single_media(
     )
     inference_time = time.time() - infer_start
     result_text = responses[0]
-    tokens_generated = len(result_text.split())
+    words_generated = len(result_text.split())
 
     result_record = {
         "file": media_file.name,
         "prompt": prompt,
         "response": result_text,
-        "tokens_generated": tokens_generated,
+        "words_generated": words_generated,
         "inference_time_s": round(inference_time, 3),
     }
 
@@ -252,10 +254,6 @@ def main():
                     "Use torchrun for multi-GPU data parallel inference."
                 )
 
-        if args.enable_lora:
-            raise ValueError(
-                "Cosmos Framework actions require a full checkpoint; merge/export the adapter before inference."
-            )
         runtime = CosmosFrameworkRuntime(
             args.model_path,
             config_file=args.config_file,
@@ -345,14 +343,14 @@ def main():
                     continue
 
             total_time = time.time() - pipeline_start
-            total_tokens = sum(r["tokens_generated"] for r in successful_results)
+            total_words = sum(r["words_generated"] for r in successful_results)
 
             summary = {
-                "inference_status": "completed",
+                "inference_status": "completed" if not failed_files else "failed",
                 "total_files": len(media_files),
                 "successful": len(successful_results),
                 "failed": len(failed_files),
-                "total_tokens_generated": total_tokens,
+                "total_words_generated": total_words,
                 "total_time_s": round(total_time, 3),
                 "model_path": args.model_path,
                 "media_type": args.type,
@@ -367,11 +365,11 @@ def main():
             summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
             kpi_data = {
-                "inference_status": "completed",
+                "inference_status": "completed" if not failed_files else "failed",
                 "total_files": len(media_files),
                 "successful": len(successful_results),
                 "failed": len(failed_files),
-                "total_tokens_generated": total_tokens,
+                "total_words_generated": total_words,
                 "total_time_s": round(total_time, 3),
                 "results_path": str(inference_output_dir),
             }
@@ -384,7 +382,7 @@ def main():
                 status_level=Status.SUCCESS if not failed_files else Status.RUNNING,
                 message=(
                     f"Processing complete: {len(successful_results)} successful, "
-                    f"{len(failed_files)} failed, {total_tokens} tokens in {total_time:.1f}s"
+                    f"{len(failed_files)} failed, {total_words} words in {total_time:.1f}s"
                 ),
             )
 
@@ -395,6 +393,7 @@ def main():
                 for entry in failed_files:
                     print(f"{entry['file']}: {entry['error']}")
                 print(SEPARATOR + "\n")
+                raise RuntimeError(f"{len(failed_files)} of {len(media_files)} media files failed")
 
         except KeyboardInterrupt:
             s_logger.write(

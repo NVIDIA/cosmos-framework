@@ -13,9 +13,10 @@ import json
 from abc import ABC, abstractmethod
 from functools import cached_property
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
 
-from jsonschema import Draft7Validator
+if TYPE_CHECKING:
+    from jsonschema import Draft7Validator
 
 
 class BaseValidator(ABC):
@@ -40,18 +41,25 @@ class BaseValidator(ABC):
         optional for programmatic use (calling ``validate_scene`` directly).
         """
         self.args = args
-        self._schema_validators: Dict[str, Draft7Validator] = {}
+        self._schema_validators: Dict[str, "Draft7Validator"] = {}
 
     @cached_property
     def schemas(self) -> dict:
         """Load the bundled format schemas without an external package."""
         return json.loads(Path(__file__).with_name("schemas.json").read_text())
 
-    def _validator_for(self, schema_name: str) -> Draft7Validator:
+    def _validator_for(self, schema_name: str) -> "Draft7Validator":
         """Load a schema by name and return a cached ``Draft7Validator``."""
         cached = self._schema_validators.get(schema_name)
         if cached is not None:
             return cached
+        try:
+            from jsonschema import Draft7Validator
+        except ImportError as error:
+            raise ImportError(
+                "Dataset validation needs jsonschema; install cosmos-framework with the 'workflows' extra."
+            ) from error
+
         schema = self.schemas[f"{self.format}/{schema_name}"]
         validator = Draft7Validator(schema)
         self._schema_validators[schema_name] = validator

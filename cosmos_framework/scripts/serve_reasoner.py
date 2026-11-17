@@ -13,11 +13,21 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--media-root", action="append", default=[], help="Allowed local media mount; repeatable")
-    parser.add_argument("--allow-remote-media", action="store_true", help="Allow HTTP media from trusted callers only")
+    parser.add_argument(
+        "--allow-remote-media",
+        action="store_true",
+        help=(
+            "Let callers make the server fetch any http(s) URL (no host allowlist or size cap). "
+            "Enable only for trusted callers on a trusted network."
+        ),
+    )
     parser.add_argument("--dtype", default="bfloat16", choices=["auto", "float16", "float32", "bfloat16"])
     args = parser.parse_args()
 
-    import uvicorn
+    try:
+        import uvicorn
+    except ImportError as error:
+        parser.error(f"{error}; install cosmos-framework with the 'workflows' extra")
 
     from cosmos_framework.inference.reasoner.runtime import CosmosFrameworkRuntime
     from cosmos_framework.inference.reasoner.service import create_app

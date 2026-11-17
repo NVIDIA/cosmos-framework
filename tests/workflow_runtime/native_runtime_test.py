@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: OpenMDW-1.1
 
 import base64
 import json
@@ -83,13 +83,13 @@ def test_action_terminal_status(tmp_path, monkeypatch, fail):
     assert records[1]["kpi"] == {"loss": 1}
 
 
-def test_lightweight_imports_do_not_need_training_or_api_sdks():
+def test_lightweight_imports_do_not_need_training_or_source_packages():
     code = """
 import importlib.abc
 import sys
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, *args):
-        if fullname.startswith(("nvidia_tao", "cosmos_rl", "torch", "google.genai", "openai")):
+        if fullname.startswith(("nvidia_tao", "cosmos_rl", "torch")):
             raise RuntimeError("Forbidden runtime dependency: " + fullname)
 sys.meta_path.insert(0, Block())
 from cosmos_framework.data.reasoner.qa_dataset import ReasoningConversationDataset

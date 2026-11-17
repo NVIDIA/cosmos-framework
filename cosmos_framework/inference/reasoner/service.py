@@ -99,6 +99,27 @@ def prepare_messages(messages, directory, allowed_roots=(), *, allow_remote=Fals
     return messages
 
 
+def chat_task(messages):
+    """Build a runtime task from prepared chat messages.
+
+    Transformers backends consume ``prompt`` (the full conversation); the native
+    Cosmos3 backend reads the last user turn from ``question`` and its media
+    from ``media_paths``, so both views are filled in.
+    """
+    task = {"id": "0", "prompt": messages}
+    user_turns = [message for message in messages if message["role"] == "user"]
+    if not user_turns:
+        raise ValueError("messages must contain a user message")
+    content = user_turns[-1].get("content", "")
+    parts = [{"type": "text", "text": content}] if isinstance(content, str) else content
+    task["question"] = "\n".join(part["text"] for part in parts if part["type"] == "text")
+    media = [(part["type"], part[part["type"]]) for part in parts if part["type"] in {"image", "video"}]
+    if media:
+        task["media_paths"] = [path for _kind, path in media]
+        task["media_mode"] = media[0][0]
+    return task
+
+
 def create_app(runtime, model_name, *, allowed_roots=(), allow_remote=False):
     """Build an app around an injected runtime (also usable with a CPU test double)."""
     from fastapi import FastAPI, HTTPException
@@ -118,7 +139,7 @@ def create_app(runtime, model_name, *, allowed_roots=(), allow_remote=False):
     def models():
         return {"object": "list", "data": [{"id": model_name, "object": "model", "owned_by": "cosmos"}]}
 
-    def generate(payload, *, chat):
+    def build_tasks(payload, directory, *, chat):
         if payload.get("stream"):
             raise ValueError("Streaming is not supported")
         if payload.get("model", model_name) != model_name:
@@ -132,30 +153,44 @@ def create_app(runtime, model_name, *, allowed_roots=(), allow_remote=False):
             for key in ("fps", "num_frames", "min_pixels", "max_pixels", "total_pixels")
             if key in payload
         }
+        if chat:
+            messages = prepare_messages(payload.get("messages"), directory, allowed_roots, allow_remote=allow_remote)
+            return [chat_task(messages)], generation, vision
+        media = payload.get("media", [])
+        media = [media] if isinstance(media, str) else media
+        if not isinstance(media, list) or not media:
+            raise ValueError("media must contain at least one file")
+        question = payload.get("prompt", "Describe this media.")
+        tasks = []
+        for value in media:
+            path = resolve_media(value, directory, allowed_roots, allow_remote=allow_remote)
+            prompt = []
+            if payload.get("system_prompt"):
+                prompt.append({"role": "system", "content": payload["system_prompt"]})
+            prompt.append({"role": "user", "content": question})
+            kind = (
+                "video"
+                if Path(urlparse(path).path).suffix.lower() in {".mp4", ".webm", ".mov", ".mkv", ".avi"}
+                else "image"
+            )
+            tasks.append(
+                {
+                    "id": str(len(tasks)),
+                    "prompt": prompt,
+                    "question": question,
+                    "media_paths": [path],
+                    "media_mode": kind,
+                }
+            )
+        return tasks, generation, vision
+
+    def generate(payload, *, chat):
         with TemporaryDirectory(prefix="cosmos-request-") as directory:
-            if chat:
-                messages = prepare_messages(
-                    payload.get("messages"), directory, allowed_roots, allow_remote=allow_remote
-                )
-                tasks = [{"id": "0", "prompt": messages}]
-            else:
-                media = payload.get("media", [])
-                media = [media] if isinstance(media, str) else media
-                if not isinstance(media, list) or not media:
-                    raise ValueError("media must contain at least one file")
-                tasks = []
-                for value in media:
-                    path = resolve_media(value, directory, allowed_roots, allow_remote=allow_remote)
-                    prompt = []
-                    if payload.get("system_prompt"):
-                        prompt.append({"role": "system", "content": payload["system_prompt"]})
-                    prompt.append({"role": "user", "content": payload.get("prompt", "Describe this media.")})
-                    kind = (
-                        "video"
-                        if Path(urlparse(path).path).suffix.lower() in {".mp4", ".webm", ".mov", ".mkv", ".avi"}
-                        else "image"
-                    )
-                    tasks.append({"id": str(len(tasks)), "prompt": prompt, "media_paths": [path], "media_mode": kind})
+            # Only request validation maps to 400; runtime failures stay server errors.
+            try:
+                tasks, generation, vision = build_tasks(payload, directory, chat=chat)
+            except (ValueError, TypeError) as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
             # Model caches are mutable and must not be shared by concurrent calls.
             with lock:
                 responses, _ = runtime.generate_tasks(tasks, generation_config=generation, vision_config=vision)
@@ -173,16 +208,10 @@ def create_app(runtime, model_name, *, allowed_roots=(), allow_remote=False):
 
     @app.post("/v1/chat/completions")
     def chat_completions(payload: dict):
-        try:
-            return generate(payload, chat=True)
-        except (ValueError, TypeError) as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+        return generate(payload, chat=True)
 
     @app.post("/infer")
     def infer(payload: dict):
-        try:
-            return generate(payload, chat=False)
-        except (ValueError, TypeError) as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+        return generate(payload, chat=False)
 
     return app

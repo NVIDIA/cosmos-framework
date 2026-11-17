@@ -21,7 +21,8 @@ from cosmos_framework.data.reasoner.formats import metropolis as fmt
 from cosmos_framework.data.reasoner.formats.conversion import BaseConverter, ConversionResult
 from cosmos_framework.data.reasoner.formats.utils import media_dest_basename
 
-DEFAULT_LICENSE = "CC BY-NC-ND 4.0"
+# The schema requires a license string; never assume one for a user dataset.
+DEFAULT_LICENSE = "unspecified"
 
 
 class MetropolisV3_0ToVideoReasoningV1_0Converter(BaseConverter):
@@ -111,7 +112,10 @@ class MetropolisV3_0ToVideoReasoningV1_0Converter(BaseConverter):
             "--license",
             type=str,
             default=DEFAULT_LICENSE,
-            help=f"License string added to each annotation file's metadata block (default: {DEFAULT_LICENSE})",
+            help=(
+                "License of the source dataset, recorded in each annotation file's metadata block "
+                f"(default: {DEFAULT_LICENSE!r}; set it to the dataset's actual license)"
+            ),
         )
 
     # ------------------------------------------------------------------

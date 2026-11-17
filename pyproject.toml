@@ -60,17 +60,10 @@ dependencies = [
 
 [project.optional-dependencies]
 workflows = [
-  "attrs",
-  "jsonschema",
-  "evaluate",
+  "cosmos-framework[reasoner-eval]",
   "fastapi",
-  "matplotlib",
-  "peft",
-  "pillow>=12.2.0",
-  "qwen-vl-utils",
-  "rouge-score",
-  "seaborn",
-  "toml",
+  "httpx",
+  "jsonschema",
   "uvicorn",
 ]
 automl = ["nvidia-automl-core==0.1.0"]

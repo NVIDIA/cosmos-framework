@@ -63,7 +63,6 @@ TOKENIZER_PROCESSOR_FILENAMES = (
     "vocab.json",
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -234,6 +233,8 @@ def load_custom_dataset(annotation_path: str, media_dir: str = None) -> List[Dic
             logger.warning(f"Skipping sample without image or video: {item.get('id', 'unknown')}")
             continue
 
+    if not samples:
+        raise ValueError(f"No usable calibration samples were loaded from {annotation_path}")
     logger.info(f"Successfully loaded {len(samples)} samples from custom dataset")
     return samples
 
@@ -429,7 +430,7 @@ def run_quantization(args):
         logger.info(f"Quantization Scheme: {args.quantization_scheme}")
 
         # Log dataset information
-        if args.annotation_path and os.path.exists(args.annotation_path):
+        if args.annotation_path:
             logger.info(f"Dataset: Custom (annotation: {args.annotation_path})")
             if args.media_dir:
                 logger.info(f"Media Directory: {args.media_dir}")
@@ -478,7 +479,7 @@ def run_quantization(args):
         )
 
         # Load calibration dataset (either HuggingFace or custom)
-        use_custom_dataset = args.annotation_path and os.path.exists(args.annotation_path)
+        use_custom_dataset = bool(args.annotation_path)
 
         if use_custom_dataset:
             # Load custom dataset from annotation file
@@ -582,33 +583,38 @@ def run_quantization(args):
             )
 
             dispatch_for_generation(model)
-            # Test with a sample image
-            test_url = "http://images.cocodataset.org/train2017/000000231895.jpg"
-            test_image = Image.open(BytesIO(requests.get(test_url).content))
-            test_messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": test_url},
-                        {"type": "text", "text": "Please describe the animal in this image\n"},
-                    ],
-                }
-            ]
-            prompt = processor.apply_chat_template(test_messages, add_generation_prompt=True)
-            inputs = processor(
-                text=[prompt],
-                images=[test_image],
-                padding=False,
-                max_length=args.max_sequence_length,
-                truncation=True,
-                return_tensors="pt",
-            ).to("cuda")
+            # A smoke generation only; its failure (e.g. no network on the
+            # cluster) must not discard the quantized model saved below.
+            try:
+                test_url = "https://images.cocodataset.org/train2017/000000231895.jpg"
+                response = requests.get(test_url, timeout=30)
+                response.raise_for_status()
+                test_image = Image.open(BytesIO(response.content))
+                test_messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": test_url},
+                            {"type": "text", "text": "Please describe the animal in this image\n"},
+                        ],
+                    }
+                ]
+                prompt = processor.apply_chat_template(test_messages, add_generation_prompt=True)
+                inputs = processor(
+                    text=[prompt],
+                    images=[test_image],
+                    padding=False,
+                    max_length=args.max_sequence_length,
+                    truncation=True,
+                    return_tensors="pt",
+                ).to(model.device)
 
-            logger.info("Generating response...")
-            output = model.generate(**inputs, max_new_tokens=100, temperature=0.7)
-            generated_text = processor.decode(output[0], skip_special_tokens=True)
-
-            logger.info(f"Generated: {generated_text}")
+                logger.info("Generating response...")
+                output = model.generate(**inputs, max_new_tokens=100, do_sample=False)
+                generated_text = processor.decode(output[0], skip_special_tokens=True)
+                logger.info(f"Generated: {generated_text}")
+            except Exception as error:
+                logger.warning(f"Skipping test generation: {error}")
             logger.info("==========================================")
 
         # Save the quantized model
@@ -717,7 +723,17 @@ def run_quantization(args):
 def main():
     """Main entry point for the cosmos-reasoner-quantize command."""
     args = parse_args()
-    _load_quantization_dependencies()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    if args.annotation_path and not os.path.isfile(args.annotation_path):
+        raise SystemExit(f"--annotation_path does not exist: {args.annotation_path}")
+    try:
+        _load_quantization_dependencies()
+    except ImportError as error:
+        raise SystemExit(
+            f"Quantization dependencies are missing ({error}). Run cosmos-reasoner-quantize in the "
+            "image built from docker/quantize.Dockerfile, or point COSMOS_QUANTIZE_DEPS at an "
+            "overlay installed from docker/requirements-quantize.txt."
+        ) from error
 
     # Parse first so --help and argument errors never create run artifacts.
     monitored = monitor_status(name="Cosmos Framework Quantization", mode="quantize")(run_quantization)
