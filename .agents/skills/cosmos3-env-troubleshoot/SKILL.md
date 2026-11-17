@@ -20,6 +20,13 @@ description: >
 
 All paths below are relative to this file's location (`.agents/skills/cosmos3-env-troubleshoot/`).
 
+## Bundled assets
+
+`.agents/skills/cosmos3-env-troubleshoot/assets/managed_job_failures/` holds two
+synthetic failed SLURM job bundles (job record, `sacct`, stdout, `status.json`,
+node `dmesg`) used by this skill's eval. Host names, job ids and timestamps are
+fictional; see its `README.md`.
+
 ## Step 1: Match against known errors
 
 For managed container or scheduler jobs, first collect the selected platform's

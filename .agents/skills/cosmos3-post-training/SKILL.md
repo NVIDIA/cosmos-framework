@@ -45,6 +45,10 @@ It supplies Framework planners, dataset validation, dense/PEFT contracts,
 automatic checkpoint preparation, and structured completion checks. Do not
 impose those gates on ordinary native generator recipes.
 
+The model resolver maps `nvidia/Cosmos3-Nano` and `nvidia/Cosmos3-Edge` to this
+reasoner (vision-language) contract. Generator SFT of the same checkpoints uses
+the native recipes below, not the resolver or the reasoner planner.
+
 - For Nano, collect the explicit `qwen3_vl` versus `cosmos3_omni` checkpoint
   choice, frame sampling, train/validation inputs, and dense/PEFT settings.
   Framework's native converter prepares the checkpoint; preserve the source.
@@ -101,6 +105,12 @@ The canonical reference is `docs/training.md`. Use this table to route questions
 - **Inference uses the DCP checkpoint directly**: the standard flow points `cosmos_framework.scripts.inference` at `$RUN_DIR/checkpoints/iter_<N>` together with `--config-file $RUN_DIR/config.yaml`. The Hugging Face safetensors export (`$RUN_DIR/model`) is optional — only needed if you want a portable single-file checkpoint.
 - **Parallelism degree must match topology**: in the TOML `[model.parallelism]` block, `data_parallel_shard_degree × data_parallel_replicate_degree × context_parallel_shard_degree` must equal `WORLD_SIZE`. `-1` autoselects `data_parallel_shard_degree` from torchrun world size. Mismatch → FSDP init failure.
 - **`--dryrun`**: `cosmos_framework.scripts.train` accepts `--dryrun` to validate the config end-to-end without launching training. Use it whenever iterating on TOML keys or Hydra overrides.
+
+## Bundled assets
+
+| Asset                                                                                                                            | Path                                                                                                     | Used by                                            |
+| -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Four RoboVQA clips with QA rows, split 3 / 1 (train / validation); Hugging Face `Tianli/robovqa`, revision `eb58194`, Apache-2.0 | `.agents/skills/cosmos3-post-training/assets/reasoner_video_qa/` (source and changes in its `README.md`) | the reasoner planner example and this skill's eval |
 
 ## Related skills
 

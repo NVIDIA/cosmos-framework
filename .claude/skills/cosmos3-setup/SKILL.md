@@ -43,7 +43,7 @@ The canonical setup reference is `docs/setup.md`. The README (`README.md` § Set
 
 Native installation still follows the steps below. For a managed reasoner
 training, evaluation, checkpoint, or inference action, shared helpers live in
-`tools/cosmos_workflows`; no Skill Bank plugin or separate skill registry is needed.
+`tools/cosmos_workflows`.
 From the repository root, `source tools/cosmos_workflows/env.sh` sets
 `COSMOS_WORKFLOWS_ROOT`. Re-source it in each shell call that needs it; commands
 inside the following references are relative to that helper root unless stated

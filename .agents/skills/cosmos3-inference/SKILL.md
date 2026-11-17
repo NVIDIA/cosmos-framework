@@ -31,6 +31,13 @@ Keep native batch generation and Ray/Gradio on the entrypoints below. For
 reasoner QA evaluation, use `cosmos3-post-training`'s
 [reasoner evaluation contract](../../../tools/cosmos_workflows/models/cosmos3-reasoner/references/cosmos-reason-evaluate.md).
 
+For one-shot reasoner answers over an image, video, or folder, use the native
+`cosmos-reasoner-inference` CLI described in the
+[reasoner guide](../../../tools/cosmos_workflows/models/cosmos3-reasoner/guide.md)
+("Evaluation and inference");
+it needs the `workflows` extra, installed as shown in the
+[service reference](../../../tools/cosmos_workflows/inference-service/guide.md).
+
 For a containerized reasoner HTTP microservice,
 read the [service reference](../../../tools/cosmos_workflows/inference-service/guide.md).
 Resolve the model action before selecting its image. Framework DCP inputs
@@ -65,6 +72,12 @@ and track start/status/logs/stop using its job contract.
 - **Resume**: interrupted runs can be resumed by re-running the same command — existing outputs are skipped automatically.
 - **`--keep-going`**: continues processing remaining samples after a per-sample failure (e.g. guardrail rejection). Used in online serving by default.
 - **Unique names**: every sample in a run must have a unique `name` field, or the script will error.
+
+## Bundled assets
+
+| Asset                                                                                                | Path                                                                            | Used by                                                          |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| One RoboVQA clip (`robot_sachet.mp4`); Hugging Face `Tianli/robovqa`, revision `eb58194`, Apache-2.0 | `.agents/skills/cosmos3-inference/assets/reasoner/` (source in its `README.md`) | the reasoner CLI and HTTP service examples and this skill's eval |
 
 ## Related skills
 
