@@ -10,6 +10,7 @@ from difflib import SequenceMatcher
 import nltk
 from better_profanity import profanity
 
+from cosmos_framework.auxiliary.guardrail.blocklist.lookalikes import fold_lookalikes
 from cosmos_framework.auxiliary.guardrail.blocklist.utils import read_keyword_list_from_dir, to_ascii
 from cosmos_framework.auxiliary.guardrail.common.core import (
     GUARDRAIL1_CHECKPOINT,
@@ -30,11 +31,48 @@ CENSOR_SENTINEL = "\x00"
 # never used to decide whether something was censored.
 CENSOR = misc.Color.red("*")
 
-# Characters that occupy no width, or that only reorder what is drawn: zero-width
-# spaces and joiners, the soft hyphen, and the bidirectional controls. They render
-# as nothing, so a blocklist entry split by one still reads as the entry to a human
-# while reaching the matcher as a token it does not recognise.
-INVISIBLE_CHARS = re.compile(r"[­​-‏‪-‮⁠-⁤﻿]")
+# Characters a reader does not see as part of a word. A blocklist entry split
+# by one still reads as the entry to a human while reaching the matcher as a
+# token it does not recognise. They come in two kinds, and alternate_spellings
+# reads them both ways, because a prompt can mix them: "snow<U+2800>whi<U+200B>te"
+# shows a gap between the words and nothing inside the second one.
+#
+# Zero-width: they draw nothing. Every format character (Unicode category Cf)
+# except the few that draw a glyph -- zero-width spaces and joiners, the soft
+# hyphen, the bidirectional controls, word joiner and the invisible operators,
+# the byte order mark, the tag characters -- plus the combining grapheme joiner,
+# the variation selectors, the Mongolian free variation selectors and the Khmer
+# inherent vowels. test_every_format_character_is_invisible pins the Cf part to
+# the running Python's Unicode data, so a new Cf character fails a test instead
+# of passing silently.
+_ZERO_WIDTH = (
+    "\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb"
+    "\U00013430-\U0001343f\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0001\U000e0020-\U000e007f"
+    "\u034f"  # combining grapheme joiner
+    "\u17b4\u17b5"  # Khmer inherent vowels
+    "\u180b-\u180d\u180f"  # Mongolian free variation selectors
+    "\ufe00-\ufe0f\U000e0100-\U000e01ef"  # variation selectors
+)
+# Blank or visible separators: they draw a blank gap (the Hangul fillers, the
+# blank Braille pattern) or a mark of their own (the Cf characters that prefix
+# numbers or abbreviations, such as U+0600 and U+06DD). A reader takes them as
+# a gap between words, never as nothing.
+_SEPARATORS = (
+    "\u115f\u1160\u3164\uffa0"  # Hangul fillers
+    "\u2800"  # Braille pattern blank
+    "\u0600-\u0605\u06dd\u070f\u0890\u0891\u08e2\U000110bd\U000110cd"  # visible format characters
+)
+ZERO_WIDTH_CHARS = re.compile(f"[{_ZERO_WIDTH}]")
+SEPARATOR_CHARS = re.compile(f"[{_SEPARATORS}]")
+INVISIBLE_CHARS = re.compile(f"[{_ZERO_WIDTH}{_SEPARATORS}]")
+
+
+class _NoLemmatizer:
+    """Leaves every token as it is. The default for Blocklist.from_lists."""
+
+    @staticmethod
+    def lemmatize(token: str) -> str:
+        return token
 
 
 class Blocklist(ContentSafetyGuardrail):
@@ -57,10 +95,49 @@ class Blocklist(ContentSafetyGuardrail):
         self.guardrail_partial_match_min_chars = guardrail_partial_match_min_chars
         self.guardrail_partial_match_letter_count = guardrail_partial_match_letter_count
 
-        # Load blocklist and whitelist keywords
-        self.blocklist_words = read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "custom"))
-        self.whitelist_words = read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "whitelist"))
-        self.exact_match_words = read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "exact_match"))
+        self.load_lists(
+            blocklist_words=read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "custom")),
+            whitelist_words=read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "whitelist")),
+            exact_match_words=read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "exact_match")),
+        )
+
+    @classmethod
+    def from_lists(
+        cls,
+        blocklist_words: list[str],
+        whitelist_words: list[str] | None = None,
+        exact_match_words: list[str] | None = None,
+        lemmatizer=None,
+        guardrail_partial_match_min_chars: int = 6,
+        guardrail_partial_match_letter_count: float = 0.4,
+    ) -> "Blocklist":
+        """Build a Blocklist from keyword lists in memory, without the checkpoint.
+
+        For the tests and the list-maintenance tools. It goes through load_lists
+        like __init__ does, so callers exercise the production bookkeeping rather
+        than a copy of it. The matcher is a fresh instance, not the module-level
+        singleton production shares. ``lemmatizer`` defaults to leaving tokens
+        unchanged; pass nltk's WordNetLemmatizer to match production exactly.
+        """
+        from better_profanity.better_profanity import Profanity
+
+        blocklist = cls.__new__(cls)
+        blocklist.profanity = Profanity()
+        blocklist.lemmatizer = lemmatizer if lemmatizer is not None else _NoLemmatizer()
+        blocklist.guardrail_partial_match_min_chars = guardrail_partial_match_min_chars
+        blocklist.guardrail_partial_match_letter_count = guardrail_partial_match_letter_count
+        blocklist.load_lists(blocklist_words, whitelist_words or [], exact_match_words or [])
+        return blocklist
+
+    def load_lists(self, blocklist_words: list[str], whitelist_words: list[str], exact_match_words: list[str]) -> None:
+        """Load the keyword lists into the matcher.
+
+        The single place that turns lists into matcher state, shared by __init__
+        and from_lists.
+        """
+        self.blocklist_words = blocklist_words
+        self.whitelist_words = whitelist_words
+        self.exact_match_words = exact_match_words
 
         self.profanity.load_censor_words(custom_words=self.blocklist_words, whitelist_words=self.whitelist_words)
         log.debug(f"Loaded {len(self.blocklist_words)} words/phrases from blocklist")
@@ -86,9 +163,22 @@ class Blocklist(ContentSafetyGuardrail):
 
         The collapse also closes a plainer hole: a multi-word entry was defeated
         by typing two spaces between its words.
+
+        The code-point folding is a separate method because is_safe also needs it
+        on its own: see alternate_spellings.
         """
+        return Blocklist.fold_invisible_characters(Blocklist.normalize_code_points(prompt))
+
+    @staticmethod
+    def normalize_code_points(prompt: str) -> str:
+        """NFKC, combining marks removed, runs of whitespace collapsed."""
         prompt = unicodedata.normalize("NFKC", prompt)
         prompt = "".join(c for c in unicodedata.normalize("NFKD", prompt) if not unicodedata.combining(c))
+        return " ".join(prompt.split())
+
+    @staticmethod
+    def fold_invisible_characters(prompt: str) -> str:
+        """Rewrite invisible characters (INVISIBLE_CHARS) to a space."""
         return " ".join(INVISIBLE_CHARS.sub(" ", prompt).split())
 
     def censor_prompt(self, input_prompt: str) -> tuple[bool, str]:
@@ -226,9 +316,74 @@ class Blocklist(ContentSafetyGuardrail):
         # Check if the input is empty
         if not input_prompt:
             return False, "Input is empty"
-        input_prompt = to_ascii(input_prompt)
 
-        # Check full sentence for censored words
+        safe, message = self.check_passes(input_prompt)
+        if not safe or input_prompt.isascii():
+            return safe, message
+
+        # The passes run once more on each other way the prompt can be read.
+        # Like the raw pass, these only add checks: a prompt blocked as written
+        # is still blocked.
+        for spelling in self.alternate_spellings(input_prompt):
+            safe, message = self.check_passes(spelling)
+            if not safe:
+                return safe, message
+        return safe, message
+
+    @classmethod
+    def alternate_spellings(cls, prompt: str) -> list[str]:
+        """Other readings of a non-ASCII prompt that the passes must also see.
+
+        * The code points folded (NFKC, combining marks removed). censor_prompt
+          folds them itself, but the lemmatized pass and the exact-match check
+          only see the prompt after to_ascii, which deletes a fullwidth or
+          accented letter rather than folding it. Without this reading an entry
+          that is only on the exact-match list is missed when spelled that way.
+        * Invisible characters deleted rather than turned into a space. The
+          space reading catches "snow<U+200B>white" as the entry "snow white",
+          but splits "sn<U+200B>ow white" into "sn ow white", which matches
+          nothing. Deleting them reads it as the entry.
+        * Zero-width characters deleted and blank or visible separators turned
+          into a space, the way a reader sees them. Neither reading above
+          catches "snow<U+2800>whi<U+200B>te": the space reading splits "whi
+          te", and deleting both fuses "snowwhite".
+        * Letters from other scripts drawn like Latin ones ("sn<U+043E>w", with
+          a Cyrillic o) folded to Latin. They survive NFKC, and to_ascii deletes
+          them, so every pass reads the word with a letter missing. NFKC runs
+          first, so a word mixing fullwidth and lookalike letters is recognized
+          as one disguised word.
+
+        Each reading is returned only if it differs from the prompt.
+        """
+        normalized = cls.normalize_code_points(prompt)
+        joined = " ".join(INVISIBLE_CHARS.sub("", normalized).split())
+        mixed = " ".join(SEPARATOR_CHARS.sub(" ", ZERO_WIDTH_CHARS.sub("", normalized)).split())
+        spellings: list[str] = []
+        for spelling in (normalized, joined, mixed, *(fold_lookalikes(s) for s in (normalized, joined, mixed))):
+            if spelling != prompt and spelling not in spellings:
+                spellings.append(spelling)
+        return spellings
+
+    def check_passes(self, input_prompt: str) -> tuple[bool, str]:
+        """Run every blocklist pass on one spelling of the prompt."""
+        # An extra first pass sees the prompt as written. to_ascii rewrites every
+        # non-ASCII run to a space, which erases exactly the spellings
+        # censor_prompt was taught to fold: a fullwidth or accented letter is
+        # gone rather than normalized, so the word it spells never reaches the
+        # matcher and the prompt reads as clean. censor_prompt does its own
+        # code-point folding, so it needs the original text to fold. An ASCII
+        # prompt is left unchanged by to_ascii, so the next pass sees the same
+        # text and this one is skipped.
+        if not input_prompt.isascii():
+            censored, message = self.censor_prompt(input_prompt)
+            if censored:
+                return False, message
+
+        # The ASCII pass is kept rather than replaced. Some separators survive the
+        # folding -- "boston·dynamics" stays one token on the raw pass -- and
+        # only to_ascii turns them into the space the entry needs. Adding a pass
+        # means nothing that was blocked before can pass now.
+        input_prompt = to_ascii(input_prompt)
         censored, message = self.censor_prompt(input_prompt)
         if censored:
             return False, message

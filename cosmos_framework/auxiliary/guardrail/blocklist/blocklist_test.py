@@ -1,11 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import sys
 import unicodedata
 
 import pytest
 
-from cosmos_framework.auxiliary.guardrail.blocklist.blocklist import Blocklist
+from cosmos_framework.auxiliary.guardrail.blocklist.blocklist import (
+    INVISIBLE_CHARS,
+    SEPARATOR_CHARS,
+    ZERO_WIDTH_CHARS,
+    Blocklist,
+)
 
 
 @pytest.mark.L1
@@ -47,20 +53,47 @@ def test_partial_match_with_threshold():
     assert match is False
 
 
-def _blocklist_with_words(words: list[str], whitelist: list[str] | None = None) -> Blocklist:
+class _IdentityLemmatizer:
+    """Stand-in for WordNetLemmatizer, so a test needs no downloaded corpus.
+
+    The lemmatizer belongs to the second pass, which re-checks the prompt with
+    words reduced to their stems. Nothing here tests lemmatization, and taking a
+    dependency on nltk data would make these tests fail in any environment
+    without the checkpoint's nltk_data directory.
+    """
+
+    @staticmethod
+    def lemmatize(token: str) -> str:
+        return token
+
+
+def _blocklist_with_words(
+    words: list[str], whitelist: list[str] | None = None, exact_match: list[str] | None = None
+) -> Blocklist:
     """Build a Blocklist around a small word list, without downloading a checkpoint.
 
-    censor_prompt only needs the profanity matcher and the whitelist, so the
-    heavyweight __init__ (checkpoint download, nltk data) is bypassed here.
+    The heavyweight __init__ (checkpoint download, nltk data) is bypassed, but
+    from_lists loads the lists through the same code as __init__, so a test
+    exercises the real bookkeeping and can call the real entry point, is_safe.
     """
-    from better_profanity.better_profanity import Profanity
+    return Blocklist.from_lists(
+        words,
+        whitelist,
+        exact_match,
+        lemmatizer=_IdentityLemmatizer(),
+        guardrail_partial_match_min_chars=100,
+    )
 
-    whitelist = whitelist or []
-    bl = Blocklist.__new__(Blocklist)
-    bl.profanity = Profanity()
-    bl.profanity.load_censor_words(custom_words=words, whitelist_words=whitelist)
-    bl.whitelist_words = whitelist
-    return bl
+
+def _blocked(bl: Blocklist, prompt: str) -> tuple[bool, str]:
+    """Run the real entry point, is_safe, and report whether it blocked.
+
+    is_safe rather than censor_prompt: is_safe also runs to_ascii, a lemmatized
+    pass and the exact-match check, and a hole in any of them does not show up
+    when censor_prompt is called on its own.
+    """
+    safe, message = bl.is_safe(prompt)
+    return not safe, message
 
 
 @pytest.mark.L1
@@ -276,9 +309,9 @@ def test_invisible_characters_do_not_split_a_blocked_phrase(name, prompt):
     """
     bl = _blocklist_with_words(["snow white"])
 
-    blocked, _ = bl.censor_prompt(prompt)
+    safe, _ = bl.is_safe(prompt)
 
-    assert blocked is True, f"{name} was not folded away"
+    assert safe is False, f"{name} was not folded away"
 
 
 @pytest.mark.L1
@@ -295,9 +328,228 @@ def test_unusual_spaces_do_not_split_a_blocked_phrase(name, prompt):
     """Any Unicode space between the words of an entry must still match."""
     bl = _blocklist_with_words(["snow white"])
 
-    blocked, _ = bl.censor_prompt(prompt)
+    safe, _ = bl.is_safe(prompt)
 
-    assert blocked is True, f"{name} was not folded away"
+    assert safe is False, f"{name} was not folded away"
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("zero width space", "a sn\u200bow white poster"),
+        ("zero width joiner", "a snow wh\u200dite poster"),
+        ("soft hyphen", "a sn\u00adow white poster"),
+        ("several", "a s\u200bn\u200bo\u200bw white poster"),
+        ("with a lookalike", "a sn\u200b\u043ew white poster"),
+    ],
+)
+def test_invisible_characters_inside_one_word_of_a_phrase(name, prompt):
+    """An invisible character inside one word of a multi-word entry must not hide it.
+
+    Turning it into a space reads "sn<U+200B>ow white" as "sn ow white", which
+    matches nothing, while a reader sees the entry. Deleting it is the other
+    reading, and both are checked.
+    """
+    bl = _blocklist_with_words(["snow white"])
+
+    safe, _ = bl.is_safe(prompt)
+
+    assert safe is False, f"{name} let the entry through"
+
+
+@pytest.mark.L1
+def test_invisible_characters_between_words_still_read_as_a_space():
+    """Deleting invisible characters is an extra reading; the space reading stays."""
+    bl = _blocklist_with_words(["snow white"])
+
+    safe, _ = bl.is_safe("a snow\u200bwhite poster")
+
+    assert safe is False
+
+
+@pytest.mark.L1
+def test_deleting_invisible_characters_does_not_block_ordinary_text():
+    """Text that uses invisible characters legitimately must still come back safe."""
+    bl = _blocklist_with_words(["snow white", "deskin"])
+
+    for prompt in (
+        "a family emoji \U0001f468\u200d\U0001f469\u200d\U0001f467 on a desk",
+        "a long\u00adword with a soft hyphen",
+        "two\u200bwords joined by a zero width space",
+    ):
+        safe, message = bl.is_safe(prompt)
+        assert safe is True, f"{prompt!r} was wrongly reported as blocked: {message}"
+
+
+@pytest.mark.L1
+def test_every_format_character_is_invisible():
+    """Every Unicode format character (Cf) is read as invisible.
+
+    The set is written out rather than built from unicodedata at import, so
+    this pins it to the running Python's Unicode data: a format character added
+    in a later Unicode version fails here instead of passing the blocklist.
+    """
+    missing = [
+        f"U+{code_point:04X}"
+        for code_point in range(sys.maxunicode + 1)
+        if unicodedata.category(chr(code_point)) == "Cf" and not INVISIBLE_CHARS.fullmatch(chr(code_point))
+    ]
+
+    assert missing == []
+
+
+@pytest.mark.L1
+def test_visible_format_characters_are_separators_not_zero_width():
+    """A format character that draws a glyph reads as a gap, never as nothing."""
+    for char in "\u0600\u06dd\u070f\u08e2\U000110bd":
+        assert unicodedata.category(char) == "Cf"
+        assert SEPARATOR_CHARS.fullmatch(char) and not ZERO_WIDTH_CHARS.fullmatch(char), f"U+{ord(char):04X}"
+    for char in "\u200b\u00ad\ufe0f\u034f\U000e0041":
+        assert ZERO_WIDTH_CHARS.fullmatch(char) and not SEPARATOR_CHARS.fullmatch(char), f"U+{ord(char):04X}"
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("blank Braille between, zero width inside", "a snow\u2800whi\u200bte poster"),
+        ("Hangul filler between, zero width inside", "a snow\u3164whi\u200bte poster"),
+        ("halfwidth Hangul filler between", "a snow\uffa0whi\u200bte poster"),
+        ("choseong filler between", "a snow\u115fwhi\u200bte poster"),
+        ("zero width inside, blank Braille between", "a sn\u200bow\u2800white poster"),
+        ("visible format character between", "a snow\u06ddwhi\u200bte poster"),
+        ("blank between, variation selector inside", "a snow\u2800whi\ufe0fte poster"),
+        ("joiner inside, Hangul filler between", "a sn\u034fow\u3164white poster"),
+        ("Hangul filler between, joiner inside", "a snow\u3164whi\u034fte poster"),
+    ],
+)
+def test_blank_between_words_and_zero_width_inside_a_word(name, prompt):
+    """Found in review: a reader sees a gap between the words and nothing inside one.
+
+    Reading every invisible character as a space splits "whi te"; deleting
+    every one fuses "snowwhite". The reader's reading -- the gap a space, the
+    zero-width character nothing -- is checked too.
+    """
+    for lists in ({"words": ["snow white"]}, {"words": [], "exact_match": ["snow white"]}):
+        bl = _blocklist_with_words(lists["words"], exact_match=lists.get("exact_match"))
+        safe, _ = bl.is_safe(prompt)
+        assert safe is False, f"{name} let {prompt!r} through ({lists})"
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "char"),
+    [
+        ("variation selector 16", "\ufe0f"),
+        ("variation selector 1", "\ufe00"),
+        ("variation selector 17", "\U000e0100"),
+        ("combining grapheme joiner", "\u034f"),
+        ("Hangul filler", "\u3164"),
+        ("halfwidth Hangul filler", "\uffa0"),
+        ("Braille pattern blank", "\u2800"),
+        ("tag letter A", "\U000e0041"),
+        ("Mongolian free variation selector", "\u180b"),
+        ("Khmer inherent vowel", "\u17b4"),
+    ],
+)
+def test_other_invisible_characters_inside_one_word_of_an_entry(name, char):
+    """Found in review: characters that draw nothing but were not folded."""
+    bl = _blocklist_with_words(["snow white"])
+
+    for prompt in (f"a sn{char}ow white poster", f"a snow{char}white poster", f"a snow white{char} poster"):
+        safe, _ = bl.is_safe(prompt)
+        assert safe is False, f"{name} let {prompt!r} through"
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("o with stroke", "a sn\u00f8w white poster"),
+        ("small capitals", "a \ua731\u0274\u1d0f\u1d21 \u1d21\u029c\u026a\u1d1b\u1d07 poster"),
+        ("small capital n only", "a s\u0274ow white poster"),
+    ],
+)
+def test_small_capitals_and_stroked_letters_do_not_hide_an_entry(name, prompt):
+    """Found in review: letters missing from confusables.txt."""
+    bl = _blocklist_with_words(["snow white"])
+
+    safe, _ = bl.is_safe(prompt)
+
+    assert safe is False, f"{name} let the entry through"
+
+
+@pytest.mark.L1
+def test_emoji_presentation_selectors_do_not_block_ordinary_text():
+    """Variation selectors and tag sequences in ordinary emoji stay harmless."""
+    bl = _blocklist_with_words(["snow white", "deskin"])
+
+    for prompt in (
+        "a red heart \u2764\ufe0f on a shelf in the corner",
+        "a flag \U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f on a pole",
+        "a snowman \u2603\ufe0f in white snow",
+    ):
+        safe, message = bl.is_safe(prompt)
+        assert safe is True, f"{prompt!r} was wrongly reported as blocked: {message}"
+
+
+@pytest.mark.L1
+def test_ascii_prompt_is_censored_once_per_pass(monkeypatch):
+    """For an ASCII prompt the as-written pass would repeat the to_ascii pass, so it is skipped."""
+    bl = _blocklist_with_words(["snow white"])
+    seen: list[str] = []
+    censor_prompt = bl.censor_prompt
+
+    def counting_censor_prompt(prompt):
+        seen.append(prompt)
+        return censor_prompt(prompt)
+
+    monkeypatch.setattr(bl, "censor_prompt", counting_censor_prompt)
+
+    assert bl.is_safe("a plain ascii prompt") == (True, "Input is safe")
+    assert seen == ["a plain ascii prompt", "a plain ascii prompt"]  # to_ascii pass, lemmatized pass
+
+    seen.clear()
+    bl.is_safe("a caf\u00e9 prompt")
+    assert seen[0] == "a caf\u00e9 prompt"  # the as-written pass still runs on non-ASCII text
+
+
+class _PluralLemmatizer:
+    """Strips a trailing "s", the way WordNet reduces "dynamics" to "dynamic".
+
+    With the identity stand-in, the lemmatized pass re-checks the ASCII prompt
+    unchanged and catches anything the first pass missed. An entry whose words
+    lemmatize to something else, such as "boston dynamics", gets no such rescue,
+    which is the case these tests need.
+    """
+
+    @staticmethod
+    def lemmatize(token: str) -> str:
+        return token[:-1] if token.endswith("s") else token
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("middle dot", "a boston·dynamics robot"),
+        ("bullet", "a boston•dynamics robot"),
+        ("arrow", "a boston→dynamics robot"),
+    ],
+)
+def test_separators_the_folding_keeps_still_split_a_blocked_phrase(name, prompt):
+    """A separator NFKC leaves alone reaches the raw pass as part of one token.
+
+    Only to_ascii turns it into the space the entry needs, so the ASCII pass has
+    to run as well as the raw one, not instead of it.
+    """
+    bl = _blocklist_with_words(["boston dynamics"])
+    bl.lemmatizer = _PluralLemmatizer()
+
+    safe, _ = bl.is_safe(prompt)
+
+    assert safe is False, f"{name} separator let the entry through"
 
 
 @pytest.mark.L1
@@ -305,9 +557,9 @@ def test_fullwidth_letters_are_folded_to_ascii():
     """Fullwidth forms are drawn as the ASCII letters they normalize to."""
     bl = _blocklist_with_words(["snow white"])
 
-    blocked, _ = bl.censor_prompt("a ｓｎｏｗ white poster")
+    safe, _ = bl.is_safe("a ｓｎｏｗ white poster")
 
-    assert blocked is True
+    assert safe is False
 
 
 @pytest.mark.L1
@@ -316,8 +568,8 @@ def test_combining_marks_do_not_make_a_new_word():
     bl = _blocklist_with_words(["snow white"])
 
     for prompt in ("a snów white poster", unicodedata.normalize("NFD", "a snów white poster")):
-        blocked, _ = bl.censor_prompt(prompt)
-        assert blocked is True, f"{prompt!r} was not folded away"
+        safe, _ = bl.is_safe(prompt)
+        assert safe is False, f"{prompt!r} was not folded away"
 
 
 @pytest.mark.L1
@@ -337,6 +589,133 @@ def test_normalization_does_not_block_ordinary_text():
 
 
 @pytest.mark.L1
+def test_first_pass_on_raw_non_ascii_does_not_block_ordinary_text(monkeypatch):
+    """The first pass now sees the prompt before to_ascii, so pin what that means.
+
+    Running censor_prompt ahead of to_ascii is what lets the matcher fold a
+    fullwidth or accented spelling. The cost is that non-ASCII text no longer
+    arrives flattened to spaces, so ordinary prose in another script -- or with
+    an accent, an em dash, a CJK sentence -- reaches the matcher as written and
+    must still come back safe.
+
+    word_tokenize is stubbed to a split so the test does not depend on the
+    nltk data that ships in the checkpoint directory; the second pass is not
+    what is under test here.
+    """
+    monkeypatch.setattr(
+        "cosmos_framework.auxiliary.guardrail.blocklist.blocklist.nltk.word_tokenize",
+        str.split,
+    )
+    bl = _blocklist_with_words(["snow white"], whitelist=["flat"])
+
+    for prompt in (
+        "café scene with Élodie",
+        "an em dash — and an arrow → in the text",
+        "こんにちは from the model",
+        "a robot on a flat desk",
+        "Grüße aus München",
+    ):
+        safe, message = bl.is_safe(prompt)
+        assert safe is True, f"{prompt!r} was wrongly reported as blocked: {message}"
+
+
+# Written as escapes: the point of these letters is that they cannot be told
+# apart from Latin ones on screen.
+_CYRILLIC_A = "\u0430"
+_CYRILLIC_O = "\u043e"
+_GREEK_O = "\u03bf"
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "entry", "prompt"),
+    [
+        ("cyrillic o", "snow white", f"a sn{_CYRILLIC_O}w white poster"),
+        ("greek o", "snow white", f"a sn{_GREEK_O}w white poster"),
+        ("capital cyrillic o", "snow white", "a SN\u041eW WHITE poster"),
+        ("single-word entry", "batman", f"a b{_CYRILLIC_A}tman toy"),
+        ("every letter swapped", "pace", "a \u0440\u0430\u0441\u0435 car"),
+        ("mixed with fullwidth", "snow white", f"a \uff53\uff4e{_CYRILLIC_O}\uff57 white poster"),
+        ("mixed with an invisible split", "batman", f"a b\u200b{_CYRILLIC_A}tman toy"),
+    ],
+)
+def test_lookalike_letters_do_not_spell_a_new_word(name, entry, prompt):
+    """A letter from another script drawn like a Latin one must not hide the entry.
+
+    NFKC leaves these letters alone and to_ascii deletes them, so every other
+    pass reads the word with a letter missing.
+    """
+    bl = _blocklist_with_words([entry])
+
+    safe, _ = bl.is_safe(prompt)
+
+    assert safe is False, f"{name} let the entry through"
+
+
+@pytest.mark.L1
+def test_lookalike_folding_leaves_real_words_alone():
+    """A word with letters that have no Latin twin is real text, not a disguise.
+
+    The Russian word for "pine" starts with three lookalikes (c, o, c) and then
+    has letters with no Latin twin. Folding the lookalikes anyway, and letting
+    to_ascii drop the rest, leaves Latin fragments that fuse into the entry.
+    """
+    bl = _blocklist_with_words(["coca"])
+
+    for prompt in ("\u0441\u043e\u0441\u043d\u0430 \u0443 \u043e\u043a\u043d\u0430", "\u0441\u043e\u0441\u043d\u0430"):
+        safe, message = bl.is_safe(prompt)
+        assert safe is True, f"{prompt!r} was wrongly reported as blocked: {message}"
+
+
+@pytest.mark.L1
+def test_ascii_prompt_skips_the_lookalike_pass(monkeypatch):
+    """English prompts are untouched: the lookalike pass never runs on ASCII."""
+
+    def fail(prompt):
+        raise AssertionError(f"lookalike pass ran on {prompt!r}")
+
+    monkeypatch.setattr("cosmos_framework.auxiliary.guardrail.blocklist.blocklist.fold_lookalikes", fail)
+    bl = _blocklist_with_words(["snow white"])
+
+    assert bl.is_safe("a robot sitting at a table")[0] is True
+    assert bl.is_safe("a snow white poster")[0] is False
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("arrow", "a snow→white poster"),
+        ("emoji", "a snow🙂white poster"),
+        ("ellipsis", "a snow…white poster"),
+        ("middle dot", "a snow·white poster"),
+    ],
+)
+def test_non_ascii_separator_is_caught_by_the_flattened_pass(monkeypatch, name, prompt):
+    """The two passes cover different evasions, and both are needed.
+
+    A visible non-ASCII character between the words of an entry is not an
+    invisible mark, so normalize_for_matching leaves it in place and the first
+    pass -- which now sees raw text -- does not match. to_ascii rewrites it to a
+    space, so the second pass does. The reverse holds for a fullwidth or
+    accented spelling, which only the first pass can fold.
+
+    Neither pass is redundant: dropping either one opens the family the other
+    covers. This test fails if the flattened pass is ever removed or moved
+    ahead of the first.
+    """
+    monkeypatch.setattr(
+        "cosmos_framework.auxiliary.guardrail.blocklist.blocklist.nltk.word_tokenize",
+        str.split,
+    )
+    bl = _blocklist_with_words(["snow white"])
+
+    safe, _ = bl.is_safe(prompt)
+
+    assert safe is False, f"{name} separator was not caught by either pass"
+
+
+@pytest.mark.L1
 def test_normalization_preserves_the_earlier_sentinel_and_markdown_behaviour():
     """Folding runs after the sentinel strip and must not resurrect the "*" bug."""
     bl = _blocklist_with_words(["badword"])
@@ -347,3 +726,60 @@ def test_normalization_preserves_the_earlier_sentinel_and_markdown_behaviour():
     blocked, message = bl.censor_prompt("a bad\x00word in the text")
     assert blocked is True
     assert "badword" not in message
+
+
+def _fullwidth(text: str) -> str:
+    """Lowercase ASCII letters rewritten as their fullwidth presentation forms."""
+    return "".join(chr(ord(c) - 0x61 + 0xFF41) if "a" <= c <= "z" else c for c in text)
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("verbatim", "a chromebook on the desk"),
+        ("fullwidth", f"a {_fullwidth('chromebook')} on the desk"),
+        ("accent", "a chromébook on the desk"),
+        ("decomposed accent", unicodedata.normalize("NFD", "a chromébook on the desk")),
+        ("lookalike", f"a chr{_CYRILLIC_O}mebook on the desk"),
+        ("invisible split", "a chrome\u200bbook on the desk"),
+    ],
+)
+def test_exact_match_entry_is_folded_like_the_other_lists(monkeypatch, name, prompt):
+    """An entry only on the exact-match list is caught however it is spelled.
+
+    The exact-match check runs on the prompt after to_ascii, which deletes a
+    fullwidth or accented letter instead of folding it, so the folded reading
+    has to go through the whole chain of passes, not only censor_prompt.
+    The custom list holds an unrelated entry, so only the exact-match check can
+    block these prompts.
+    """
+    monkeypatch.setattr(
+        "cosmos_framework.auxiliary.guardrail.blocklist.blocklist.nltk.word_tokenize",
+        str.split,
+    )
+    bl = _blocklist_with_words(["deskin"], exact_match=["chromebook"])
+
+    safe, message = bl.is_safe(prompt)
+
+    assert safe is False, f"{name} spelling of an exact-match entry was let through"
+    assert "Exact Match Word" in message
+
+
+@pytest.mark.L1
+def test_exact_match_folding_does_not_block_ordinary_text(monkeypatch):
+    """The folded reading must not invent exact matches in clean text."""
+    monkeypatch.setattr(
+        "cosmos_framework.auxiliary.guardrail.blocklist.blocklist.nltk.word_tokenize",
+        str.split,
+    )
+    bl = _blocklist_with_words(["deskin"], exact_match=["chromebook"])
+
+    for prompt in (
+        "a chrome bowl on the desk",
+        "café scene with Élodie",
+        f"a {_fullwidth('laptop')} on the desk",
+        "\u0441\u043e\u0441\u043d\u0430 \u0443 \u043e\u043a\u043d\u0430",
+    ):
+        safe, message = bl.is_safe(prompt)
+        assert safe is True, f"{prompt!r} was wrongly reported as blocked: {message}"
