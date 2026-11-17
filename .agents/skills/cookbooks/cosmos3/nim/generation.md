@@ -259,8 +259,8 @@ variational autoencoder (VAE) compresses time by 4, and trims to exactly
 | `480` | 297 |
 | `720` | 197 |
 
-These limits do not apply to multiview, which accepts 2 or more frames per
-camera, with 24 through 400 recommended. Refer to [Multiview Generation Defaults and Limits](multiview.md#generation-defaults-and-limits).
+These limits do not apply to multiview, which accepts 2 through 401 frames
+per camera, with at least 24 recommended. Refer to [Multiview Generation Defaults and Limits](multiview.md#generation-defaults-and-limits).
 
 ### Resolution Keys
 
