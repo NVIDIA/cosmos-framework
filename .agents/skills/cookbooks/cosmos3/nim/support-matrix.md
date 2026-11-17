@@ -244,11 +244,12 @@ They run slower but fit GPUs with less memory.
 | BF16, FP8 | `throughput` | 8 | One replica per GPU | True | 74 / 78 GiB | 609 / 516 GiB |
 
 Where BF16 and FP8 floors differ, the table lists BF16 / FP8. The floors come
-from per-GPU peaks measured on B200 for the largest request (720p, 200 frames,
-eleven cameras, joint LiDAR), plus the resident guardrails and headroom, and
+from per-GPU peaks measured on B200 for a 720p, 200-frame, eleven-camera joint
+LiDAR request, plus the resident guardrails and headroom, and
 were checked on every listed GPU class. Profile selection checks both floors,
 so the host or container memory limit must meet the system-memory floor as well
-as the GPUs meeting the VRAM floor.
+as the GPUs meeting the VRAM floor. Multiview has no frame ceiling, so longer requests
+can exceed these floors.
 
 The system-memory floor grows with the GPU count because every GPU runs its own
 engine process with its own host buffers. `layer` profiles keep a pinned copy of
