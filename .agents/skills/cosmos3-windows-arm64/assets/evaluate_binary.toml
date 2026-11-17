@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+# Framework evaluator template for yes/no video QA on native Windows on Arm (cosmos-reasoner-evaluate --config <this>).
+# Set results_dir, the dataset paths and model.model_name; keep [vision] in step with the training input.
+results_dir = "C:/cosmos3/out/eval_smoke"
+
+[task]
+type = "binary"
+
+[dataset]
+annotation_path = "C:/cosmos3/data/smoke/annotations_val.json"
+media_dir = "C:/cosmos3/data/smoke/media"
+system_prompt = "You are a helpful assistant."
+
+[model]
+model_name = "C:/cosmos3/out/cosmos3_reasoner/cosmos_video_conversation_sft/smoke_20/export"   # or the converted base model for a baseline
+dtype = "bfloat16"
+max_length = 16384
+enable_lora = false
+
+[evaluation]
+answer_type = "freeform"
+batch_size = 1
+skip_saved = false
+
+[vision]
+video_decoder = "torchcodec-cuda-on-demand"
+decoder_device = "cuda"
+num_frames = 8
+min_pixels = 4096
+max_pixels = 147456          # per frame, the training budget for 8 frames. The evaluator rounds each frame to multiples of 64
+                             # (training: 32), so a 480x288 clip is evaluated at 512x256; see SKILL.md, Variant 5.
+                             # Framework PR #398 removes the difference; it is not in the pinned commit
+dataloader_num_workers = 1   # 1 worker + prefetch + spawn, or 0 workers with prefetch disabled; the mix fails at start
+dataloader_prefetch_factor = 2
+dataloader_multiprocessing_context = "spawn"
+
+[generation]
+max_tokens = 10
+temperature = 0.0
+max_retries = 1
+
+[metrics]
+names = []

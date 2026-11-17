@@ -1,0 +1,58 @@
+[
+ {
+  "id": "smoke_008__q1",
+  "video": "smoke_008.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs there a pedestrian on the road? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "yes"
+   }
+  ]
+ },
+ {
+  "id": "smoke_008__q2",
+  "video": "smoke_008.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs a vehicle stopped or braking in this clip? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "no"
+   }
+  ]
+ },
+ {
+  "id": "smoke_009__q1",
+  "video": "smoke_009.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs there a pedestrian on the road? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "no"
+   }
+  ]
+ },
+ {
+  "id": "smoke_009__q2",
+  "video": "smoke_009.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs a vehicle stopped or braking in this clip? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "yes"
+   }
+  ]
+ }
+]

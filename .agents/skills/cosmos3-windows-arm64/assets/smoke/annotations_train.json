@@ -1,0 +1,226 @@
+[
+ {
+  "id": "smoke_000__q1",
+  "video": "smoke_000.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs there a pedestrian on the road? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "yes"
+   }
+  ]
+ },
+ {
+  "id": "smoke_000__q2",
+  "video": "smoke_000.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs a vehicle stopped or braking in this clip? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "yes"
+   }
+  ]
+ },
+ {
+  "id": "smoke_001__q1",
+  "video": "smoke_001.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs there a pedestrian on the road? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "no"
+   }
+  ]
+ },
+ {
+  "id": "smoke_001__q2",
+  "video": "smoke_001.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs a vehicle stopped or braking in this clip? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "no"
+   }
+  ]
+ },
+ {
+  "id": "smoke_002__q1",
+  "video": "smoke_002.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs there a pedestrian on the road? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "yes"
+   }
+  ]
+ },
+ {
+  "id": "smoke_002__q2",
+  "video": "smoke_002.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs a vehicle stopped or braking in this clip? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "no"
+   }
+  ]
+ },
+ {
+  "id": "smoke_003__q1",
+  "video": "smoke_003.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs there a pedestrian on the road? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "no"
+   }
+  ]
+ },
+ {
+  "id": "smoke_003__q2",
+  "video": "smoke_003.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs a vehicle stopped or braking in this clip? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "yes"
+   }
+  ]
+ },
+ {
+  "id": "smoke_004__q1",
+  "video": "smoke_004.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs there a pedestrian on the road? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "yes"
+   }
+  ]
+ },
+ {
+  "id": "smoke_004__q2",
+  "video": "smoke_004.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs a vehicle stopped or braking in this clip? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "no"
+   }
+  ]
+ },
+ {
+  "id": "smoke_005__q1",
+  "video": "smoke_005.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs there a pedestrian on the road? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "no"
+   }
+  ]
+ },
+ {
+  "id": "smoke_005__q2",
+  "video": "smoke_005.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs a vehicle stopped or braking in this clip? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "no"
+   }
+  ]
+ },
+ {
+  "id": "smoke_006__q1",
+  "video": "smoke_006.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs there a pedestrian on the road? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "yes"
+   }
+  ]
+ },
+ {
+  "id": "smoke_006__q2",
+  "video": "smoke_006.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs a vehicle stopped or braking in this clip? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "yes"
+   }
+  ]
+ },
+ {
+  "id": "smoke_007__q1",
+  "video": "smoke_007.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs there a pedestrian on the road? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "no"
+   }
+  ]
+ },
+ {
+  "id": "smoke_007__q2",
+  "video": "smoke_007.mp4",
+  "conversations": [
+   {
+    "from": "human",
+    "value": "<video>\nIs a vehicle stopped or braking in this clip? Answer with yes or no."
+   },
+   {
+    "from": "gpt",
+    "value": "no"
+   }
+  ]
+ }
+]

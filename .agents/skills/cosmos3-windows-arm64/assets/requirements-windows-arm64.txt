@@ -1,0 +1,146 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# cosmos-framework dependency set for a NATIVE Windows host (no WSL, no container).
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# These are the exact versions pip resolved to in the verified Windows image and
+# in the verified host venv. They are pinned, not floated, because three of them
+# are load-bearing in a way that is invisible until a run dies:
+#
+#   torch==2.13.0+cu130      the ONLY line shipping cuDNN 9.20. cosmos-framework
+#                            gates its cuDNN attention backend on
+#                            CUDNN_MIN_BACKEND_VERSION = 92000; below that the
+#                            backend silently disables itself and falls back to
+#                            NATTEN, which has no Windows build at all.
+#   torchcodec==0.14.0+cu130 links FFmpeg 7.x (avformat-61).
+#   torchvision==0.28.0+cu130
+#
+# The three +cu130 wheels are not on PyPI. Install with:
+#
+#   pip install -r requirements-cosmos3-win.txt \
+#       --extra-index-url https://download.pytorch.org/whl/cu130
+#
+# NOTE ON pytest
+# --------------
+# pytest is listed here as a RUNTIME dependency of TRAINING, not as a test-only
+# extra. It is not optional and it is not a mistake. cosmos-framework's
+# configs/base/reasoner/config.py recursively imports every module in its
+# experiment package at config-load time, and one of those modules
+# (configs/base/reasoner/experiment/tao_video_sft_test.py) does `import pytest`
+# at module scope. Without it, `cosmos-framework-train` dies before it reads a
+# single byte of the recipe:
+#
+#   ModuleNotFoundError: No module named 'pytest'
+#
+# The verified container image carries pytest==9.1.1 for exactly this reason.
+# Removing it from this list breaks training, not tests.
+
+accelerate==1.14.0
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.3
+aiosignal==1.4.0
+annotated-types==0.8.0
+antlr4-python3-runtime==4.9.3
+anyio==4.14.2
+attrs==26.1.0
+av==18.0.0; platform_machine != "ARM64"  # 18.0.0 has no win_arm64 wheel (19.0.2 ships an abi3 one); not on the reasoner SFT path
+av==19.0.2; platform_machine == "ARM64"  # the abi3 win_arm64 wheel that qwen-vl-utils pulled in unpinned; make_smoke_set.py encodes with it when there is no ffmpeg executable
+boto3==1.43.68
+botocore==1.43.68
+cattrs==26.1.0
+certifi==2026.7.22
+charset-normalizer==3.4.9
+click==8.4.2
+colorama==0.4.6
+contourpy==1.3.3
+cycler==0.12.1
+datasets==5.0.1; platform_machine != "ARM64"  # needs pyarrow (no win_arm64 wheel)
+diffusers==0.39.0
+dill==0.4.1
+docstring_parser==0.18.0
+einops==0.8.2
+einx==0.4.3
+filelock==3.29.0
+fonttools==4.63.0
+frozendict==2.4.7
+frozenlist==1.8.0
+fsspec==2026.4.0
+ftfy==6.3.1
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+huggingface_hub==0.36.2
+hydra-core==1.3.5
+idna==3.18
+ImageIO==2.37.4
+imageio-ffmpeg==0.6.0
+importlib_metadata==9.0.0
+iopath==0.1.10
+Jinja2==3.1.6
+jmespath==1.1.0
+kiwisolver==1.5.0
+loguru==0.7.3
+MarkupSafe==3.0.3
+matplotlib==3.11.1
+mpmath==1.3.0
+msgpack==1.2.1
+multidict==6.7.1
+multiprocess==0.70.19
+networkx==3.6.1
+numpy==2.5.2
+nvidia-cudnn-frontend==1.27.0
+nvidia-ml-py==13.610.43
+obstore==0.11.0; platform_machine != "ARM64"  # W16: no win_arm64 wheel; object-store checkpoint backends only
+omegaconf==2.3.1
+packaging==26.3
+pandas==3.0.5
+peft==0.20.0
+pillow==12.3.0
+platformdirs==4.11.2
+portalocker==4.1.0
+propcache==0.5.2
+protobuf==7.35.1
+psutil==7.2.2
+pyarrow==25.0.1; platform_machine != "ARM64"  # W16: no win_arm64 wheel; parquet_io.py falls back to duckdb
+duckdb==1.5.5; platform_machine == "ARM64"  # W16: parquet backend for the mining stage on Windows ARM64
+pydantic==2.13.4
+pydantic_core==2.46.4
+pyparsing==3.3.2
+pytest==9.1.1
+python-dateutil==2.9.0.post0
+pytz==2026.3.post1
+PyYAML==6.0.3
+qwen-vl-utils==0.0.14
+regex==2026.7.19
+requests==2.34.2
+s3transfer==0.19.2
+safetensors==0.8.0
+scipy==1.18.0
+sentry-sdk==2.67.1
+setuptools==78.1.0
+six==1.17.0
+sympy==1.14.0
+termcolor==3.3.0
+tokenizers==0.22.2
+toml==0.10.2  # cosmos_framework/evaluation/reasoner/evaluate.py imports it; upstream lists it only in the reasoner-eval extra
+torch==2.13.0+cu130; platform_machine != "ARM64"  # ARM64: torch 2.15.0+cu134 from the NVIDIA Windows-on-Arm index, installed first (SKILL.md Block 1)
+torchcodec==0.14.0+cu130; platform_machine != "ARM64"  # ARM64: the CI-built TorchCodec wheel, installed after this file (SKILL.md Block 2)
+torchvision==0.28.0+cu130; platform_machine != "ARM64"  # ARM64: from the same index as torch (SKILL.md Block 1)
+tqdm==4.70.0
+transformers==4.57.6
+typeguard==4.6.0
+typing-inspection==0.4.3
+typing_extensions==4.15.0
+tyro==1.0.15
+tzdata==2026.3
+urllib3==2.7.0
+uv==0.12.3
+wandb==0.28.1
+wcwidth==0.8.2
+websockets==17.0.1
+win32_setctime==1.2.0
+xxhash==3.8.1
+yarl==1.24.5
+zipp==4.1.0

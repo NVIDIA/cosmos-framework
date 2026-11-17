@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Cosmos3 Nano Reasoner video SFT recipe for native Windows on Arm (RTX Spark).
+# This is examples/toml/sft_config/video_sft_nano.toml with the Windows deviations marked `# WINDOWS`;
+# upstream owns everything else. The eleven Windows overrides, the attention keys and the
+# synchronous-checkpoint flag go on the command line (scripts/train_lora.ps1), not here: the recipe
+# schema rejects model.config.* and dataloader_* keys and TOML has no null literal.
+# As shipped this is a 20-step smoke (2 epochs x 10 steps); for a real run set trainer.steps_per_epoch,
+# trainer.num_epochs, trainer.max_iter and scheduler.cycle_lengths together. 64 GB unit: max_sequence_length = 8192.
+# Video-conversation SFT through the Cosmos Framework VLM trainer.
+# Required environment:
+#   COSMOS_VIDEO_TRAIN_ANNOTATION, COSMOS_VIDEO_TRAIN_MEDIA
+#   COSMOS_VIDEO_VAL_ANNOTATION, COSMOS_VIDEO_VAL_MEDIA
+#   VLM_SAFETENSORS_PATH (Cosmos3-Nano converted to Qwen3-VL safetensors)
+# This checked-in recipe is a 10-step-per-epoch smoke run. Set
+# trainer.steps_per_epoch to the distributed update count for a production dataset.
+# Set scheduler.cycle_lengths to cover num_epochs * steps_per_epoch as well.
+
+[job]
+task       = "vlm"
+experiment = "cosmos_video_conversation"
+project    = "cosmos3_reasoner"
+group      = "cosmos_video_conversation_sft"
+name       = "cosmos_video_conversation"
+wandb_mode = "disabled"
+
+[model]
+attn_implementation = "cosmos"
+precision = "bfloat16"
+
+[model.backbone]
+model_name = "${oc.env:VLM_SAFETENSORS_PATH}"
+safetensors_path = "${oc.env:VLM_SAFETENSORS_PATH}"
+
+[model.ema]
+enabled = false
+rate = 0.1
+iteration_shift = 0
+
+[model.parallelism]
+data_parallel_shard_degree = 1    # WINDOWS: one GPU, gloo at world size 1
+data_parallel_replicate_degree = 1
+context_parallel_shard_degree = 1
+cfg_parallel_shard_degree = 1
+
+[model.compile]
+enabled = false
+compile_dynamic = true
+
+[model.activation_checkpointing]
+mode = "full"
+save_ops_regex = ["fmha"]
+preserve_rng_state = true
+determinism_check = "default"
+
+[optimizer]
+betas = [0.9, 0.999]
+eps = 1.0e-8
+fused = true
+lr = 1.0e-4
+weight_decay = 0.01
+
+[scheduler]
+cycle_lengths = [20]
+f_max = [1.0]
+f_min = [0.0]
+f_start = [0.0]
+verbosity_interval = 0
+warm_up_steps = [0]
+
+[trainer]
+distributed_parallelism = "ddp"    # WINDOWS: FSDP2 has no Windows path; DDP at world size 1
+grad_accum_iter = 1
+logging_iter = 1
+max_iter = 20
+num_epochs = 2
+steps_per_epoch = 10
+max_val_iter = 10
+run_validation = true
+validation_iter = 10
+validation_freq_in_epoch = 1
+run_validation_on_start = false
+
+[trainer.callbacks.compile_tokenizer]
+compile_after_iterations = 3
+enabled = false
+
+[trainer.callbacks.grad_clip]
+clip_norm = 1.0
+force_finite = false
+
+[trainer.callbacks.workflow_status]
+enabled = true
+experiment_name = "Cosmos Framework video-conversation SFT"
+logging_interval = 1
+validation_heartbeat_interval = 1
+
+[checkpoint]
+keys_to_skip_loading = []
+load_path = ""    # WINDOWS: "???" aborts resolution; empty means start fresh (ignored when latest_checkpoint.txt exists)
+save_iter = 100
+save_freq_in_epoch = 2
+
+[dataloader_train]
+max_samples_per_batch = 1
+max_sequence_length = 81920
