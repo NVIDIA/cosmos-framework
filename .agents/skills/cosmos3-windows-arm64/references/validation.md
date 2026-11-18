@@ -35,9 +35,29 @@ on the 128 GB unit on 2026-11-16: 25 passed and 5 skipped in the four helper tes
 skipped in `dcp_test.py` and `background_store_test.py`, and the link cleanup worked in an elevated and in a
 standard shell. A Linux comparison of that commit against `main` is in the PR thread. On 2026-11-17 the PR
 was rebased onto `main` at 0822f1d and became 985d116, the commit Block 2 pins. The rebase changed none of
-the PR's commits. The skill's blocks have not been rerun on 985d116. One difference from e682c47 matters
+the PR's commits. The skill's blocks were rerun on 985d116 the same day (§ Rerun at the pinned commit). One difference from e682c47 matters
 to this skill: the evaluator imports `toml` again (the `tomllib` change moved to PR #399), so the dependency
 file lists `toml`.
+
+## Rerun at the pinned commit (128 GB unit, 2026-11-17)
+
+Fresh root and fresh venv, every block as written in Windows PowerShell 5.1, elevated, 1400 MHz cap.
+Framework 985d116, skill commit 8ea9f02. Every block that ran passed on the first attempt.
+
+| Block or check                                | Result                                                                                                                                                                        |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Variant 1, Block 1                            | pass, 447 s; preflight `PASS`, 101.5 GiB CUDA-visible, the 72 GiB write in 175 s                                                                                              |
+| Variant 1, Block 2                            | pass, 370 s; `HEAD is now at 985d116`; `toml` 0.10.2 from the dependency file; `pip check` shows the three expected lines                                                     |
+| Missing pyarrow                               | `AttributeError` that names pyarrow, on first attribute access                                                                                                                |
+| Variant 2                                     | not exercised: no raw release on the machine; the model converted on 2026-11-10 was used                                                                                      |
+| Variant 3, `smoke_20`                         | pass, 217 s; 144 modules; epoch means 0.491 and 0.568; validation loss 0.447, then 0.343; 1.91 s per step; save 112 s; peak 45 C; no pause; 83.6 GiB peak private host memory |
+| Variant 4                                     | pass, 291 s; 750 tensors, 5 shards, 0 lora keys                                                                                                                               |
+| Variant 5                                     | pass, 38 s; 2 of 4, the same two misses as on 2026-11-10                                                                                                                      |
+| Memorisation run, ten epochs of sixteen steps | epoch means 0.530, 0.133, 0.0009, 0.0001, then 0.0000; evaluator 12 of 16, the lower bound of Variant 5's caveat; 16 of 16 with PR #398 applied on top of the pin             |
+| Unit tests of #303                            | 25 passed and 5 skipped in the four helper test files; 4 passed and 3 skipped in `dcp_test.py` and `background_store_test.py`                                                 |
+
+No expected string of Variants 3 to 5 is printed differently at this commit. Not exercised in this rerun:
+Variant 2, a standard (non-elevated) shell, the 64 GB unit.
 
 ## Fine-tuning results on the earlier stack (ITS work, 2026-10-30 to 11-04)
 
@@ -107,7 +127,7 @@ multiple of 64 in both directions (`validation-spark-a.md` § Why the evaluator 
 - A conversion from a release downloaded without the generator-only folders
   (`windows-setup.md` § The model).
 - The synthetic smoke set's loss curve on both units.
-- The skill's blocks on the pinned commit 985d116: they were last run on e682c47.
+- The model conversion (Variant 2) on the pinned commit 985d116: it last ran on e682c47.
 - The eval cases in `eval/eval.config` require a Windows-on-Arm host; the Linux evaluator
   runners cannot execute them. Until a Windows runner class exists, a manual run with the
   report attached to the PR is the validation.

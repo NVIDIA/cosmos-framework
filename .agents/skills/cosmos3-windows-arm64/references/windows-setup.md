@@ -70,8 +70,8 @@ missing package (the stand-in for the module raises it on first attribute access
 merges: clone `arif-ahmed-nv/cosmos-framework`, fetch `windows-compat` and check out commit `985d116`
 (the PR head of 2026-11-17: `main` at 0822f1d plus the Windows commits). The branch itself moves while
 the PR is in review, so Block 2 pins the commit. The skill's blocks were run on `e682c47`, an earlier
-state of the same PR, and the PR's unit tests on `c8441aa`; `985d116` is `c8441aa` rebased onto `main`
-and has not been run on Windows yet (`validation.md` § Lifecycle on PR #303). At this commit the
+state of the same PR, and the PR's unit tests on `c8441aa`; `985d116` is `c8441aa` rebased onto `main`.
+The blocks were rerun on `985d116` on 2026-11-17 (`validation.md` § Rerun at the pinned commit). At this commit the
 evaluator imports `toml`, which the dependency file therefore lists. Install editable with `--no-deps` (the dependency file
 already satisfied everything). Checkouts without #303 fail on this platform at import (pyarrow),
 at the first training step (attention backend) or at the first checkpoint save (statvfs, libuv,

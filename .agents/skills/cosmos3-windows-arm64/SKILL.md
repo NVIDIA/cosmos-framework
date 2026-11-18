@@ -91,8 +91,8 @@ Pins that are not negotiable: ARM64 CPython 3.13; torch `2.15.0+cu134` with torc
 stable wheels the PyTorch "additional platforms" page lists for RTX Spark); a TorchCodec wheel
 built for that torch (`win_arm64`, CUDA 13.4). Run each block as one PowerShell call; nothing
 carries over between blocks except files on disk. Give both blocks a ten-minute timeout: on a
-128 GB unit with a fast link Block 1 took 378 s and Block 2 took 380 s (the dependency install
-alone 320 s), and a block cut off at a harness's default two minutes leaves a half-installed venv.
+128 GB unit with a fast link Block 1 took 378 and 447 s on two runs and Block 2 took 380 and 370 s
+(the dependency install alone 320 s), and a block cut off at a harness's default two minutes leaves a half-installed venv.
 
 ```powershell
 # Block 1: interpreter, torch, preflight. $ROOT is the only path you choose; $SKILL is the directory holding this SKILL.md.
@@ -110,7 +110,7 @@ uv venv $VENV --python $ARM_PY --seed --no-config
 Expected: the preflight prints JSON with `"status": "PASS"`, `machine: ARM64`, the torch
 version, `torch_cuda: 13.4`, the device name and the total CUDA memory, and writes the same
 report to `--output`. The allocation gate allocates, writes, synchronizes and frees the
-requested buffer, so run it on an idle GPU. It is slow: about two minutes for the 72 GiB write
+requested buffer, so run it on an idle GPU. It is slow: two to three minutes for the 72 GiB write
 alone and more than five minutes for a first run, which is longer than the default command
 timeout of most agent harnesses. Set a ten-minute timeout or run it in the background and read
 the output file; progress lines go to stderr while it works. Do not add `2>&1` to the call:
@@ -202,7 +202,7 @@ Expected from the launcher, in order: the command line; `clock cap 1400 MHz appl
 elevated shell, or `clock cap NOT applied (...): uncapped, pacer only` in a standard shell (the
 job still runs; `-RequireCap` makes that case an error and `-ClockCapMHz 0` skips the attempt);
 `pacer armed`; the `RUN train_smoke_20 ... exit=0` line. In `<OutputRoot>\evidence\train_smoke_20.stdout.log`:
-the model load (about 70 s), `LoRA injection successful: 144 modules wrapped, 15,335,424 trainable LoRA params`,
+the model load (10 to 70 s, depending on the file cache), `LoRA injection successful: 144 modules wrapped, 15,335,424 trainable LoRA params`,
 twenty lines of the form `Iteration 2: Hit counter: 2/50 | Loss: 0.1967 | Time: 2.84s` (only the
 first fifty steps of a run are logged this way), `Validation loss (epoch 2/2): ...` after each
 epoch, `Checkpoint save completed: Time taken: ... seconds` for a synchronous DCP save of
@@ -222,7 +222,7 @@ prove the mechanics, not learning. The check for learning is the same command wi
 lengthened to ten epochs of sixteen steps: epoch means 0.533, 0.115, 0.0005 and then 0.0000,
 ten minutes (`references/validation-spark-a.md`).
 
-Time: the call takes about five minutes (281 s measured: 26 to 89 s for the first step, about
+Time: the call takes four to five minutes (217 and 281 s measured: 24 to 89 s for the first step, about
 1.8 s per step at the 1400 MHz cap on the 128 GB unit, two minutes for the save), so give it a
 ten-minute timeout. QA's run on the 64 GB unit took 1.3 s per step.
 

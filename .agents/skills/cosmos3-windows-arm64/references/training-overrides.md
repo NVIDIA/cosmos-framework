@@ -74,8 +74,9 @@ attention at 1600 MHz: 75 minutes including 9 minutes paused). On the 64 GB unit
 
 ## What the log must show
 
-`inject_lora_pre_fsdp: rank=16 alpha=32.0 ... targets=['q_proj','k_proj','v_proj','o_proj']`
-followed by `LoRA injection successful: 144 modules wrapped, 15,335,424 trainable LoRA params`.
+`Injecting LoRA before FSDP: rank=16, alpha=32.0, dropout=0.0, rslora=False, bias=none, targets=['q_proj', 'k_proj', 'v_proj', 'o_proj'], modules_to_save=[]`
+(logged by `inject_lora_pre_fsdp`), followed by
+`LoRA injection successful: 144 modules wrapped, 15,335,424 trainable LoRA params, 8,767,123,696 frozen base params (0.175% trainable)`.
 Without those lines the run is a full-parameter update and will run out of memory.
 
 ## Evaluating
