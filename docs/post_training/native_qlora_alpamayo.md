@@ -1086,3 +1086,32 @@ their original verdicts. The study reports whether the original 5% bar was met.
 The study runs the expert-LR 0.1x recipe for 512 updates with paired seeds 17, 42 and 123,
 one arm per job (packet `alpamayo-expert-lr0p1-study-06a2b84-v1`, protocol SHA-256
 `9915de06…`). All six arms are required, and no endpoint is chosen by quality.
+
+### Activation-recompute probe (`38702473` + rerun `38703092`)
+
+This diagnostic probe used the expert-LR 0.1x recipe for 24 paused updates with 2-row
+evaluations. Each precision arm ran full, vision-only and no activation checkpointing,
+sequentially in one allocation per job.
+
+| Case | Median update (s, updates 5-24) | Native allocator peak (GiB) |
+|---|---:|---:|
+| NF4 full | 3.069 | 64.664 |
+| NF4 vision | 2.379 | 64.597 |
+| NF4 none | 2.337 | 64.597 |
+| BF16 full | 2.974 | 74.009 |
+| BF16 vision | 2.290 | 73.942 |
+| BF16 none | 2.286 | 73.942 |
+
+Within each arm, vision-only and no checkpointing reproduced the full-checkpointing loss
+trajectory exactly (48/48 recorded values, zero difference). Disabling full recompute made
+updates 22.5% (NF4) and 23.0% (BF16) faster. Peak memory moved by less than 0.07 GiB: at
+micro-batch 1, peaks are not driven by stored activations. BF16 therefore fits without
+full recompute too, so this is a **shared** speedup and not an NF4 time-to-quality
+advantage. At equal settings NF4 is about 2-3% slower per update. Full recompute stays in
+the selected recipe and the running 512-update study. Changing the recipe default needs its
+own recovery and quality check.
+
+The first job lost NF4 full and vision to a post-maintenance Lustre effect, before any
+model load: the first read of each input JSONL bumped its ctime, and the dataset's
+stat-identity guard refused the source. Contents were unchanged, and later reads were
+stable. Combined cost was **2,649 GPU-seconds** (1,903 + 746).
