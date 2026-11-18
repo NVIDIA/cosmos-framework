@@ -30,6 +30,7 @@ python -m cosmos_framework.scripts.inference_reasoner --model_path /path/to/mode
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -79,7 +80,7 @@ def parse_args():
         "--num_gpus",
         type=int,
         default=None,
-        help="Must be 1 when set: one model replica per process (use torchrun for data-parallel inference)",
+        help="Must be 1 when set; inference runs one model replica in a single process",
     )
     parser.add_argument(
         "--type", type=str, default="video", choices=["video", "image"], help="Input type (video or image)"
@@ -230,6 +231,13 @@ def process_single_media(
 
 def main():
     args = parse_args()
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if world_size > 1:
+        # Every rank would process the full media list and race on the same result files.
+        raise SystemExit(
+            f"cosmos-reasoner-inference is single-process (WORLD_SIZE={world_size}); "
+            "launch it without torchrun, or split --media across separate runs with distinct --results_dir."
+        )
 
     # Apply monitor_status decorator with results_dir from args
     @monitor_status(name="Cosmos Framework Inference", mode="inference", results_dir=args.results_dir)
@@ -249,10 +257,7 @@ def main():
                 raise ValueError(f"Requested {args.num_gpus} GPUs but only {num_available_gpus} available")
 
             if args.num_gpus != 1:
-                raise ValueError(
-                    "Framework inference uses one model replica per process. "
-                    "Use torchrun for multi-GPU data parallel inference."
-                )
+                raise ValueError("Reasoner inference runs one model replica in a single process; set --num_gpus 1.")
 
         runtime = CosmosFrameworkRuntime(
             args.model_path,

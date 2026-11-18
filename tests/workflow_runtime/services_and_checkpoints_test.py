@@ -101,6 +101,28 @@ def test_action_help_needs_no_models_or_runtime_packages(module, tmp_path):
     assert not list(tmp_path.iterdir())
 
 
+def test_reasoner_inference_rejects_multi_process_launch(tmp_path):
+    results = tmp_path / "results"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cosmos_framework.scripts.inference_reasoner",
+            "--model_path=missing",
+            "--media=missing.mp4",
+            "--prompt=Describe",
+            f"--results_dir={results}",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={**os.environ, "WORLD_SIZE": "2", "PYTHONPATH": str(Path(__file__).resolve().parents[2])},
+    )
+    assert result.returncode != 0
+    assert "single-process (WORLD_SIZE=2)" in result.stderr
+    assert not results.exists()
+
+
 def test_reasoner_http_contract_and_rejected_paths(tmp_path):
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
