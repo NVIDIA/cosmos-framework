@@ -1071,3 +1071,18 @@ allocator peaks were **36.473/45.818 GiB** NF4/BF16 (10.03-GiB difference), and 
 peaks were 37.676/47.006 GiB, all host samples complete. With trained FP32 heads they were
 64.664/74.009 GiB. Training stages took 391/378 s and full native workflows 2,704/2,629 s
 (NF4 +2.9%), sequential in one allocation.
+
+### Revised development bar (decided 2026-11-18, before the study below)
+
+After the three rejected update-128 learning screens, the user decided to replace the
+"at least 5% ADE improvement over the frozen source" requirement for the next study.
+The new requirement is that NF4's three-seed mean ADE and FDE at update 512 are **no
+worse than its own update-0 source** (point estimates, with one-sided 95% bounds reported).
+Unchanged: the NF4-vs-BF16 LoRA one-sided 95% upper-bound guards (ADE ≤5% and ≤0.10 m;
+FDE ≤5% and ≤0.25 m) at the fixed-512 and equal-elapsed endpoints, the paired crossed
+seed/block bootstrap (10,000 draws, seed 70241), and the memory floors. Earlier results keep
+their original verdicts. The study reports whether the original 5% bar was met.
+
+The study runs the expert-LR 0.1x recipe for 512 updates with paired seeds 17, 42 and 123,
+one arm per job (packet `alpamayo-expert-lr0p1-study-06a2b84-v1`, protocol SHA-256
+`9915de06…`). All six arms are required, and no endpoint is chosen by quality.
