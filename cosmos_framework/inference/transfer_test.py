@@ -504,7 +504,58 @@ def test_autoregressive_transfer_does_not_validate_the_unused_chunk_partition(
         eval=Mock(),
     )
 
+    get_num_chunks = Mock(wraps=transfer._get_num_chunks)
+    monkeypatch.setattr(transfer, "_get_num_chunks", get_num_chunks)
+
     assert transfer.generate_transfer_sample(sample_args, model) is generated_output
+    get_num_chunks.assert_not_called()
+
+
+def test_chunked_transfer_rejects_a_bad_chunk_partition_before_encoding_the_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The chunked path still validates the partition, and still does it before any prompt/model work."""
+    from cosmos_framework.inference import transfer
+
+    frames = torch.zeros(3, 25, 2, 2, dtype=torch.uint8)  # [C,T,H,W]
+    prompt_data = Mock(return_value={"caption": ["prompt"]})
+    resolved_frame_count = Mock()
+    monkeypatch.setattr(transfer, "read_and_resize_media", Mock(return_value=(frames, 24.0, "16,9", (2, 2))))
+    monkeypatch.setattr(transfer, "load_transfer_control_frames", Mock(return_value=frames))
+    monkeypatch.setattr(transfer, "_get_prompt_sample_data", prompt_data)
+    sample_args = SimpleNamespace(
+        transfer_hints={TransferHintKey.DEPTH: SimpleNamespace(weight=1.0)},
+        resolution="480",
+        vision_path=Path("input.mp4"),
+        num_frames=25,
+        max_frames=25,
+        num_video_frames_per_chunk=17,
+        num_conditional_frames=17,
+        num_first_chunk_conditional_frames=0,
+        guidance=4.0,
+        aspect_ratio=None,
+        fps=24,
+        autoregressive=False,
+        emphasize_control_in_prompt=False,
+        seed=7,
+        model_copy=Mock(return_value=SimpleNamespace()),
+    )
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            tokenizer=SimpleNamespace(temporal_compression_factor=4),
+            teacher_forcing_frames_per_chunk=1,
+            fixed_step_sampler_config=None,
+        ),
+        input_caption_key="caption",
+        fixed_step_sampler=Mock(),
+        eval=Mock(),
+    )
+
+    with pytest.raises(ValueError, match="num_conditional_frames must be smaller"):
+        transfer.generate_transfer_sample(sample_args, model, on_total_frames_resolved=resolved_frame_count)
+    prompt_data.assert_not_called()
+    resolved_frame_count.assert_not_called()
+    model.eval.assert_not_called()
 
 
 def test_chunked_partition_still_rejects_conditioning_as_long_as_the_chunk() -> None:

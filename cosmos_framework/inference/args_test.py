@@ -913,3 +913,33 @@ def test_sample_output_dir_rejects_a_symlink_out_of_the_root(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="outside the requested output root"):
         sample_output_dir(root, "link")
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("camera_trajectory", ["w-30,rigth-20", "w-6l"])
+def test_a_malformed_camera_trajectory_fails_while_sample_args_are_built(camera_trajectory) -> None:
+    """Building every sample's arguments precedes generation, so a typo fails before any video is made."""
+    import types
+
+    from cosmos_framework.inference.args import InteractiveDataOverrides
+
+    overrides = InteractiveDataOverrides(camera_trajectory=camera_trajectory, autoregressive=True)
+    with pytest.raises(ValueError):
+        overrides._build_interactive_data(
+            model_config=types.SimpleNamespace(video_temporal_causal=True), sample_meta=types.SimpleNamespace()
+        )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_a_valid_camera_trajectory_still_builds() -> None:
+    import types
+
+    from cosmos_framework.inference.args import InteractiveDataOverrides
+
+    overrides = InteractiveDataOverrides(camera_trajectory="w-30,right-15,w-15", autoregressive=True)
+    overrides._build_interactive_data(
+        model_config=types.SimpleNamespace(video_temporal_causal=True), sample_meta=types.SimpleNamespace()
+    )
+    assert overrides.camera_trajectory == "w-30,right-15,w-15"

@@ -16,6 +16,8 @@ transcribed -- is what makes camera conditioning reproduce across runtimes.
 from __future__ import annotations
 
 import json
+import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +46,7 @@ from cosmos_framework.data.generator.action.utils.transforms import (
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.inference.args import CameraActionNormalization
 from cosmos_framework.inference.vision import crop_media_to_content, read_media_frames
+from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 
 _FORWARD_DYNAMICS_MODE = "forward_dynamics"
@@ -53,6 +56,95 @@ def _is_pose_json_spec(camera_trajectory: str) -> bool:
     """Return True if ``camera_trajectory`` is a path to a JSON pose file."""
     spec = camera_trajectory.strip()
     return bool(spec) and spec.endswith(".json")
+
+
+_WARNED_CAMERA_TRAJECTORY: set[str] = set()
+
+
+def _warn_once(message: str) -> None:
+    """Log a camera-trajectory warning at most once per distinct message per process.
+
+    Without ``keep_going``, the first sample's trajectory is resolved twice: ``create_batches``
+    fetches ``dataset[0]`` again to build the padding batch that keeps every replica calling
+    ``generate_batch`` the same number of times, even on a single GPU where that batch is never
+    used. A plain warning would fire twice for that sample and read as two separate problems.
+    """
+    if message in _WARNED_CAMERA_TRAJECTORY:
+        return
+    _WARNED_CAMERA_TRAJECTORY.add(message)
+    # Every rank warns for its own samples: samples are sharded across replicas, so a
+    # rank-0-only warning would hide the problems of every other replica's samples.
+    log.warning(message, rank0_only=False)
+
+
+def _frames(count: int) -> str:
+    return f"{count} frame" if count == 1 else f"{count} frames"
+
+
+# The command names ``parse_camera_string`` understands. That parser is kept in sync with an
+# upstream copy, so it is left as it is: it runs an unknown name as ``stay``, skips a command it
+# cannot read and ignores extra fields, which turns a typo into a different camera path with no
+# error. Inference therefore checks the string here before handing it to the parser.
+_CAMERA_COMMANDS = frozenset(
+    {"w", "s", "a", "d", "u", "n", "up", "down", "left", "right", "cw", "ccw", "stay", "pano", "orbit"}
+)
+# ASCII digits only: int() would also take "+5", "1_0" or other scripts' digits.
+_FRAME_COUNT = re.compile(r"[0-9]+")
+
+
+def _check_camera_commands(segment: str) -> None:
+    """Raise ValueError for a command in one ``'|'``-free trajectory that the parser would misread.
+
+    Rejected: an unknown command name, a missing frame count or one that is not ASCII digits, an
+    extra field (only ``orbit`` takes a radius), a radius that is not a finite number, and a
+    ``pano`` or ``orbit`` of 0 frames. Empty segments, from a trailing or doubled comma, are allowed,
+    as the parser skips them.
+    """
+    for cmd in (part.strip() for part in segment.split(",")):
+        if not cmd:
+            continue
+        parts = [part.strip() for part in cmd.split("-")]
+        action_type = parts[0]
+        if action_type not in _CAMERA_COMMANDS:
+            raise ValueError(
+                f"Unknown camera command {action_type!r} in {cmd!r}: expected one of "
+                f"{', '.join(sorted(_CAMERA_COMMANDS))}, as '<cmd>-<frames>', e.g. 'w-60'."
+            )
+        max_parts = 3 if action_type == "orbit" else 2
+        if not 2 <= len(parts) <= max_parts:
+            expected = (
+                "'orbit-<frames>' or 'orbit-<frames>-<radius>'" if action_type == "orbit" else "'<cmd>-<frames>'"
+            )
+            raise ValueError(f"Malformed camera command {cmd!r} in {segment!r}: expected {expected}.")
+        if not _FRAME_COUNT.fullmatch(parts[1]):
+            raise ValueError(
+                f"Malformed frame count {parts[1]!r} in camera command {cmd!r}: expected a whole number of frames."
+            )
+        if action_type in ("pano", "orbit") and int(parts[1]) == 0:
+            raise ValueError(f"Camera command {cmd!r} needs at least 1 frame for a full turn.")
+        if len(parts) == 3:
+            try:
+                radius = float(parts[2])
+            except ValueError:
+                radius = math.nan
+            if not math.isfinite(radius):
+                raise ValueError(
+                    f"Malformed orbit radius {parts[2]!r} in camera command {cmd!r}: expected a finite number."
+                )
+
+
+def check_camera_trajectory(camera_trajectory: str) -> None:
+    """Raise ValueError if a camera trajectory command string would be misread.
+
+    Called while sample arguments are built, so a typo fails before any sample is generated
+    rather than when its batch is prepared. A JSON pose path is checked when it is loaded.
+    """
+    if _is_pose_json_spec(camera_trajectory):
+        return
+    segment = camera_trajectory.split("|", 1)[0].strip()
+    if not segment:
+        raise ValueError("camera_trajectory is empty")
+    _check_camera_commands(segment)
 
 
 def _resolve_camera_trajectory_poses(camera_trajectory: str, target_frames: int) -> np.ndarray:
@@ -75,13 +167,31 @@ def _resolve_camera_trajectory_poses(camera_trajectory: str, target_frames: int)
         segment = camera_trajectory.split("|", 1)[0].strip()
         if not segment:
             raise ValueError("camera_trajectory is empty")
+        tail = camera_trajectory.split("|", 1)[1].strip() if "|" in camera_trajectory else ""
+        if tail:
+            _warn_once(
+                f"camera_trajectory {camera_trajectory!r} contains '|', but inference uses one "
+                f"trajectory per sample. Only {segment!r} is generated; the rest is discarded. "
+                "'|'-separated batching is an evaluation-only feature."
+            )
+        _check_camera_commands(segment)
         poses_abs = parse_camera_string(segment)
 
     t_have = poses_abs.shape[0]
     if t_have < target_frames:
+        _warn_once(
+            f"camera_trajectory {camera_trajectory!r} supplies {t_have} poses for {target_frames} "
+            f"frames; padding by repeating the last pose, so the camera holds still for the final "
+            f"{_frames(target_frames - t_have)}."
+        )
         pad = np.tile(poses_abs[-1:], (target_frames - t_have, 1, 1))
         poses_abs = np.concatenate([poses_abs, pad], axis=0)
     elif t_have > target_frames:
+        _warn_once(
+            f"camera_trajectory {camera_trajectory!r} supplies {t_have} poses for {target_frames} "
+            f"frames; truncating, so the last {_frames(t_have - target_frames)} of requested motion "
+            "are discarded."
+        )
         poses_abs = poses_abs[:target_frames]
     return poses_abs
 
