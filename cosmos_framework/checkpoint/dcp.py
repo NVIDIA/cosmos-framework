@@ -44,6 +44,7 @@ import enum
 import gc
 import multiprocessing
 import os
+import pickle
 import queue
 import re
 import socket
@@ -58,7 +59,7 @@ import torch.distributed.checkpoint as dcp
 from torch import nn
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.distributed.checkpoint.default_planner import create_default_local_load_plan
-from torch.distributed.checkpoint.filesystem import FileSystemReader, FileSystemWriter
+from torch.distributed.checkpoint.filesystem import FileSystemWriter
 from torch.distributed.checkpoint.metadata import (
     STATE_DICT_TYPE,
     Metadata,
@@ -79,12 +80,22 @@ from cosmos_framework.checkpoint.background_store import (
     reserve_background_store_socket,
 )
 from cosmos_framework.checkpoint.base import AbstractCheckpointer, CheckpointLoadSource
+from cosmos_framework.checkpoint.safe_dcp import SafeFileSystemReader, SafeLoadPlanner
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
 from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, log, misc
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
+from cosmos_framework.utils.safe_unpickle import safe_loads
+
+
+def restore_rand_state(state_dict: dict[str, torch.Tensor], checkpoint_path: str, rng_key: str) -> None:
+    """Apply checkpointed RNG state, naming the checkpoint if its packed state is rejected."""
+    try:
+        set_rand_state_dict(state_dict)
+    except (pickle.UnpicklingError, EOFError, TypeError, ValueError) as e:
+        raise ValueError(f"Refusing to load checkpoint state '{rng_key}' from '{checkpoint_path}': {e}") from e
 
 
 class ModelWrapper(Stateful):
@@ -361,7 +372,7 @@ def _replace_keys_with_ema_keys(state_dict: STATE_DICT_TYPE) -> STATE_DICT_TYPE:
     return {k.replace("net.", "net_ema."): v for k, v in state_dict.items()}
 
 
-class CustomLoadPlanner(dcp.DefaultLoadPlanner):
+class CustomLoadPlanner(SafeLoadPlanner):
     """
     CustomLoadPlanner that supports ignoring keys during checkpoint load.
     This is useful when the checkpoint is saved with a different component
@@ -926,7 +937,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         global_rank=global_rank,
                     )
                 else:
-                    load_planner = dcp.DefaultLoadPlanner(allow_partial_load=not strict_resume)
+                    load_planner = SafeLoadPlanner(allow_partial_load=not strict_resume)
 
                 if key == "model":
                     log.info("- Loading the model...")
@@ -1016,7 +1027,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
                     grad_scaler.load_state_dict(_state_dict["grad_scaler"])
                     iteration = _state_dict["iteration"]
                     if rng_key_exists:
-                        set_rand_state_dict(_state_dict[rng_key])
+                        restore_rand_state(_state_dict[rng_key], cur_key_ckpt_full_path, rng_key)
 
                 elif key == "dataloader":
                     if not easy_io.exists(cur_key_ckpt_full_path, backend_key=source.backend_key):
@@ -1033,11 +1044,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         continue
 
                     log.info(f"- Loading the dataloader {cur_key_ckpt_full_path}...", rank0_only=False)
-                    _state_dict = easy_io.load(
-                        dataloader_pkl_path,
-                        file_format="pkl",
-                        backend_key=source.backend_key,
-                    )
+                    _state_dict = self._load_pkl(dataloader_pkl_path, source.backend_key)
                     dataloader_wrapper = _DataloaderWrapper(self.callbacks)
                     if dataloader_wrapper.has_state():
                         dataloader_wrapper.load_state_dict(_state_dict)
@@ -1221,14 +1228,14 @@ class DistributedCheckpointer(AbstractCheckpointer):
         self,
         checkpoint_path: str,
         source: CheckpointLoadSource,
-    ) -> Union[S3StorageReader, FileSystemReader]:
+    ) -> Union[S3StorageReader, SafeFileSystemReader]:
         if source.uses_object_store:
             return S3StorageReader(
                 credential_path=source.object_store.credentials,
                 path=checkpoint_path,
                 enable_gcs_patch_in_boto3=self.config_checkpoint.enable_gcs_patch_in_boto3,
             )
-        return FileSystemReader(checkpoint_path)
+        return SafeFileSystemReader(checkpoint_path)
 
     def _save_as_pkl(self, obj: Any, output_dir: str) -> None:
         """Save per-rank Python checkpoint state such as no-replace dataloader progress."""
@@ -1241,6 +1248,18 @@ class DistributedCheckpointer(AbstractCheckpointer):
             backend_key=self.save_s3_backend_key,
         )
         log.info(f"Saved state to {path}")
+
+    def _load_pkl(self, path: str, backend_key: str | None) -> Any:
+        """Load per-rank Python checkpoint state written by :meth:`_save_as_pkl`.
+
+        The file is unpickled without resolving any globals, so only builtin containers and scalars load,
+        which is all that dataloader progress state holds.
+        """
+        data = easy_io.load(path, file_format="byte", backend_key=backend_key)
+        try:
+            return safe_loads(data)
+        except Exception as e:
+            raise ValueError(f"Refusing to load checkpoint state 'dataloader' from '{path}': {e}") from e
 
     def save_state_dict_worker(self, to_save_dict: Dict[str, Tuple[Any, str]], checkpoint_file: str) -> None:
         for key, (v, full_checkpoint_path) in to_save_dict.items():
