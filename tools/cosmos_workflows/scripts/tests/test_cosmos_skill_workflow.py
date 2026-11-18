@@ -2152,7 +2152,14 @@ def test_nvbug_render_docker_has_identity_and_idempotency_guard(tmp_path):
     assert "docker inspect job-123" in rendered
     assert "HOME=" in rendered and "USER=" in rendered and "LOGNAME=" in rendered
     assert "TORCHINDUCTOR_CACHE_DIR=" in rendered
-    assert "--gpus device=2,3" in rendered
+    assert "--gpus '\"device=2,3\"'" in rendered
+
+
+def test_docker_gpu_request_quotes_multi_device_csv():
+    assert workflow._docker_gpu_request(["0"]) == "device=0"
+    assert workflow._docker_gpu_request(["0", "1"]) == '"device=0,1"'
+    # The rendered shell word must reach docker with the inner quotes intact.
+    assert shlex.split("--gpus " + shlex.quote(workflow._docker_gpu_request(["0", "1"])))[1] == '"device=0,1"'
 
 
 def test_nvbug_docker_gpu_count_is_not_hardcoded():
@@ -2181,7 +2188,7 @@ def test_nvbug_docker_gpu_derivation_respects_cuda_visible_devices(monkeypatch, 
     plan = workflow.build_plan(args)
     assert plan["compute"]["gpus_per_node"] == 2
     assert plan["compute"]["host_gpu_ids"] == ["1", "3"]
-    assert "--gpus device=1,3" in plan["preflight"]["container_runtime"]
+    assert "--gpus '\"device=1,3\"'" in plan["preflight"]["container_runtime"]
 
 
 def test_nvbug_docker_gpu_derivation_rejects_ineligible_visible_subset(monkeypatch, tmp_path):

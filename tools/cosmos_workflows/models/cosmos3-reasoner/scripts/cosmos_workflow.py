@@ -1257,6 +1257,16 @@ def _env(
     return common
 
 
+def _docker_gpu_request(device_ids: list[str]) -> str:
+    """Return a ``docker run --gpus`` value for explicit host device IDs.
+
+    Docker parses ``--gpus`` as a CSV record, so a multi-device selector needs
+    literal double quotes around ``device=a,b`` (shell form: ``'"device=0,1"'``).
+    """
+    selector = "device=" + ",".join(device_ids)
+    return f'"{selector}"' if len(device_ids) > 1 else selector
+
+
 def _command(args: argparse.Namespace) -> str:
     parts = [
         "/workspace/.venv/bin/torchrun",
@@ -1896,7 +1906,7 @@ def _preflight_contract(
     else:
         allocation = path_checks
         docker_gpu_ids = list(getattr(args, "docker_gpu_ids", []))
-        gpu_request = f"device={','.join(docker_gpu_ids)}" if docker_gpu_ids else str(args.gpus_per_node)
+        gpu_request = _docker_gpu_request(docker_gpu_ids) if docker_gpu_ids else str(args.gpus_per_node)
         container = (
             f"docker run --rm --gpus {shlex.quote(gpu_request)} "
             f"{shlex.quote(plan_image['tag'])} bash -lc {shlex.quote(container_check)}"
@@ -2691,7 +2701,7 @@ def render_docker(args: argparse.Namespace, plan: Mapping[str, Any]) -> str:
     host_gpu_ids = compute.get("host_gpu_ids", [])
     if not isinstance(host_gpu_ids, list) or not all(isinstance(value, str) and value for value in host_gpu_ids):
         raise WorkflowError("Docker plan has invalid compute.host_gpu_ids")
-    gpu_request = f"device={','.join(host_gpu_ids)}" if host_gpu_ids else str(int(compute.get("gpus_per_node", 0)))
+    gpu_request = _docker_gpu_request(host_gpu_ids) if host_gpu_ids else str(int(compute.get("gpus_per_node", 0)))
     if gpu_request == "0":
         raise WorkflowError("Docker plan has no resolved GPU allocation")
     command = [

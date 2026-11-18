@@ -244,7 +244,8 @@ def launch_eval(args: argparse.Namespace, job_id: str, results_dir: Path, checkp
         "--name",
         job_id,
         "--gpus",
-        f"device={args.gpu}",
+        # Docker parses --gpus as CSV; quote a multi-device selector.
+        f'"device={args.gpu}"' if "," in args.gpu else f"device={args.gpu}",
         "--network",
         "host",
         "--ipc",
