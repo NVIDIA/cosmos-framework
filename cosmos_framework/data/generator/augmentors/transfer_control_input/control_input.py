@@ -154,13 +154,21 @@ class AddControlInputBlur(Augmentor):
             "high": max_downup_factor,
             "very_high": max_downup_factor,
         }
+        # Pre-blur downscale per preset. A larger factor runs the bilateral blur on a smaller image,
+        # which makes it WEAKER, not stronger: Blur rescales its parameters by longest_side / 720
+        # (blur.py, _scale_for_resolution), including the intensity-domain sigma_color. At full
+        # resolution above ~720 px sigma_color exceeds the uint8 range, edge-stopping is lost and the
+        # bilateral degenerates into a strong plain blur, while a 4x-downscaled image keeps it
+        # edge-preserving. Hence the lighter preset of each pair (very_low/low, high/very_high) uses
+        # the larger downscale. The ordering depends on resolution; control_input_test.py pins it at
+        # the released 480p size.
         blur_downup_preset_values = {
             "none": 1,
-            "very_low": 1,
-            "low": 4,
+            "very_low": 4,
+            "low": 1,
             "medium": 2,
-            "high": 1,
-            "very_high": 4,
+            "high": 4,
+            "very_high": 1,
         }
         self.blur = Blur(config=blur_config, use_random=use_random)
 
