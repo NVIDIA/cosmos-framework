@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# ============================================================================
+# LIBERO-10 forward-dynamics (neural simulator) post-training, single GPU.
+#
+# Adapted from action_fd_droid_posttrain.toml. Env required:
+#   LIBERO_ROOT=<dir>/LIBERO_LeRobot_v3/libero_10   (local LeRobot dir)
+#   LIBERO_HOLDOUT_PATH=<path>/holdout_19.txt        (held-out episode ids, never trained on)
+#   BASE_CHECKPOINT_PATH=<Cosmos3-Nano DCP dir>
+#   WAN_VAE_PATH=<Wan2.2_VAE.pth>
+#   IMAGINAIRE_OUTPUT_ROOT=/path/to/output_root
+#
+# Batch: the DROID FD recipe packs 74000 tokens per rank x 8 ranks x grad_accum 1
+# = 592k tokens per optimizer step. Here: 37000 tokens x 1 rank x grad_accum 16
+# = 592k tokens per step (same global batch, token-budget definition).
+# ============================================================================
+
+[job]
+task       = "vfm"
+experiment = "action_fd_libero_posttrain"
+project    = "cosmos3_action_fd"
+group      = "action_sft"
+name       = "action_fd_libero_posttrain"
+wandb_mode = "disabled"
+
+[model]
+precision = "bfloat16"
+max_num_tokens_after_packing = 37000   # smoke at 74000 x grad_accum 8 peaked at 241 GB allocated (254 GB nvidia-smi) of 257 GB
+
+[model.parallelism]
+data_parallel_shard_degree     = 1
+data_parallel_replicate_degree = 1
+
+[model.activation_checkpointing]
+mode = "selective"
+
+[model.tokenizer]
+vae_path = "${oc.env:WAN_VAE_PATH}"
+
+[scheduler]
+cycle_lengths = [1000]   # linear decay from 0.4*lr to 0 over the run (DROID FD: cycle == max_iter)
+
+[trainer]
+max_iter        = 1000
+logging_iter    = 10
+grad_accum_iter = 16      # 37000 tokens x 16 = 592k tokens per step = DROID FD global batch
+
+[trainer.callbacks.compile_tokenizer]
+enabled            = false   # inductor AOT compile of the VAE fails without a CUDA toolkit; eager encode
+warmup_resolutions = ["256"]
+
+[checkpoint]
+load_path = "${oc.env:BASE_CHECKPOINT_PATH}"
+save_iter = 250

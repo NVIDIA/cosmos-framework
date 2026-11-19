@@ -1,0 +1,181 @@
+{
+  "_about": "Cross-task action-swap control on all 20 held-out episodes: each episode is re-rolled from its own real first frame and prompt with the 900 actions of a partner episode of the other task.",
+  "_record": "Episode selection of the earlier study of this recipe on the early-access checkpoint (its run records are not published). The 2026-11-09 measurement on the released checkpoint used exactly these episodes; its record is manifests/RECORD.md.",
+  "pairing_rule": "the i-th task-600 episode (ids sorted ascending) is paired with the i-th task-596 episode, i = 0..9; both directions per pair -> 10 task-600-frame rows + 10 task-596-frame rows",
+  "row_naming": "swap_<frame episode>_actions_<action episode>, as tools/make_manifests.py swap writes them",
+  "rollout_settings": "identical to the matched rollouts: the documented FORWARD_DYNAMICS command of docs/inference_bimanual.md, 4 steps, seed 42, KV cache 64, attention sink 8, autoregressive, latency preset, no torch.compile, no diffusion cache, no guardrails; each row carries guidance 3.0, shift 5.0, 900 actions, 901 frames, 30 fps",
+  "output_dir": "outputs/cosmos3_nano_simulation_humanoid_heldout_swap20",
+  "eval": "tools/eval_fidelity.py --batch heldout/eval/entries_swap20_vs_real.jsonl --out heldout/eval/swap20_vs_real --align auto --device cuda (about 90 s on one GPU; alignment 'top' chosen for 20 of 20)",
+  "pairs": [
+    {
+      "pair_index": 0,
+      "task600_episode": 815362,
+      "task596_episode": 810449,
+      "rows": [
+        {
+          "name": "swap_task600_ep815362_actions_task596_ep810449",
+          "frame_and_prompt_from": "task600_ep815362",
+          "actions_from": "task596_ep810449"
+        },
+        {
+          "name": "swap_task596_ep810449_actions_task600_ep815362",
+          "frame_and_prompt_from": "task596_ep810449",
+          "actions_from": "task600_ep815362"
+        }
+      ]
+    },
+    {
+      "pair_index": 1,
+      "task600_episode": 817265,
+      "task596_episode": 811187,
+      "rows": [
+        {
+          "name": "swap_task600_ep817265_actions_task596_ep811187",
+          "frame_and_prompt_from": "task600_ep817265",
+          "actions_from": "task596_ep811187"
+        },
+        {
+          "name": "swap_task596_ep811187_actions_task600_ep817265",
+          "frame_and_prompt_from": "task596_ep811187",
+          "actions_from": "task600_ep817265"
+        }
+      ]
+    },
+    {
+      "pair_index": 2,
+      "task600_episode": 819929,
+      "task596_episode": 812711,
+      "rows": [
+        {
+          "name": "swap_task600_ep819929_actions_task596_ep812711",
+          "frame_and_prompt_from": "task600_ep819929",
+          "actions_from": "task596_ep812711"
+        },
+        {
+          "name": "swap_task596_ep812711_actions_task600_ep819929",
+          "frame_and_prompt_from": "task596_ep812711",
+          "actions_from": "task600_ep819929"
+        }
+      ]
+    },
+    {
+      "pair_index": 3,
+      "task600_episode": 821169,
+      "task596_episode": 813228,
+      "rows": [
+        {
+          "name": "swap_task600_ep821169_actions_task596_ep813228",
+          "frame_and_prompt_from": "task600_ep821169",
+          "actions_from": "task596_ep813228"
+        },
+        {
+          "name": "swap_task596_ep813228_actions_task600_ep821169",
+          "frame_and_prompt_from": "task596_ep813228",
+          "actions_from": "task600_ep821169"
+        }
+      ]
+    },
+    {
+      "pair_index": 4,
+      "task600_episode": 822703,
+      "task596_episode": 813610,
+      "rows": [
+        {
+          "name": "swap_task600_ep822703_actions_task596_ep813610",
+          "frame_and_prompt_from": "task600_ep822703",
+          "actions_from": "task596_ep813610"
+        },
+        {
+          "name": "swap_task596_ep813610_actions_task600_ep822703",
+          "frame_and_prompt_from": "task596_ep813610",
+          "actions_from": "task600_ep822703"
+        }
+      ]
+    },
+    {
+      "pair_index": 5,
+      "task600_episode": 824031,
+      "task596_episode": 813907,
+      "rows": [
+        {
+          "name": "swap_task600_ep824031_actions_task596_ep813907",
+          "frame_and_prompt_from": "task600_ep824031",
+          "actions_from": "task596_ep813907"
+        },
+        {
+          "name": "swap_task596_ep813907_actions_task600_ep824031",
+          "frame_and_prompt_from": "task596_ep813907",
+          "actions_from": "task600_ep824031"
+        }
+      ]
+    },
+    {
+      "pair_index": 6,
+      "task600_episode": 825215,
+      "task596_episode": 814265,
+      "rows": [
+        {
+          "name": "swap_task600_ep825215_actions_task596_ep814265",
+          "frame_and_prompt_from": "task600_ep825215",
+          "actions_from": "task596_ep814265"
+        },
+        {
+          "name": "swap_task596_ep814265_actions_task600_ep825215",
+          "frame_and_prompt_from": "task596_ep814265",
+          "actions_from": "task600_ep825215"
+        }
+      ]
+    },
+    {
+      "pair_index": 7,
+      "task600_episode": 826290,
+      "task596_episode": 815134,
+      "rows": [
+        {
+          "name": "swap_task600_ep826290_actions_task596_ep815134",
+          "frame_and_prompt_from": "task600_ep826290",
+          "actions_from": "task596_ep815134"
+        },
+        {
+          "name": "swap_task596_ep815134_actions_task600_ep826290",
+          "frame_and_prompt_from": "task596_ep815134",
+          "actions_from": "task600_ep826290"
+        }
+      ]
+    },
+    {
+      "pair_index": 8,
+      "task600_episode": 827325,
+      "task596_episode": 815473,
+      "rows": [
+        {
+          "name": "swap_task600_ep827325_actions_task596_ep815473",
+          "frame_and_prompt_from": "task600_ep827325",
+          "actions_from": "task596_ep815473"
+        },
+        {
+          "name": "swap_task596_ep815473_actions_task600_ep827325",
+          "frame_and_prompt_from": "task596_ep815473",
+          "actions_from": "task600_ep827325"
+        }
+      ]
+    },
+    {
+      "pair_index": 9,
+      "task600_episode": 836956,
+      "task596_episode": 815752,
+      "rows": [
+        {
+          "name": "swap_task600_ep836956_actions_task596_ep815752",
+          "frame_and_prompt_from": "task600_ep836956",
+          "actions_from": "task596_ep815752"
+        },
+        {
+          "name": "swap_task596_ep815752_actions_task600_ep836956",
+          "frame_and_prompt_from": "task596_ep815752",
+          "actions_from": "task600_ep836956"
+        }
+      ]
+    }
+  ]
+}

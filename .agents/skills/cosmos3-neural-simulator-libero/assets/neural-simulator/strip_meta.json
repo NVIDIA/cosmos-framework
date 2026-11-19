@@ -1,0 +1,73 @@
+{
+ "hero_chunk0": {
+  "episode": 26,
+  "seed": 0,
+  "chunk": 0,
+  "frames": [
+   1,
+   6,
+   11,
+   16
+  ],
+  "psnr_chunk_fd": 31.58,
+  "psnr_chunk_control": 22.09,
+  "file": "hero_ep026_chunk00.png"
+ },
+ "hero_chunk14": {
+  "episode": 26,
+  "seed": 0,
+  "chunk": 14,
+  "frames": [
+   225,
+   230,
+   235,
+   240
+  ],
+  "psnr_chunk_fd": 20.35,
+  "psnr_chunk_control": 13.47,
+  "file": "hero_ep026_chunk14.png"
+ },
+ "hero_episode": {
+  "episode": 26,
+  "task": "put both the alphabet soup and the tomato sauce in the basket",
+  "frames_total": 296,
+  "psnr_fd_seed0": 21.01,
+  "psnr_control_seed0": 15.9
+ },
+ "compare_309": {
+  "episode": 309,
+  "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+  "winner": "FD",
+  "chunk": 14,
+  "frames": [
+   225,
+   230,
+   235,
+   240
+  ],
+  "psnr_chunk_fd": 21.28,
+  "psnr_chunk_fdid": 18.84,
+  "psnr_episode_fd_seed0": 22.08,
+  "psnr_episode_fdid_seed0": 21.33,
+  "frames_total": 264,
+  "file": "fd_vs_fdid_ep309_fd_wins_chunk14.png"
+ },
+ "compare_62": {
+  "episode": 62,
+  "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+  "winner": "FD+ID",
+  "chunk": 12,
+  "frames": [
+   193,
+   198,
+   203,
+   208
+  ],
+  "psnr_chunk_fd": 18.86,
+  "psnr_chunk_fdid": 19.71,
+  "psnr_episode_fd_seed0": 21.33,
+  "psnr_episode_fdid_seed0": 21.33,
+  "frames_total": 251,
+  "file": "fd_vs_fdid_ep062_fdid_wins_chunk12.png"
+ }
+}

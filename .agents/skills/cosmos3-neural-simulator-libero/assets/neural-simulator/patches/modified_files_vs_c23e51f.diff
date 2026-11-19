@@ -1,0 +1,430 @@
+diff --git a/cosmos_framework/configs/base/config.py b/cosmos_framework/configs/base/config.py
+index 9e95094..d0d19ae 100644
+--- a/cosmos_framework/configs/base/config.py
++++ b/cosmos_framework/configs/base/config.py
+@@ -99,6 +99,8 @@ def make_config() -> Config:
+     import cosmos_framework.configs.base.experiment.action.posttrain_config.action_policy_libero_nano  # noqa: F401
+     import cosmos_framework.configs.base.experiment.action.posttrain_config.action_policy_robocasa_nano  # noqa: F401
+     import cosmos_framework.configs.base.experiment.action.posttrain_config.action_fd_droid_posttrain  # noqa: F401
++    import cosmos_framework.configs.base.experiment.action.posttrain_config.action_fd_libero_posttrain  # noqa: F401
++    import cosmos_framework.configs.base.experiment.action.posttrain_config.action_fd_id_libero_posttrain  # noqa: F401
+     import cosmos_framework.configs.base.experiment.sft.vision_sft_nano  # noqa: F401
+     import cosmos_framework.configs.base.experiment.sft.vision_sft_super  # noqa: F401
+     import cosmos_framework.configs.base.experiment.sft.vision_sft_edge  # noqa: F401
+diff --git a/cosmos_framework/data/generator/action/datasets/action_sft_dataset.py b/cosmos_framework/data/generator/action/datasets/action_sft_dataset.py
+index c0638e2..604c207 100644
+--- a/cosmos_framework/data/generator/action/datasets/action_sft_dataset.py
++++ b/cosmos_framework/data/generator/action/datasets/action_sft_dataset.py
+@@ -48,6 +48,12 @@ class ActionSFTDataset(Dataset):
+         """Delegate to the inner DROIDLeRobotDataset (per-episode/segment flat-index blocks)."""
+         return self._dataset.get_shuffle_blocks()
+ 
++    def set_epoch(self, epoch: int) -> None:
++        """Forward the epoch counter to datasets that draw per-visit choices from it (no-op otherwise)."""
++        hook = getattr(self._dataset, "set_epoch", None)
++        if hook is not None:
++            hook(epoch)
++
+ 
+ class ActionIterableShuffleDataset(IterableDataset):
+     """Streaming view of a map-style ``ActionSFTDataset``.
+@@ -62,10 +68,15 @@ class ActionIterableShuffleDataset(IterableDataset):
+     ``shard_world_size`` / ``shard_rank`` are set by ``RankPartitionedDataLoader``.
+     """
+ 
+-    def __init__(self, dataset: "ActionSFTDataset", seed: int = 42):
++    def __init__(self, dataset: "ActionSFTDataset", seed: int = 42, shuffle_within_shard: bool = False):
+         super().__init__()
+         self._dataset = dataset
+         self._seed = int(seed)
++        # Default (False): windows of each episode stream sequentially (I/O locality). True: the
++        # (rank, worker) shard's windows are yielded in a random order each epoch, so consecutive
++        # samples come from different episodes (higher per-batch diversity when few workers feed
++        # a large token budget, e.g. single-GPU runs). Epoch coverage and shard disjointness are unchanged.
++        self._shuffle_within_shard = bool(shuffle_within_shard)
+         self.shard_world_size = 1
+         self.shard_rank = 0
+ 
+@@ -82,14 +93,25 @@ class ActionIterableShuffleDataset(IterableDataset):
+         global_shard = int(self.shard_rank) * nw + wid
+         total_shards = max(1, int(self.shard_world_size) * nw)
+         epoch = 0
++        set_epoch = getattr(self._dataset, "set_epoch", None)
+         while True:
++            if set_epoch is not None:
++                set_epoch(epoch)
+             g = torch.Generator()
+             g.manual_seed(self._seed + epoch)  # same permutation across all (rank,worker) -> disjoint shard
+             order = torch.randperm(len(blocks), generator=g).tolist()
+-            for b in order[global_shard::total_shards]:
+-                start, length = blocks[b]
+-                for idx in range(start, start + length):
+-                    yield self._dataset[idx]
++            my_blocks = order[global_shard::total_shards]
++            if self._shuffle_within_shard:
++                indices = [idx for b in my_blocks for idx in range(blocks[b][0], blocks[b][0] + blocks[b][1])]
++                g2 = torch.Generator()
++                g2.manual_seed(self._seed + 1_000_003 * (epoch + 1) + global_shard)  # distinct per shard and epoch
++                for j in torch.randperm(len(indices), generator=g2).tolist():
++                    yield self._dataset[indices[j]]
++            else:
++                for b in my_blocks:
++                    start, length = blocks[b]
++                    for idx in range(start, start + length):
++                        yield self._dataset[idx]
+             epoch += 1
+ 
+ 
+@@ -318,6 +340,7 @@ def get_action_libero_sft_dataset(
+     split: str = "train",
+     val_ratio: float = 0.01,
+     seed: int = 0,
++    holdout_episodes_path: str | None = None,
+     resolution: str | int | None = None,
+     max_action_dim: int = 64,
+     tokenizer_config: dict | None = None,
+@@ -326,9 +349,13 @@ def get_action_libero_sft_dataset(
+     append_duration_fps_timestamps: bool = True,
+     append_resolution_info: bool = True,
+     append_idle_frames: bool = True,
++    idle_frames_dropout: float = 0.05,
+     format_prompt_as_json: bool = False,
+     iterable_shuffle: bool = False,
+     episode_shuffle_seed: int = 42,
++    shuffle_within_shard: bool = False,
++    video_fps_choices: list[float] | tuple[float, ...] | None = None,
++    mix_seed: int = 42,
+ ) -> Dataset:
+     """Build the LIBERO action-policy SFT dataset (GA reproduction defaults).
+ 
+@@ -337,7 +364,13 @@ def get_action_libero_sft_dataset(
+     → 256x512) through ``ActionTransformPipeline``. ``root`` is a LOCAL LeRobot dir
+     (read parquet + video directly); pre-sync the HF dataset once, e.g.
+     ``hf download lerobot/libero_10 --repo-type dataset --local-dir <root>``. Point
+-    ``root`` at libero_10 alone. The
++    ``root`` at libero_10 alone. ``holdout_episodes_path`` (optional) pins the held-out
++    episodes to an explicit id list (``split='train'`` excludes them, ``split='val'``
++    selects them) instead of the seeded ``val_ratio`` split. ``idle_frames_dropout`` only
++    applies to plain-text prompts (the JSON formatter renders idle frames without dropout).
++    ``shuffle_within_shard`` randomizes window order inside each worker's episode shard.
++    ``video_fps_choices`` (e.g. ``[5, 10, 20]``) mixes video frame rates per visit with dense native-rate
++    actions; ``mix_seed`` seeds those per-visit draws (and the mode draw for ``'a+b'`` modes). The
+     dataset is FPS-agnostic (decodes at real frame timestamps); ``fps`` is metadata
+     for ``conditioning_fps`` / prompt duration.
+     """
+@@ -356,6 +389,9 @@ def get_action_libero_sft_dataset(
+         pose_coordinate_frame=pose_coordinate_frame,
+         action_normalization=action_normalization,
+         action_stats_path=action_stats_path,
++        holdout_episodes_path=holdout_episodes_path,
++        video_fps_choices=video_fps_choices,
++        mix_seed=mix_seed,
+     )
+     transform = ActionTransformPipeline(
+         tokenizer_config=tokenizer_config,
+@@ -365,9 +401,10 @@ def get_action_libero_sft_dataset(
+         append_duration_fps_timestamps=append_duration_fps_timestamps,
+         append_resolution_info=append_resolution_info,
+         append_idle_frames=append_idle_frames,
++        idle_frames_dropout=idle_frames_dropout,
+         format_prompt_as_json=format_prompt_as_json,
+     )
+     sft = ActionSFTDataset(dataset, transform, resolution)
+     if iterable_shuffle:
+-        return ActionIterableShuffleDataset(sft, seed=episode_shuffle_seed)
++        return ActionIterableShuffleDataset(sft, seed=episode_shuffle_seed, shuffle_within_shard=shuffle_within_shard)
+     return sft
+diff --git a/cosmos_framework/data/generator/action/datasets/base_dataset.py b/cosmos_framework/data/generator/action/datasets/base_dataset.py
+index bec2c5c..55f632a 100644
+--- a/cosmos_framework/data/generator/action/datasets/base_dataset.py
++++ b/cosmos_framework/data/generator/action/datasets/base_dataset.py
+@@ -5,6 +5,7 @@
+ 
+ from __future__ import annotations
+ 
++import functools
+ import json
+ import random
+ from abc import ABC, abstractmethod
+@@ -23,6 +24,25 @@ from cosmos_framework.data.generator.action.utils.domain_utils import get_domain
+ from cosmos_framework.data.generator.action.utils.pose_utils import compute_idle_frames
+ 
+ _MODE_CHOICES = ("forward_dynamics", "inverse_dynamics", "wam")
++_VALID_SAMPLE_MODES = ("forward_dynamics", "inverse_dynamics", "wam", "policy")  # transforms.build_sequence_plan_from_mode
++
++
++@functools.lru_cache(maxsize=None)
++def parse_mode_choices(mode: str) -> tuple[str, ...]:
++    """``'joint'`` -> the shipped 3-way FD/ID/WAM draw; ``'a+b[+c]'`` -> uniform per-sample draw over the
++    listed modes (e.g. ``'forward_dynamics+inverse_dynamics'`` = 50/50 FD/ID, WAM excluded); otherwise the
++    fixed mode. Validation fails fast on unknown or repeated modes."""
++    if mode == "joint":
++        return _MODE_CHOICES
++    if "+" in mode:
++        parts = tuple(part.strip() for part in mode.split("+"))
++        bad = [part for part in parts if part not in _VALID_SAMPLE_MODES]
++        if bad or len(parts) < 2 or len(set(parts)) != len(parts):
++            raise ValueError(
++                f"mode={mode!r}: use 'joint', one of {_VALID_SAMPLE_MODES}, or '+'-joined distinct modes"
++            )
++        return parts
++    return (mode,)
+ 
+ 
+ class ActionBaseDataset(ABC, Dataset):
+@@ -55,6 +75,7 @@ class ActionBaseDataset(ABC, Dataset):
+         if self._sample_stride < 1:
+             raise ValueError(f"sample_stride must be >= 1, got {self._sample_stride}")
+         self._mode = mode
++        parse_mode_choices(str(mode))  # fail fast on an invalid mode string
+         self._pose_convention = pose_convention
+         self._tolerance_s = float(tolerance_s)
+         self._viewpoint = viewpoint
+@@ -152,10 +173,14 @@ class ActionBaseDataset(ABC, Dataset):
+             min_streak=3,
+         )
+ 
+-    def _choose_mode(self) -> str:
+-        if self._mode == "joint":
+-            return random.choice(_MODE_CHOICES)
+-        return self._mode
++    def _choose_mode(self, rng: random.Random | None = None) -> str:
++        """Per-sample mode. ``'joint'`` and ``'a+b'`` strings draw uniformly (module ``random`` unless a
++        per-visit ``rng`` is given); a single mode string is returned unchanged. ``_mode`` is re-parsed on
++        every call because ``scripts.dataset_utils.set_dataset_mode`` assigns it directly."""
++        choices = parse_mode_choices(str(self._mode))
++        if len(choices) == 1:
++            return choices[0]
++        return (rng if rng is not None else random).choice(choices)
+ 
+     def _video_path(self, episode: dict[str, Any], video_key: str) -> Path:
+         chunk_idx = int(
+diff --git a/cosmos_framework/data/generator/action/datasets/libero_lerobot_dataset.py b/cosmos_framework/data/generator/action/datasets/libero_lerobot_dataset.py
+index 7c5d1c6..8016a40 100644
+--- a/cosmos_framework/data/generator/action/datasets/libero_lerobot_dataset.py
++++ b/cosmos_framework/data/generator/action/datasets/libero_lerobot_dataset.py
+@@ -24,6 +24,7 @@ from __future__ import annotations
+ 
+ import json
+ import random
++from collections.abc import Sequence
+ from pathlib import Path
+ from typing import Any, Literal
+ 
+@@ -33,7 +34,7 @@ import torch
+ import torch.nn.functional as F
+ 
+ from cosmos_framework.data.generator.action.utils.action_spec import ActionSpec, Gripper, Pos, Rot, build_action_spec
+-from cosmos_framework.data.generator.action.datasets.base_dataset import ActionBaseDataset
++from cosmos_framework.data.generator.action.datasets.base_dataset import ActionBaseDataset, parse_mode_choices
+ from cosmos_framework.data.generator.action.libero_pose_utils import libero_action_dim, libero_rotation_format
+ from cosmos_framework.data.generator.action.utils.pose_utils import convert_rotation
+ from cosmos_framework.utils import log
+@@ -83,6 +84,9 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
+         val_ratio: float = 0.01,
+         seed: int = 0,
+         sample_stride: int = 1,
++        holdout_episodes_path: str | None = None,
++        video_fps_choices: Sequence[float] | None = None,
++        mix_seed: int = 42,
+     ) -> None:
+         if action_space != "frame_wise_relative":
+             raise NotImplementedError(
+@@ -121,6 +125,26 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
+                 log.info(f"Using dataset native fps={info_fps} for conditioning (requested {fps}).")
+             self._fps = float(info_fps)
+             self._dt = 1.0 / self._fps
++        # Optional frame-rate mix (cell-2 recipe): per visit draw an integer source stride s = native_fps / fps.
++        # The clip keeps chunk_length+1 frames at rows start + s*k; the action stream stays DENSE at the native
++        # rate over the covered span (chunk_length*s frame-wise deltas, sequence-plan "Case C"); the sample emits
++        # conditioning_fps = native_fps/s (video) and conditioning_fps_action = native_fps (actions). Draws come
++        # from random.Random(f"{mix_seed}:{epoch}:{idx}") (mode first, then stride), epoch set via set_epoch().
++        self._mix_seed = int(mix_seed)
++        self._epoch = 0
++        self._fps_mix = video_fps_choices is not None
++        if self._fps_mix:
++            strides: list[int] = []
++            for f in list(video_fps_choices):
++                ratio = self._fps / float(f)
++                if abs(ratio - round(ratio)) > 1e-6 or round(ratio) < 1:
++                    raise ValueError(f"video fps {f} must be an integer divisor of the native fps {self._fps}")
++                strides.append(int(round(ratio)))
++            if len(set(strides)) != len(strides):
++                raise ValueError(f"video_fps_choices has duplicates: {list(video_fps_choices)}")
++            self._video_strides: tuple[int, ...] = tuple(strides)
++        else:
++            self._video_strides = (1,)
+         self._camera_mode = camera_mode
+         self._image_size = int(image_size)
+         self._rotation_space = rotation_space.lower().strip()
+@@ -161,8 +185,37 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
+         assert np.all(np.diff(self._row_episode) >= 0), "episode_index not contiguous after sorting by frame index"
+         ep_vals, ep_starts, ep_counts = np.unique(self._row_episode, return_index=True, return_counts=True)
+ 
+-        # Deterministic per-episode train/val split (seeded; same on every rank).
+-        keep = self._split_episode_ids(ep_vals.tolist(), split, val_ratio, seed)
++        # Episode split. With ``holdout_episodes_path`` the held-out set is exactly the
++        # episode ids listed in that file (one id per line, '#' comments, extra columns
++        # ignored): ``train`` = everything else, ``val``/``test`` = the listed ids,
++        # ``full`` = all. Otherwise a deterministic seeded per-episode split.
++        self._holdout_episodes_path = holdout_episodes_path
++        if holdout_episodes_path is not None and not str(holdout_episodes_path).strip():
++            raise ValueError(
++                "holdout_episodes_path is set but empty (unset or empty LIBERO_HOLDOUT_PATH?); "
++                "pass None to use the seeded val_ratio split explicitly."
++            )
++        if holdout_episodes_path:
++            holdout = self._read_holdout_episode_ids(holdout_episodes_path)
++            all_ids = set(int(v) for v in ep_vals.tolist())
++            missing = sorted(holdout - all_ids)
++            if missing:
++                raise ValueError(
++                    f"holdout_episodes_path={holdout_episodes_path!r} lists episode ids not in the dataset: {missing}"
++                )
++            if split == "train":
++                keep = all_ids - holdout
++            elif split == "full":
++                keep = all_ids
++            else:
++                keep = holdout
++            log.info(
++                f"LIBERO explicit holdout: {len(holdout)} episodes from {holdout_episodes_path} "
++                f"(split={split!r} -> kept {len(keep)}/{len(all_ids)})"
++            )
++        else:
++            # Deterministic per-episode train/val split (seeded; same on every rank).
++            keep = self._split_episode_ids(ep_vals.tolist(), split, val_ratio, seed)
+         kept = np.array([int(v) in keep for v in ep_vals], dtype=bool)
+         self._ep_vals = ep_vals.astype(np.int64)[kept]
+         self._ep_starts = ep_starts.astype(np.int64)[kept]
+@@ -223,6 +276,21 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
+ 
+     # ---- index helpers -----------------------------------------------------
+ 
++    @staticmethod
++    def _read_holdout_episode_ids(path: str) -> set[int]:
++        """Parse a holdout file: one episode id per line (first whitespace-separated token);
++        blank lines and ``#`` comments are ignored."""
++        ids: set[int] = set()
++        with open(path, "r", encoding="utf-8") as fh:
++            for line in fh:
++                line = line.strip()
++                if not line or line.startswith("#"):
++                    continue
++                ids.add(int(line.split()[0]))
++        if not ids:
++            raise ValueError(f"holdout file {path!r} lists no episode ids")
++        return ids
++
+     @staticmethod
+     def _split_episode_ids(ep_ids: list[int], split: str, val_ratio: float, seed: int) -> set[int]:
+         if split == "full":
+@@ -236,6 +304,18 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
+             return set(int(v) for v in ep_ids) - val
+         return val  # val/valid/validation/eval/test
+ 
++    def set_epoch(self, epoch: int) -> None:
++        """Epoch counter for the per-visit mode/stride RNG (called by ``ActionIterableShuffleDataset``)."""
++        self._epoch = int(epoch)
++
++    @staticmethod
++    def _remap_start(j: int, n: int, stride: int, chunk: int) -> int:
++        """Map window offset ``j`` (index space of stride 1: 0..n-chunk-1) onto the feasible starts of a
++        stride-``stride`` window (0..n-1-chunk*stride), proportionally and monotonically (round half up)."""
++        if stride == 1 or n - chunk - 1 <= 0:
++            return j
++        return (2 * j * (n - 1 - chunk * stride) + (n - chunk - 1)) // (2 * (n - chunk - 1))
++
+     def __len__(self) -> int:
+         return int(self._valid_cum[-1]) if self._valid_cum.size else 0
+ 
+@@ -269,20 +349,32 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
+         raise RuntimeError(f"LIBERO: failed to load a sample after 8 resamples; last error: {last_err}")
+ 
+     def _build_item(self, idx: int) -> dict[str, Any]:
+-        mode = self._choose_mode()
+         idx = int(idx)
+         ep = int(np.searchsorted(self._valid_cum, idx, side="right"))
+         prev = int(self._valid_cum[ep - 1]) if ep > 0 else 0
+-        start = int(self._ep_starts[ep]) + (idx - prev)
++        j = idx - prev
++        n = int(self._valid_cum[ep]) - prev + self._chunk_length  # episode length in frames
++        ep_start = int(self._ep_starts[ep])
+         episode_index = int(self._ep_vals[ep])
+         episode = self._episodes[episode_index]
+ 
+-        stop = start + self._chunk_length + 1
+-        timestamps = [float(self._row_timestamp[j]) for j in range(start, stop)]
++        rng: random.Random | None = None
++        if self._fps_mix or len(parse_mode_choices(str(self._mode))) > 1:
++            rng = random.Random(f"{self._mix_seed}:{self._epoch}:{idx}")
++        mode = self._choose_mode(rng)
++        stride = 1
++        if self._fps_mix:
++            feasible = [s_ for s_ in self._video_strides if self._chunk_length * s_ + 1 <= n]
++            stride = (rng if rng is not None else random).choice(feasible) if feasible else 1
++        start = ep_start + self._remap_start(j, n, stride, self._chunk_length)
++        assert ep_start <= start and start + self._chunk_length * stride <= ep_start + n - 1
++
++        timestamps = [float(self._row_timestamp[start + stride * k]) for k in range(self._chunk_length + 1)]
+         video = self._load_video(episode, timestamps)
+ 
+-        # frame_wise_relative: chunk per-frame deltas are the stored actions directly.
+-        raw = self._row_action[start : start + self._chunk_length]  # [chunk, 7]
++        # frame_wise_relative: per-frame deltas are the stored actions directly; the stream stays dense at the
++        # native rate over the covered span (chunk_length * stride actions, never +1).
++        raw = self._row_action[start : start + self._chunk_length * stride]  # [chunk*stride, 7]
+         action = self._build_frame_wise_action(raw)
+ 
+         task = self._tasks[int(self._row_task[start])]
+@@ -293,7 +385,12 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
+             extras["additional_view_description"] = (
+                 "The left half shows the third-person view; the right half shows the wrist-mounted camera."
+             )
+-        return self._build_result(mode=mode, video=video, action=action, ai_caption=ai_caption, **extras)
++        result = self._build_result(mode=mode, video=video, action=action, ai_caption=ai_caption, **extras)
++        if self._fps_mix:
++            # video fps for the prompt and vision mRoPE; actions keep the native rate (separate key read by the model).
++            result["conditioning_fps"] = torch.tensor(round(self._fps / stride), dtype=torch.long)
++            result["conditioning_fps_action"] = torch.tensor(round(self._fps), dtype=torch.long)
++        return result
+ 
+     def _build_frame_wise_action(self, raw: np.ndarray) -> torch.Tensor:
+         raw_t = torch.from_numpy(np.ascontiguousarray(raw)).float()  # [chunk, 7]
+diff --git a/sitecustomize.py b/sitecustomize.py
+index c185145..9d0d019 100644
+--- a/sitecustomize.py
++++ b/sitecustomize.py
+@@ -29,6 +29,32 @@ if os.environ.get("COSMOS_DL_FILE_SYSTEM_SHARING") == "1":
+     except Exception:
+         pass
+ 
++# Preload the CUDA-13 NPP / NVRTC shared libraries that ship in the ``nvidia-npp`` /
++# ``nvidia-cuda-nvrtc`` wheels (installed under site-packages/nvidia/cu13/lib on this
++# layout). torchcodec's libtorchcodec_core*.so links libnppicc.so.13 / libnvrtc.so.13 but
++# has no RPATH into that directory and torch does not preload NPP, so without this
++# ``import torchcodec`` fails with "libnppicc.so.13: cannot open shared object file"
++# and every LeRobot video decode (default backend torchcodec) errors out. Opt out with
++# COSMOS_PRELOAD_CU13_LIBS=0. Only files that exist are loaded; failures are ignored.
++if os.environ.get("COSMOS_PRELOAD_CU13_LIBS", "1") != "0":
++    try:
++        import ctypes as _ctypes
++        import sysconfig as _sysconfig
++
++        _cu13_lib = os.path.join(_sysconfig.get_paths()["purelib"], "nvidia", "cu13", "lib")
++    except Exception:
++        _cu13_lib = None
++    if _cu13_lib is not None:
++        for _name in ("libnppc.so.13", "libnppicc.so.13", "libnvrtc.so.13"):
++            _f = os.path.join(_cu13_lib, _name)
++            if os.path.exists(_f):
++                try:
++                    # Default (RTLD_LOCAL) is enough: the loader satisfies later NEEDED entries by
++                    # soname from already-loaded objects (same trick as torch's CUDA preloads).
++                    _ctypes.CDLL(_f)
++                except OSError as _e:
++                    sys.stderr.write(f"sitecustomize: failed to preload {_f}: {_e}\n")
++
+ _DIR = os.environ.get("LOAD_TRACE_DIR", "")
+ if _DIR:
+     _TAG = os.environ.get("LOAD_TRACE_TAG", "default")
