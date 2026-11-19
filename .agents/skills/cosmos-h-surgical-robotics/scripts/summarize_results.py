@@ -2,7 +2,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Compare forward-dynamics evaluations of several checkpoints and write ``results/metrics.json``.
+"""Compare forward-dynamics evaluations of several checkpoints and write a metrics JSON.
+
+The measured reference of this recipe, written by this script, is ``results/metrics.json``.
 
 Each run directory is the output of ``scripts/evaluate.sh`` (``<run>/<split>/seed_<s>/``). Samples
 are matched by name across runs, so the comparison is paired (same window, same seed). Reports
@@ -11,8 +13,8 @@ PSNR (and SSIM/LPIPS when present) per split, overall and per SutureBot task.
 Example::
 
     python scripts/summarize_results.py --run base=outputs/eval/base \\
-        --run iter_1000=outputs/eval/iter_1000 --run iter_2000=outputs/eval/iter_2000 \\
-        --reference base -o results/metrics.json
+        --run iter_3000=outputs/eval/iter_000003000 \\
+        --reference base -o outputs/metrics.json
 """
 
 from __future__ import annotations
@@ -49,14 +51,17 @@ def stats(values: list[float]) -> dict:
     n = len(values)
     mean = sum(values) / n
     std = math.sqrt(sum((v - mean) ** 2 for v in values) / (n - 1)) if n > 1 else 0.0
-    return {"mean": round(mean, 4), "std": round(std, 4), "sem": round(std / math.sqrt(n), 4), "n": n}
+    return {
+        "mean": round(mean, 4), "std": round(std, 4), "sem": round(std / math.sqrt(n), 4), "n": n,
+        "min": round(min(values), 4), "max": round(max(values), 4),
+    }  # fmt: skip
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--run", action="append", required=True, help="<label>=<evaluate.sh output dir>")
     parser.add_argument("--reference", help="Label of the control run for paired deltas (e.g. base).")
-    parser.add_argument("-o", "--output", type=Path, default=Path("results/metrics.json"))
+    parser.add_argument("-o", "--output", type=Path, default=Path("outputs/metrics.json"))
     parser.add_argument("--metadata", type=Path, help="JSON with revisions/hardware/settings to embed.")
     args = parser.parse_args()
 
@@ -84,6 +89,12 @@ def main() -> None:
                 if args.reference and label != args.reference:
                     ref = runs[args.reference]
                     entry["delta_vs_" + args.reference] = stats([run[k][metric] - ref[k][metric] for k in keys])
+                    # Paired difference per task (same clips, same seed).
+                    entry["delta_vs_" + args.reference + "_by_task"] = {
+                        task: stats([run[k][metric] - ref[k][metric] for k in keys if run[k]["task"] == task])
+                        for task in TASKS
+                        if any(run[k]["task"] == task for k in keys)
+                    }
                 per_split[split][metric] = entry
         result["runs"][label] = dict(per_split)
     if args.metadata:

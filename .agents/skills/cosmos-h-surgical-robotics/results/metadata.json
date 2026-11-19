@@ -33,5 +33,6 @@
     "sampler": "UniPC, 35 steps, guidance 6.0",
     "hardware": "1x NVIDIA A100-SXM4-80GB per checkpoint"
   },
-  "measured": "2026-10-14 to 2026-10-15"
+  "measured": "2026-10-14 to 2026-10-15",
+  "release_check": "The runs used pre-release builds of cosmos3_h_embodied and of the weights. The released safetensors are tensor-for-tensor identical to the measured weights and convert to an identical DCP checkpoint. At cosmos3_h_embodied 14d1626 (2026-11-18): smoke-test losses 26.6416 and 26.3407 (as measured); re-evaluating the control and iteration 3,000 reproduces every split mean within 0.02 dB; paired delta +0.77 +- 0.13 dB (val) and -0.05 +- 0.14 dB (test), n = 128 each."
 }

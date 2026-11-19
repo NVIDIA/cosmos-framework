@@ -10,8 +10,8 @@ GIF (for the README). Needs ``ffmpeg`` on PATH.
 
 Example::
 
-    python scripts/make_comparison.py --split test --seed 20260908 --sample 1240 \\
-        --base outputs/eval/base --finetuned outputs/eval/iter_2000 -o assets/hero
+    python scripts/make_comparison.py --split test --seed 20260908 --sample 1530 \\
+        --base outputs/eval/base --finetuned outputs/eval/iter_000003000 -o outputs/media/hero
 """
 
 from __future__ import annotations

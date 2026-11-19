@@ -18,7 +18,7 @@
 #   SUTUREBOT_TRAIN_TISSUES  comma-separated tissue IDs (default 1,2,4,5,6,7,8,9,10)
 #   SUTUREBOT_NORMALIZER     action statistics JSON (default: the SutureBot file shipped with cosmos3_h_embodied)
 #   EXPERIMENT               suturebot_fd (default) or suturebot_fd_smoke
-#   SMOKE=1                  1 GPU, 2-layer model (COSMOS_SMOKE=1), suturebot_fd_smoke, no checkpoint
+#   SMOKE=1                  1 GPU, 2-layer model (COSMOS_SMOKE=1), suturebot_fd_smoke, no base checkpoint
 #   NPROC_PER_NODE           GPUs per node (default 8)
 #   NNODES, NODE_RANK, MASTER_ADDR, MASTER_PORT   multi-node (torchrun)
 #   EXTRA_OVERRIDES          space-separated Hydra overrides, e.g. "trainer.max_iter=500"
