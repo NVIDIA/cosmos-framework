@@ -144,7 +144,7 @@ def compact_json_file(path: Path) -> str:
 
 def media_to_data_url(path: Path) -> str:
     """Read a supported local image or video as a base64 data URL."""
-    path = path.resolve()
+    path = path.absolute()
     if not path.is_file():
         raise FileNotFoundError(f"Media file does not exist: {path}")
     try:

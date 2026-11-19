@@ -58,7 +58,7 @@ cache preparation, then launch the Generator with
 `NIM_MODEL_VARIANT=multiview`:
 
 ```bash
-docker run -d --name cosmos3-multiview \
+docker run -d --name cosmos3-generator \
   --gpus '"device=0"' \
   --shm-size 16g \
   --ulimit memlock=-1 \
