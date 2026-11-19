@@ -14,7 +14,7 @@ authors = [
 description = "Cosmos-Framework: Cosmos3 World Foundation Model (WFM)"
 requires-python = ">=3.10,<3.14"
 license = {text = "OpenMDW-1.1 AND Apache-2.0"}
-license-files = ["LICENSE", "NOTICE", "ATTRIBUTIONS.md", "cosmos_framework/licenses/**/*.txt"]
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_LICENSES", "ATTRIBUTIONS.md"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: GPU :: NVIDIA CUDA",

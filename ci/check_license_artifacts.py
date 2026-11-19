@@ -4,7 +4,6 @@
 """Check the third-party license files in built distributions."""
 
 import argparse
-import re
 import tarfile
 import tomllib
 from collections.abc import Callable
@@ -23,9 +22,8 @@ def verify_license_files(project: Path, dist: Path) -> None:
             expected[path.relative_to(project).as_posix()] = path.read_bytes()
 
     notice = expected.get("NOTICE", b"").decode()
-    for path in re.findall(r"cosmos_framework/licenses/third_party/[\w.-]+\.txt", notice):
-        if path not in expected:
-            raise SystemExit(f"{project}: NOTICE references an unbundled license file: {path}")
+    if "THIRD_PARTY_LICENSES" in notice and "THIRD_PARTY_LICENSES" not in expected:
+        raise SystemExit(f"{project}: NOTICE references an unbundled license file: THIRD_PARTY_LICENSES")
 
     wheels = sorted(dist.glob("*.whl"))
     sdists = sorted(dist.glob("*.tar.gz"))
