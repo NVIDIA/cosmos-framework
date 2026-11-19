@@ -474,17 +474,6 @@ Multiview requests reject top-level `prompt`, `input_reference`, `transfer`,
 `action_params`, and `negative_prompt`. Per-view `control` implies WSM;
 do not add `transfer.wsm`.
 
-> [!NOTE]
-> The `/openapi.json` request schemas served by the multiview variant still
-> list the general Generator fields `prompt` and `negative_prompt`, and the
-> `image2video` schema also lists `input_reference`. Multiview rejects them
-> with HTTP 422, for example `Multiview rejects prompt`,
-> `Multiview rejects negative_prompt`, or
-> `does not accept top-level input_reference`. Put each caption in
-> `multiview.views[].prompt`, the negative prompt in
-> `multiview.per_view_negative_prompt`, and RGB conditioning in
-> `multiview.views[].vision`.
-
 ## Output
 
 A successful response returns `multiview` instead of `b64_video`:
