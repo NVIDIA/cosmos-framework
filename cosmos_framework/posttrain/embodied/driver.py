@@ -190,6 +190,9 @@ def run_unit(
     # unit-level fault and does not raise; a missing key is a unit-level fault like any other.
     try:
         max_steps = int(unit.scenario["max_steps"])
+        action_horizon = int(unit.scenario.get("action_horizon", 0))
+        if action_horizon < 0:
+            raise ValueError("action_horizon must be nonnegative")
     except (KeyError, TypeError, ValueError) as exc:
         return UnitResult(
             unit.unit_id,
@@ -198,7 +201,7 @@ def run_unit(
             0.0,
             host,
             gpu,
-            error=f"scenario needs an integer 'max_steps': {exc!r}",
+            error=f"invalid episode step budget or action horizon: {exc!r}",
             error_class=classify_error(exc),
         )
 
@@ -376,7 +379,8 @@ def run_unit(
                                 f"a mismatched batch silently pairs a lane with another lane's actions"
                             )
                         for slot, lane in enumerate(need):
-                            chunks[lane], idxs[lane] = out[slot], 0
+                            chunk = out[slot]
+                            chunks[lane], idxs[lane] = chunk[:action_horizon] if action_horizon else chunk, 0
 
                     acts = {}
                     for lane in live:
