@@ -66,15 +66,17 @@ def _load_transfer_prompt_path(path: str | Path) -> str:
 
 
 def _load_transfer_negative_prompt_file(path: str | Path) -> str:
-    """Load a JSON negative caption file for transfer inference."""
-    candidate = Path(path)
-    if not candidate.is_file():
-        defaults_path = PACKAGE_DIR / "defaults" / candidate.name
-        if defaults_path.is_file():
-            candidate = defaults_path
-        else:
-            raise FileNotFoundError(f"Missing negative prompt file: {path} (also checked {defaults_path})")
-    return json.dumps(json.loads(candidate.read_text()))
+    """Load a JSON negative caption file for transfer inference.
+
+    The file is looked up with the same candidates (``_negative_prompt_file_candidates``) as the not-found
+    check that runs just before this is called, so ``defaults/`` is only tried for a bare filename. A longer
+    path whose last component happens to match a ``defaults/`` file is not loaded from there.
+    """
+    candidates = _negative_prompt_file_candidates(str(path))
+    for candidate in candidates:
+        if candidate.is_file():
+            return json.dumps(json.loads(candidate.read_text()))
+    raise FileNotFoundError(f"Missing negative prompt file: {path} (tried {', '.join(str(c) for c in candidates)})")
 
 
 def _negative_prompt_file_candidates(v: str) -> list[Path]:
@@ -82,6 +84,12 @@ def _negative_prompt_file_candidates(v: str) -> list[Path]:
 
     The launch folder (where the file used to be read from, so existing setups keep working), the current
     folder (the spec's folder while a spec file is validated) and, for a bare filename only, ``defaults/``.
+
+    The launch folder deliberately comes before the spec's folder: before the spec-relative lookup was
+    added, a relative ``negative_prompt_file`` was read from the launch folder, so a file there must keep
+    winning over a same-named file next to the spec. A spec that wants its own copy can use a path that
+    does not exist in the launch folder, or an absolute path.
+
     The launch folder is read when the sample is parsed, not when this module is imported, so a process that
     changes folder after import still resolves against the folder it ran the spec from.
     """
@@ -894,6 +902,10 @@ class InteractiveDataOverrides(OverridesBase):
             raise ValueError("'camera_trajectory' and 'action_path' are mutually exclusive")
         if not self.autoregressive:
             raise ValueError("'camera_trajectory' requires autoregressive inference")
+        # Parse it now, so a typo fails before generation instead of when its batch is prepared.
+        from cosmos_framework.inference.camera import check_camera_trajectory
+
+        check_camera_trajectory(self.camera_trajectory)
 
 
 class ActionDataOverrides(OverridesBase):
@@ -1398,7 +1410,7 @@ class TransferDataArgs(ArgsBase, _TransferDataBase):
     wsm: TransferArgs | None = None
     lidar: LidarTransferArgs | None = None
     negative_prompt_file: NegativePromptFile | None = None
-    """JSON negative caption file for transfer specs (path relative to the spec, absolute, or filename under ``defaults/``)."""
+    """JSON negative caption file for transfer specs: absolute, relative to the launch folder or the spec (launch folder first), or a bare filename under ``defaults/``."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
     num_conditional_frames: pydantic.NonNegativeInt | None = None
     max_frames: pydantic.PositiveInt | None = None
@@ -1439,7 +1451,7 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     carrying its own ``control_path``. ``lidar.condition_path`` and ``lidar.num_conditional_sweeps``
     supply measured target sweeps as a clean conditioning prefix."""
     negative_prompt_file: NegativePromptFile | None = None
-    """JSON negative caption file for transfer specs (path relative to the spec, absolute, or filename under ``defaults/``)."""
+    """JSON negative caption file for transfer specs: absolute, relative to the launch folder or the spec (launch folder first), or a bare filename under ``defaults/``."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
     """Number of video frames generated per autoregressive chunk."""
     num_conditional_frames: pydantic.NonNegativeInt | None = None
@@ -1598,10 +1610,12 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
             c.is_file() for c in _negative_prompt_file_candidates(self.negative_prompt_file)
         )
         if neg_file_missing:
-            # The spec's own folder was already tried when the spec was parsed (a match there is stored as an
-            # absolute path), so name it alongside the folders tried here.
-            tried = "the spec file's folder, " + ", ".join(
-                str(c) for c in _negative_prompt_file_candidates(cast(str, self.negative_prompt_file))
+            # A sample loaded from a spec file also tried the spec's own folder when the spec was parsed (a
+            # match there is stored as an absolute path). Nothing here records whether this sample came from
+            # a spec file, so that folder is named as conditional rather than as always tried.
+            tried = (
+                ", ".join(str(c) for c in _negative_prompt_file_candidates(cast(str, self.negative_prompt_file)))
+                + ", and the spec file's folder if the sample came from a spec file"
             )
             if self.negative_prompt is None:
                 # The file would be read and is not there: fail this sample only. A ValueError here is
@@ -2273,6 +2287,16 @@ class OmniSampleOverrides(
                 defaults_key = "multiview"
             defaults = _load_modality_defaults(defaults_key)
         overrides = self.model_dump(exclude_none=True)
+        if (
+            self.defaults_file is None
+            and "negative_prompt_file" in overrides
+            and "negative_prompt" not in overrides
+            and defaults.get("negative_prompt") is not None
+        ):
+            # The built-in presets carry their caption file already loaded as ``negative_prompt``. Left in,
+            # it would stop ``_build_transfer_data`` from reading the sample's own ``negative_prompt_file``,
+            # so the sample's file would be dropped without a warning. Copy: the presets are cached.
+            defaults = {k: v for k, v in defaults.items() if k != "negative_prompt"}
         shift_configured = "shift" in overrides or defaults.get("shift") is not None
         user_fields = frozenset(overrides)
         merged_data = _deep_merge(defaults, overrides)

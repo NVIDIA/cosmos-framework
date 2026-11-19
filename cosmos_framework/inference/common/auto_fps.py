@@ -5,6 +5,8 @@
 
 from typing import Any
 
+from omegaconf import DictConfig, open_dict
+
 from cosmos_framework.inference.common.multiview_captions import JOINT_CAM_LIDAR_TASK, exported_caption_task
 
 
@@ -22,3 +24,18 @@ def auto_camera_fps(metadata: Any, *, repository: str | None = None) -> int | No
     }:
         return 30
     return None
+
+
+def attach_auto_camera_fps(model_config: Any, camera_fps: int | None) -> None:
+    """Record the inference-only Auto camera clock on the runtime model config.
+
+    Published checkpoints load into a plain config object, so a new attribute can simply be set. A config exported
+    from a training run is a struct-mode OmegaConf node typed by the training config class, which refuses unknown
+    keys (``Key '_auto_camera_fps' not in 'SelfForcingDMDConfig'``); the key is added with struct mode lifted for
+    this assignment only. The checkpoint files are never modified.
+    """
+    if isinstance(model_config, DictConfig):
+        with open_dict(model_config):
+            model_config["_auto_camera_fps"] = camera_fps
+        return
+    setattr(model_config, "_auto_camera_fps", camera_fps)

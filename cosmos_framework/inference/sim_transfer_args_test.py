@@ -790,6 +790,76 @@ def test_defaults_name_fallback_applies_only_to_a_bare_filename(tmp_path: Path) 
 
 @pytest.mark.L0
 @pytest.mark.CPU
+def test_negative_prompt_file_loader_uses_the_same_lookup_as_the_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The loader used to fall back to defaults/<last component> for any path; it now tries exactly the
+    # folders the parse-time check tries, so defaults/ is only used for a bare filename.
+    defaults_text = (args_module.PACKAGE_DIR / "defaults" / "neg_prompts.json").read_text()
+    monkeypatch.chdir(tmp_path)
+
+    assert args_module._load_transfer_negative_prompt_file("neg_prompts.json") == json.dumps(json.loads(defaults_text))
+    with pytest.raises(FileNotFoundError, match="typo_dir/neg_prompts.json"):
+        args_module._load_transfer_negative_prompt_file("typo_dir/neg_prompts.json")
+
+    (tmp_path / "local.json").write_text(json.dumps({"caption": "local"}))
+    assert json.loads(args_module._load_transfer_negative_prompt_file("local.json")) == {"caption": "local"}
+    absolute = tmp_path / "absolute.json"
+    absolute.write_text(json.dumps({"caption": "absolute"}))
+    assert json.loads(args_module._load_transfer_negative_prompt_file(absolute)) == {"caption": "absolute"}
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_negative_prompt_file_loader_prefers_the_current_folder_over_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same order as the check: a bare name in the launch/current folder wins over defaults/.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "neg_prompts.json").write_text(json.dumps({"caption": "local copy"}))
+
+    assert json.loads(args_module._load_transfer_negative_prompt_file("neg_prompts.json")) == {"caption": "local copy"}
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_negative_prompt_file_bare_defaults_name_still_loads_through_the_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # no neg_prompts.json in the current folder, so defaults/ must supply it
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)}, autoregressive=False, negative_prompt_file="neg_prompts.json"
+    )
+    sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
+
+    defaults_text = (args_module.PACKAGE_DIR / "defaults" / "neg_prompts.json").read_text()
+    assert sample.negative_prompt == json.dumps(json.loads(defaults_text))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_missing_negative_prompt_file_message_names_the_spec_folder_only_conditionally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A CLI sample has no spec file, so the message must not state that the spec file's folder was tried;
+    # it lists the folders actually tried and mentions the spec folder only for samples from a spec file.
+    monkeypatch.chdir(tmp_path)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(depth={"control_path": str(control)}, negative_prompt_file="missing_negative.json")
+    with pytest.raises(ValueError) as excinfo:
+        sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
+
+    message = str(excinfo.value)
+    assert "(tried the spec file's folder" not in message
+    assert str(tmp_path / "missing_negative.json") in message
+    assert "the spec file's folder if the sample came from a spec file" in message
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_keep_metadata_promotion_does_not_report_a_requested_none_as_ignored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -979,3 +1049,104 @@ def test_resolution_given_as_a_number_is_accepted(value: int | str, expected: st
 def test_resolution_outside_the_tiers_is_still_rejected(value: object) -> None:
     with pytest.raises(pydantic.ValidationError):
         OmniSampleOverrides(resolution=value)
+
+
+def _bidirectional_transfer_model_config() -> SimpleNamespace:
+    return SimpleNamespace(
+        action_gen=False,
+        sound_gen=False,
+        resolution="480",
+        tokenizer=SimpleNamespace(temporal_compression_factor=4),
+        video_temporal_causal=False,
+        vlm_config=SimpleNamespace(model_name="Qwen/Qwen3-VL-8B-Instruct"),
+        fixed_step_sampler_config=None,
+    )
+
+
+def _built_in_transfer_sample(tmp_path: Path, **fields: object) -> OmniSampleOverrides:
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    return OmniSampleOverrides(
+        name="depth",
+        prompt="A car drives on a sunny road.",
+        model_mode="video2video",
+        output_dir=tmp_path / "output",
+        depth={"control_path": str(control)},
+        autoregressive=False,
+        resolution="480",
+        aspect_ratio="16,9",
+        **fields,
+    )
+
+
+def _default_negative_caption() -> str:
+    return args_module._load_modality_defaults("video2video")["negative_prompt"]
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_sample_negative_prompt_file_wins_over_built_in_default_caption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    negative = tmp_path / "negative.json"
+    negative.write_text(json.dumps({"caption": "blurry, low quality"}))
+
+    sample = _built_in_transfer_sample(tmp_path, negative_prompt_file=str(negative)).build_sample(
+        model_config=_bidirectional_transfer_model_config()
+    )
+
+    assert json.loads(sample.negative_prompt) == {"caption": "blurry, low quality"}
+    assert not any("negative_prompt" in w for w in warnings)
+    # The cached preset itself is left untouched for the next sample.
+    assert args_module._load_modality_defaults("video2video")["negative_prompt"] is not None
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_spec_relative_negative_prompt_file_wins_over_built_in_default_caption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "neg.json").write_text(json.dumps({"caption": "grainy"}))
+    monkeypatch.chdir(tmp_path)
+    parsed = _built_in_transfer_sample(tmp_path, negative_prompt_file="assets/neg.json")
+    monkeypatch.chdir(tmp_path.parent)
+
+    sample = parsed.build_sample(model_config=_bidirectional_transfer_model_config())
+
+    assert json.loads(sample.negative_prompt) == {"caption": "grainy"}
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_built_in_default_caption_is_used_when_the_sample_sets_no_caption(tmp_path: Path) -> None:
+    sample = _built_in_transfer_sample(tmp_path).build_sample(model_config=_bidirectional_transfer_model_config())
+
+    assert sample.negative_prompt == _default_negative_caption()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_sample_negative_prompt_still_wins_over_its_file_with_built_in_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    negative = tmp_path / "negative.json"
+    negative.write_text(json.dumps({"caption": "blurry"}))
+
+    sample = _built_in_transfer_sample(
+        tmp_path, negative_prompt="grainy", negative_prompt_file=str(negative)
+    ).build_sample(model_config=_bidirectional_transfer_model_config())
+
+    assert sample.negative_prompt == "grainy"
+    assert any("both 'negative_prompt' and 'negative_prompt_file' are set" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_missing_sample_negative_prompt_file_fails_its_sample_with_built_in_defaults(tmp_path: Path) -> None:
+    sample = _built_in_transfer_sample(tmp_path, negative_prompt_file=str(tmp_path / "missing.json"))
+
+    with pytest.raises(ValueError, match="negative_prompt_file not found"):
+        sample.build_sample(model_config=_bidirectional_transfer_model_config())
