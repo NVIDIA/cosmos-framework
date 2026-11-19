@@ -186,4 +186,7 @@ python3 -m json.tool openapi.json >/dev/null
 ```
 
 Treat the running NIM's schema as authoritative for available routes and
-constraints in the deployed image.
+constraints in the deployed image. One exception: the multiview schemas still
+list top-level `prompt`, `negative_prompt`, and `input_reference`, which
+multiview rejects. Refer to
+[Multiview Generation Defaults and Limits](multiview.md#generation-defaults-and-limits).
