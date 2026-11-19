@@ -12,7 +12,7 @@ import torch
 import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.api import CheckpointException
 
-from cosmos_framework.checkpoint.safe_dcp import SafeFileSystemReader, SafeLoadPlanner
+from cosmos_framework.checkpoint.safe_dcp import DCP_METADATA_PICKLE_GLOBALS, SafeFileSystemReader, SafeLoadPlanner
 from cosmos_framework.utils.functional.lr_scheduler import LambdaWarmUpCosineScheduler, WSDScheduler
 
 pytestmark = [pytest.mark.level(0), pytest.mark.gpus(0)]
@@ -48,6 +48,25 @@ def _rejection(excinfo: pytest.ExceptionInfo[Exception]) -> str:
 def _load(path: Path, template: dict[str, Any]) -> dict[str, Any]:
     dcp.load(template, storage_reader=SafeFileSystemReader(path), planner=SafeLoadPlanner(), no_dist=True)
     return template
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize("module", ["pathlib", "pathlib._local"])
+@pytest.mark.parametrize("name", ["PosixPath", "WindowsPath"])
+def test_metadata_allow_list_names_the_path_class_of_both_platforms(module: str, name: str) -> None:
+    # FileSystemWriter stores the checkpoint id as a ``Path`` in the metadata, so the pickle names the
+    # concrete class of the platform that saved it. A checkpoint saved on Windows names ``WindowsPath``.
+    assert (module, name) in DCP_METADATA_PICKLE_GLOBALS
+
+
+@pytest.mark.L0
+def test_metadata_written_on_this_platform_is_read_back(tmp_path: Path) -> None:
+    dcp.save({"weight": torch.ones(2)}, checkpoint_id=tmp_path, no_dist=True)
+
+    names = {(type(tmp_path).__module__, type(tmp_path).__name__)}
+    assert names <= DCP_METADATA_PICKLE_GLOBALS
+    metadata = SafeFileSystemReader(tmp_path).read_metadata()
+    assert "weight" in metadata.state_dict_metadata
 
 
 @pytest.mark.L0
