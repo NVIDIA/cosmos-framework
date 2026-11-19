@@ -65,7 +65,7 @@ optimized for latency, on one GPU:
 ```yaml
 image:
   repository: nvcr.io/nim/nvidia/cosmos3
-  tag: "2.1.0"
+  tag: "2.2.0"
 imagePullSecrets:
   - name: ngc-secret
 model:

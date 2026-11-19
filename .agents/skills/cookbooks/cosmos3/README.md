@@ -41,7 +41,7 @@ local Framework environment below with ModelOpt, datasets, and notebook tooling.
   `extra_params` (TensorRT-LLM), `guardrails: false` (vLLM-Omni
   `extra_params`/`extra_args`), or `--no-guardrails` (Cosmos Framework). For the Cosmos3 NIM Generator, set `NIM_ENABLE_TEXT_GUARDRAILS=0 NIM_ENABLE_VIDEO_GUARDRAILS=0 NIM_ENABLE_SIGLIP_GUARDRAILS=0`.
 - The NIM doesn't need Hugging Face access; instead, an NGC API key is required
-  (used as `NGC_API_KEY`). You can generate one on [build.nvidia.com](https://build.nvidia.com/) or [NGC](https://catalog.ngc.nvidia.com/), then run `docker login nvcr.io` once (username `$oauthtoken`, password = your key). This repository uses the Cosmos3 NIM image `nvcr.io/nim/nvidia/cosmos3:2.1.0` for both the Generator and the Reasoner.
+  (used as `NGC_API_KEY`). You can generate one on [build.nvidia.com](https://build.nvidia.com/) or [NGC](https://catalog.ngc.nvidia.com/), then run `docker login nvcr.io` once (username `$oauthtoken`, password = your key). This repository uses the Cosmos3 NIM image `nvcr.io/nim/nvidia/cosmos3:2.2.0` for both the Generator and the Reasoner.
 - For the Cosmos Framework backend: access to `git@github.com:NVIDIA/cosmos-framework.git`.
 - Enough local disk for the venv/image, the uv cache, and the model cache. Nano
   downloads plus CUDA dependencies can take tens of GiB.
@@ -839,7 +839,7 @@ docker run -d --name cosmos3-generator \
   -e NIM_MODEL_VARIANT=nano \
   -e NIM_PERF_PROFILE=latency \
   -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" \
-  nvcr.io/nim/nvidia/cosmos3:2.1.0
+  nvcr.io/nim/nvidia/cosmos3:2.2.0
 ```
 
 Set `NIM_MODEL_TYPE=reasoner` for the Reasoner runtime. `NIM_MODEL_VARIANT`

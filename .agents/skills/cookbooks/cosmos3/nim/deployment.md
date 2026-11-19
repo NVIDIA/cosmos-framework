@@ -4,7 +4,7 @@ SPDX-License-Identifier: OpenMDW-1.1 -->
 # Deployment
 
 Use this page to authenticate to NVIDIA NGC, choose a model, launch Generator or
-Reasoner, and verify the selected service. The commands pin the current 2.1.0
+Reasoner, and verify the selected service. The commands pin the current 2.2.0
 release image. Use the [Support Matrix](support-matrix.md) to choose a
 compatible configuration.
 
@@ -116,7 +116,7 @@ saved credential. Without a helper, log out when you finish evaluating.
 Pin and pull the current release image:
 
 ```bash
-export NIM_IMAGE='nvcr.io/nim/nvidia/cosmos3:2.1.0'
+export NIM_IMAGE='nvcr.io/nim/nvidia/cosmos3:2.2.0'
 docker pull "$NIM_IMAGE"
 ```
 

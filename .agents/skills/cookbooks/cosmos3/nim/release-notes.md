@@ -5,6 +5,8 @@ SPDX-License-Identifier: OpenMDW-1.1 -->
 
 ## 2.2.0
 
+Image: `nvcr.io/nim/nvidia/cosmos3:2.2.0`.
+
 - **Multiview Generator.** The new `multiview` Generator variant generates
   multi-camera autonomous-vehicle driving video from per-camera captions and
   World Scenario Model controls, with optional RGB first-frame conditioning and
