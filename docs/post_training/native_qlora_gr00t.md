@@ -1466,6 +1466,10 @@ leave the bound just over the margin. Neither LoRA arm improves closed-loop succ
 frozen source on these near-saturated tasks. Scope: exposed development tasks, update-200
 checkpoints, three training seeds; not independent confirmation or real-robot behaviour.
 
+User decision 2026-11-19: differences of this size are practically negligible; only a loss on the
+order of 10-20 points would be a concern. The release decision uses a practical bar of at most 10
+points (met); the 2-point result above is retained unchanged and step 3b (more seeds) is not run.
+
 All eight rollouts passed acceptance. The in-job analysis (38705853) failed only because
 `sbatch --export` splits on commas and delivered one of seven job ids; the unchanged
 `run.analyze` was then run over all eight acceptance files (analysis SHA-256 `1ec98abf…`).
