@@ -11,6 +11,7 @@ version = "0.1.0"
 description = "Ludus: GPU-native F-theta renderer for autonomous-driving scenes"
 readme = "README.md"
 requires-python = ">=3.10"
+license-files = ["LICENSE", "ludus_renderer/licenses/nvdiffrast/LICENSE.txt"]
 dependencies = [
     "ninja>=1.13.0",
     "numpy",
