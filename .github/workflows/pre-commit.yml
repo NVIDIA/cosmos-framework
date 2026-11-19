@@ -32,3 +32,15 @@ jobs:
           python ci/check_license_artifacts.py . "$RUNNER_TEMP/license-dist/framework"
           uv build --no-sources --out-dir "$RUNNER_TEMP/license-dist/ludus" packages/ludus-renderer
           python ci/check_license_artifacts.py packages/ludus-renderer "$RUNNER_TEMP/license-dist/ludus"
+      - name: Verify Ludus is excluded from the Docker build context
+        run: |
+          image_root="$RUNNER_TEMP/license-image-context"
+          docker buildx build --file - --output "type=local,dest=$image_root" . <<'DOCKERFILE'
+          FROM scratch
+          COPY packages/ /packages/
+          DOCKERFILE
+          test -f "$image_root/packages/transformers-cosmos3/pyproject.toml"
+          if test -e "$image_root/packages/ludus-renderer"; then
+            echo "Ludus must be excluded from the Framework Docker build context." >&2
+            exit 1
+          fi
