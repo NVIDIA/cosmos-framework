@@ -1135,9 +1135,10 @@ class SampleOverrides(OverridesBase):
     """Seed for the random number generator."""
 
     tensors_file: ResolvedFilePath | None = None
-    """Path to data tensors file."""
+    """Path to a data tensors file, e.g. a debug dump from an earlier run. Not accepted by the Ray server."""
     pickle_file: ResolvedFilePath | None = None
-    """Path to data pickle file."""
+    """Path to a data pickle file, e.g. a debug dump from an earlier run. It is unpickled, so only use files you
+    created. Not accepted by the Ray server."""
 
     @override
     @classmethod
