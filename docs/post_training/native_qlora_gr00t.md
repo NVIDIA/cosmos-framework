@@ -337,6 +337,47 @@ any GPU launch. Its failure and successful write probe were preserved; a narrow
 reuse of the existing bounded whole-census retry passed 41 CPU checks and the
 fresh preflight before the single submission. No scientific setting changed.
 
+#### Head-adapter screen at LR 1e-4 (2026-11-19, memory workstream)
+
+After the user chose to pursue head adapters for a substantial GR00T memory saving, a new
+prospective screen (`38758787`, packet `gr00t-dit-attention-head-screen-e64a735-lr1e4-v1`,
+science `8b966cd7…`) changed only the uniform LR from `1e-5` to `1e-4`. The `1e-5` head adapters
+had stayed nearly inert (`38567435`), and native `lr_multipliers` cannot scale LoRA factors.
+Native `e64a735`, the accepted lifecycle `38561399`, seed 17, 200 updates, evaluations at
+0/100/200 on all 160 rows and the unchanged point gates were fixed before outcomes. Two further
+rules were fixed in the same protocol:
+
+- **Memory claim:** the NF4 head-adapter training peak is at least 6 GiB below the BF16 LoRA +
+  full-head selected baseline (31.516 GiB, `38515136`).
+- **Rollout:** run only if the offline screen passes.
+
+The wrapper copies the two cohort JSONL files byte-identically to node-local disk, because
+post-maintenance Lustre ctime bumps abort the native stat-identity checks.
+
+| LR 1e-4 head-adapter screen | Source MSE | MSE at 100 | MSE at 200 | Target at 200 | Decoded axes worse than own source at 200 | Sampled training-process peak (GiB) |
+|---|---:|---:|---:|---|---|---:|
+| BF16 | 0.05506814 | 0.06020931 | 0.05167462 | missed | x, y, roll, yaw | 13.049 |
+| NF4 | 0.05565446 | 0.06507921 | 0.04719335 | met | y (+2.3%), roll (+3.2%) | 11.926 |
+
+**The quality screen failed and the recipe is not promoted.**
+
+- NF4 met the action-MSE target at update 200, 15.2% below its own source and 8.7% below BF16,
+  so the NF4-vs-BF16 ratio gate passed.
+- NF4 still worsened the y and roll decoded axes against its own source.
+- BF16 missed the target and worsened four axes.
+- Both arms got worse at update 100 before improving at 200.
+
+Under the preregistered rule, no rollout was run. The prepared single-policy rollout packet
+(`gr00t-head-lora-rollout-e64a735-v1`) is retained unsubmitted.
+
+**The memory claim is met.** The NF4 head-adapter training peak of 11.926 GiB is 19.59 GiB (62%)
+below the 31.516 GiB BF16 full-head baseline; the matched BF16 head-adapter arm used 13.049 GiB.
+Whole-run GPU attribution and host PSS were complete over 1,142 samples, with the same
+short-phase sampling gaps as earlier screens; sampled peaks are lower bounds. The baseline comes
+from a different build (`4cba88f`) and a 300-update horizon, and almost all of the saving comes
+from not training the 1.6B-parameter FP32 head. The NF4-only increment over BF16 head adapters is
+1.12 GiB. Both arms passed fresh 160-row portable parity. The job used 27 minutes on one A100.
+
 The subsequent source-versus-update-200 component diagnostic (`38624956`,
 361 GPU-seconds) completed all 84 native calls in both precision arms. Independent
 replay verified 80 captured rows, 160 masked error arrays, native scalar reductions,
