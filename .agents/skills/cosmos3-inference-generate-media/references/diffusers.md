@@ -51,6 +51,56 @@ To run **Cosmos3-Edge** instead, load `nvidia/Cosmos3-Edge` and use its
 single-GPU, no-audio settings: `height=480`, `width=832`, `num_frames=121`,
 `num_inference_steps=20`, `guidance_scale=5.0`, and `flow_shift=8.0`.
 
+### Cosmos3-Edge on Intel XPU (skill addition, not in the README)
+
+XPU applies to Cosmos3-Edge only; Nano, Super, and the distilled checkpoints stay on CUDA.
+Install with `--torch-backend=xpu` ([Diffusers setup](../../cookbooks/cosmos3/README.md#diffusers)), then run Edge
+on `xpu`. This block runs with the guardrail **off**; the Edge checkpoint's `model_index.json` already sets
+`enable_safety_checker: false`, and the block passes it explicitly so the setting is visible. Turning it on fails on
+XPU (and on any host without CUDA) with `cosmos_guardrail` 0.3.2: `cosmos_utils.load_model` calls `torch.load` without
+`map_location` on the CUDA-saved face-blur checkpoint. With that load mapped to CPU, the guardrail ran on XPU (text and
+video checks on `xpu:0`); switch to `enable_safety_checker=True`, as `get_pipe` (§ 7) does, once a fixed
+`cosmos_guardrail` is available:
+
+```python
+import json
+import torch
+from diffusers import Cosmos3OmniPipeline
+from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
+from diffusers.utils import export_to_video
+
+prompt = json.load(open("assets/prompts/text2video/robot_kitchen.json"))
+negative = json.load(open("assets/negative_prompts/text2video/neg_prompt.json"))
+
+pipe = Cosmos3OmniPipeline.from_pretrained(
+    "nvidia/Cosmos3-Edge", torch_dtype=torch.bfloat16, enable_safety_checker=False
+)
+pipe.to("xpu")
+pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=8.0)
+
+result = pipe(
+    prompt=json.dumps(prompt),
+    negative_prompt=json.dumps(negative),
+    image=None,
+    num_frames=17,
+    height=480,
+    width=832,
+    fps=24,
+    num_inference_steps=20,
+    guidance_scale=5.0,
+    enable_sound=False,
+    add_resolution_template=False,
+    add_duration_template=False,
+    generator=torch.Generator(device="xpu").manual_seed(1234),
+)
+export_to_video(result.video, "/tmp/cosmos3_edge_t2v_xpu.mp4", fps=24)
+```
+
+The block uses `num_frames=17`. On the validated Intel Arc iGPU, VAE decode at 480p with 33 or more frames
+(including Edge's default 121) did not complete within 10 minutes, with or without `vae.enable_tiling()`, so
+longer clips are not supported on XPU yet. Validated package versions and hardware:
+[Diffusers setup](../../cookbooks/cosmos3/README.md#diffusers).
+
 ### Notebook walkthrough
 
 `run_with_diffusers.ipynb` is the full tutorial for
@@ -172,6 +222,8 @@ Jupyter-only step (the install cell registered a `Cosmos3 Diffusers (Python 3.13
 
 ## 5. Verify GPU and Python Environment
 
+This cell checks CUDA only. On Intel XPU (Cosmos3-Edge only), check `torch.xpu.is_available()` and `torch.xpu.get_device_name(0)` instead.
+
 ```python
 import torch
 import diffusers
@@ -200,7 +252,7 @@ Shared definitions, verbatim in payloads.md:
 - `create_payload` (`backend="diffusers"`): § 9.2 (`run_with_diffusers.ipynb` block; differences from the other notebooks' versions are tabulated there).
 - `MODEL_IDS`, `DISTILLED_MODELS`, `resolve_model_id`, `is_distilled_model`: § 5.
 
-The Diffusers runner (verbatim; the kernel/venv guard that preceded the imports is covered by § 4, and the definitions above are pointed to where they sat in the cell):
+The Diffusers runner (verbatim; the kernel/venv guard that preceded the imports is covered by § 4, and the definitions above are pointed to where they sat in the cell). It is CUDA-only (`pipe.to("cuda")`, CUDA generator, `torch.cuda` cleanup in `release_pipe`); for Cosmos3-Edge on Intel XPU use the Quickstart's XPU block or § 8.4:
 
 ```python
 import json
@@ -631,7 +683,8 @@ Text-to-image as the notebook runs it (`get_pipe` + the `text2image` branch of
 `run_diffusers_payload`; `FIXED_SAMPLING`: 35 steps, guidance 6.0, shift 10.0, 720 × 1280,
 seed 1234; `get_pipe` loads with `enable_safety_checker=True` — `False` is the § 1 switch; output path per § 4.2).
 Save the snippet as a file and run it with the venv's interpreter, `"$COSMOS3_DIFFUSERS_VENV/bin/python" <file>.py`,
-from this skill directory (the one with `assets/`) — `python` alone is the venv's only in a shell that activated it:
+from this skill directory (the one with `assets/`) — `python` alone is the venv's only in a shell that activated it.
+Nano runs on CUDA only; on Intel XPU use the Edge snippet of § 8.4:
 
 ```python
 import json, os, torch
@@ -666,7 +719,9 @@ then verify with ffprobe or the venv's `av` (see SKILL.md Verify the output).
 Edge, composed from the README sentence above and the text2image / video branches of
 `run_diffusers_payload` (diffusers.md § 7; the diffusers notebook has no `t2i_edge` /
 `t2v_edge_noaudio` case, payloads.md § 8.2). Run the setup block, then ONE mode block — the one the task asks for — in the
-same Python process; text-to-video needs more GPU time and memory than a single frame:
+same Python process; text-to-video needs more GPU time and memory than a single frame. The `device` line selects Intel XPU
+when available (Edge is the only model with an XPU path) and CUDA otherwise; like the Nano snippet, it disables the guardrail
+for a smoke run, as in the Quickstart's XPU block:
 
 ```python
 # setup — shared by both modes
@@ -676,11 +731,12 @@ from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepSchedu
 from diffusers.utils import export_to_video
 
 compact = lambda p: json.dumps(json.load(open(p)), ensure_ascii=True, separators=(",", ":"))   # run from this skill directory (the one with assets/)
+device = "xpu" if hasattr(torch, "xpu") and torch.xpu.is_available() else "cuda"
 pipe = Cosmos3OmniPipeline.from_pretrained("nvidia/Cosmos3-Edge", torch_dtype=torch.bfloat16,
                                            safety_checker=None, enable_safety_checker=False)
 pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=8.0)
-pipe.to("cuda")
-gen = torch.Generator(device="cuda").manual_seed(1234)   # FIXED_SAMPLING seed, as in the Nano snippet
+pipe.to(device)
+gen = torch.Generator(device=device).manual_seed(1234)   # FIXED_SAMPLING seed, as in the Nano snippet
 ```
 
 ```python
