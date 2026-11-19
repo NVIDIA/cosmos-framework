@@ -89,7 +89,7 @@ runtime reserves from this pool before sizing vLLM.
 | Reasoner `edge` BF16 | 16 GiB/device | No CPU/model offload |
 | Reasoner `edge` FP8 | 14.5 GiB/device | No CPU/model offload |
 | Reasoner `nano` BF16, FP8, or NVFP4 | 23.1 GiB/device | No CPU/model offload |
-| Reasoner `super` BF16, TP1 | 135 GiB/device | No CPU/model offload |
+| Reasoner `super` BF16, TP1 | 120 GiB/device | No CPU/model offload |
 | Reasoner `super` FP8, TP1 | 67 GiB/device | No CPU/model offload |
 | Reasoner `super` NVFP4, TP1 | 73 GiB/device | No CPU/model offload |
 
@@ -116,8 +116,8 @@ Capacity is a shared host/device pool, not separate VRAM:
 
 The effective share is roughly 83 to 86 GiB. It fits the resident Generator
 Edge-DROID and Nano rows but no Super Generator row, and the Reasoner Edge,
-Nano, and Super FP8/NVFP4 TP1 rows. Reasoner Super BF16 TP1 (135 GiB) exceeds
-both systems' total capacity, so freeing cache cannot make it fit.
+Nano, and Super FP8/NVFP4 TP1 rows. Reasoner Super BF16 TP1 (120 GiB) exceeds
+both systems' effective shared-memory capacity, so freeing cache cannot make it fit.
 
 ### NVIDIA Blackwell Ultra
 
@@ -276,7 +276,7 @@ Reasoner does not use Generator latency/throughput or model-offload selectors:
 | `nano` | BF16 | 1 | 1 | 23.1 GiB | 24 GiB | 8.0 |
 | `nano` | FP8 | 1 | 1 | 23.1 GiB | 17 GiB | 8.9 |
 | `nano` | NVFP4 | 1 | 1 | 23.1 GiB | 17 GiB | 10.0 |
-| `super` | BF16 | 1 | 1 | 135 GiB | 72 GiB | 8.0 |
+| `super` | BF16 | 1 | 1 | 120 GiB | 72 GiB | 8.0 |
 | `super` | BF16 | 2 | 2 | 73 GiB | 72 GiB | 8.0 |
 | `super` | FP8 | 1 | 1 | 67 GiB | 43 GiB | 8.9 |
 | `super` | NVFP4 | 1 | 1 | 73 GiB | 33 GiB | 10.0 |
