@@ -58,7 +58,7 @@ cache preparation, then launch the Generator with
 `NIM_MODEL_VARIANT=multiview`:
 
 ```bash
-docker run -d --name cosmos3-multiview \
+docker run -d --name cosmos3-generator \
   --gpus '"device=0"' \
   --shm-size 16g \
   --ulimit memlock=-1 \
@@ -73,6 +73,12 @@ docker run -d --name cosmos3-multiview \
   -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" \
   "$NIM_IMAGE"
 ```
+
+The container uses the Generator name from
+[Launch Generator](deployment.md#launch-generator), so the log, cleanup, and
+monitoring commands on the other pages apply unchanged. If a Generator from
+another page is still running, remove it first with
+`docker rm -f cosmos3-generator`.
 
 Notes for this variant:
 
