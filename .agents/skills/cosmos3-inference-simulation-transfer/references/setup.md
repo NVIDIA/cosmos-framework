@@ -19,7 +19,7 @@ Set `FRAMEWORK_DIR` to the destination for a new checkout:
 export FRAMEWORK_DIR="${FRAMEWORK_DIR:?Set the absolute Framework checkout destination}"
 git clone https://github.com/NVIDIA/cosmos-framework.git "$FRAMEWORK_DIR"
 cd "$FRAMEWORK_DIR"
-# Skill note (not in the source): SIM_TRANSFER_SKILL is now the folder of this skill. The source value was "$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer".
+# Skill note (not in the source): SIM_TRANSFER_SKILL is the folder of this skill, the Sim-Transfer inference skill. The source value was the folder of the Sim-Transfer skill family (its inference, post-training and troubleshooting sub-skills) under "$FRAMEWORK_DIR/.agents/skills". The training commands address the scripts of the Sim-Transfer post-training skill from FRAMEWORK_DIR.
 export SIM_TRANSFER_SKILL="$FRAMEWORK_DIR/.agents/skills/cosmos3-inference-simulation-transfer"
 uvx --from uv==0.11.29 uv sync --locked --python 3.13 --all-extras --group cu130-train
 source .venv/bin/activate
@@ -32,10 +32,10 @@ For an existing checkout, skip cloning, set `FRAMEWORK_DIR` to its root and
 run the remaining commands there. For CUDA 12.8, use `cu128-train` consistently.
 Both training groups include matched NPP packages. Complete the
 [native-library and CUDA-toolkit setup](environment.md) on each host.
-Use the [multi-node launcher](../../cosmos3-nano-sim-transfer/post-training/references/multinode-training.md) for two four-GPU
+Use the [multi-node launcher](../../cosmos3-post-train-simulation-transfer/references/multinode-training.md) for two four-GPU
 hosts.
 
-[Nano conversion](../../cosmos3-nano-sim-transfer/post-training/references/nano-conversion.md)
+[Nano conversion](../../cosmos3-post-train-simulation-transfer/references/nano-conversion.md)
 uses this checkout and environment, checks the converter's source hash and
 records the actual Framework revision. No separate converter checkout is needed.
 
@@ -53,23 +53,23 @@ and support logs.
 ## Continue with the example workflow
 
 Download the [Hugging Face examples](hf-sample.md). Use **example2** for
-captioning, [bundle preparation](../../cosmos3-nano-sim-transfer/shared/local-dataset.md), training and
+captioning, [bundle preparation](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md), training and
 inference. The **example1** walkthrough covers long-rollout inference. Saved
 captions need no caption-service credentials; follow [captioning](caption-guide.md)
 to generate new captions.
 
 The example download contains media and captions. The
-[bundle preparation guide](../../cosmos3-nano-sim-transfer/shared/local-dataset.md) downloads the text
+[bundle preparation guide](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md) downloads the text
 tokenizer from Hugging Face.
-[Nano conversion](../../cosmos3-nano-sim-transfer/post-training/references/nano-conversion.md)
+[Nano conversion](../../cosmos3-post-train-simulation-transfer/references/nano-conversion.md)
 downloads the model and video VAE for training. Continue with
-[post-training](../../cosmos3-nano-sim-transfer/post-training/SKILL.md) or
+[post-training](../../cosmos3-post-train-simulation-transfer/SKILL.md) or
 [inference](../SKILL.md).
 
 ## References
 
 - [Environment and native-library requirements](environment.md)
-- [Two-node training launcher](../../cosmos3-nano-sim-transfer/post-training/references/multinode-training.md)
-- [Nano checkpoint conversion](../../cosmos3-nano-sim-transfer/post-training/references/nano-conversion.md)
+- [Two-node training launcher](../../cosmos3-post-train-simulation-transfer/references/multinode-training.md)
+- [Nano checkpoint conversion](../../cosmos3-post-train-simulation-transfer/references/nano-conversion.md)
 - [Hugging Face examples](hf-sample.md)
-- [Local training bundle preparation](../../cosmos3-nano-sim-transfer/shared/local-dataset.md)
+- [Local training bundle preparation](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md)

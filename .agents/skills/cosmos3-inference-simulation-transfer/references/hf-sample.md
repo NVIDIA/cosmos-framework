@@ -40,7 +40,7 @@ source RGB to the native transforms; they do not require stored control videos.
 Depth and segmentation requests use their HF control videos.
 
 Continue with the [Quick Start](quick-start.md). For training, [build the native
-bundle](../../cosmos3-nano-sim-transfer/shared/local-dataset.md) from the prepared row and a Hugging Face tokenizer.
+bundle](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md) from the prepared row and a Hugging Face tokenizer.
 The source videos retain their original resolution; the pipeline selects
 832 × 480 at the 480 tier or 1280 × 720 at the 720 tier.
 
@@ -48,5 +48,5 @@ Required model resources come from [Cosmos3-Nano-Sim-Transfer](https://huggingfa
 [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) and
 [Wan2.2-TI2V-5B](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B).
 The [inference guide](../SKILL.md#1-select-the-matched-inference-checkpoint)
-and [Nano conversion guide](../../cosmos3-nano-sim-transfer/post-training/references/nano-conversion.md)
+and [Nano conversion guide](../../cosmos3-post-train-simulation-transfer/references/nano-conversion.md)
 provide their download commands.

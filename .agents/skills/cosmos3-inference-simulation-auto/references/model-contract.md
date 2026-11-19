@@ -18,7 +18,7 @@ use [Sim-Auto](../SKILL.md#sim-auto).
 - For inference, get requested time of day, weather, road condition and geographic
   setting from the user or scenario metadata. For training, those descriptions must
   match the paired real targets and recording metadata; follow
-  [training captions](../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md#training-captions).
+  [training captions](../../cosmos3-post-train-simulation-auto/references/data-contract.md#training-captions).
   WSM supplies traffic layout and motion, not those properties.
 - Keep camera-local captions separate. Each camera reads its own text; LiDAR can
   read all camera captions.
@@ -45,12 +45,12 @@ pose tensors through a pose positional encoding.
   [inference](../SKILL.md#transfer-auto); no training history is required.
 - **Adapt it to your data:** start from its delivered weights and final model
   settings, prepare paired targets/controls, and define a new fine-tuning run with
-  [post-training](../../cosmos3-nano-transfer-auto/post-training/SKILL.md).
+  [post-training](../../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto).
 - **Recreate the curriculum:** follow the four training phases in the
-  [recipe](../../cosmos3-nano-transfer-auto/post-training/references/canonical-recipe.md), starting
+  [recipe](../../cosmos3-post-train-simulation-auto/references/transfer-auto-recipe.md), starting
   from Cosmos3-Nano using your own paired data.
 
-Use [post-training](../../cosmos3-nano-transfer-auto/post-training/SKILL.md), [inference](../SKILL.md#transfer-auto),
+Use [post-training](../../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto), [inference](../SKILL.md#transfer-auto),
 or [troubleshooting](troubleshooting.md#transfer-auto) for the selected workflow.
 Keep both Auto bundles and their shared resources together.
 
@@ -58,7 +58,7 @@ Keep both Auto bundles and their shared resources together.
 
 Use the [Framework environment and model assets](framework-runtime.md), native
 [inference request](input-and-execution.md)
-and [native training index](../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md#local-training-index).
+and [native training index](../../cosmos3-post-train-simulation-auto/references/data-contract.md#local-training-index).
 Run commands from the matching Cosmos Framework checkout.
 
 The [shared example scene](reference-scene.md) provides an HF download,
@@ -88,7 +88,7 @@ unless the user explicitly requests an external workflow.
 
 ## Sim-Auto
 
-> **Skill note (not in the source):** this section is "Preserve these model settings" of the Sim-Auto model contract (cosmos-framework `main` 45fecab), moved here word for word with its heading one level down. The rest of that contract (checkpoint handoffs, trainable parameters) is in the [Sim-Auto model and checkpoint contract](../../cosmos3-nano-sim-auto/shared/model-contract.md).
+> **Skill note (not in the source):** this section is "Preserve these model settings" of the Sim-Auto model contract (cosmos-framework `main` 45fecab), moved here word for word with its heading one level down. The rest of that contract (checkpoint handoffs, trainable parameters) is in the [Sim-Auto model and checkpoint contract](../../cosmos3-post-train-simulation-auto/references/sim-auto-model-contract.md).
 
 ### Preserve these model settings
 
@@ -100,7 +100,7 @@ unless the user explicitly requests an external workflow.
 - RGB compression: temporal 4, spatial 16×16. LiDAR: temporal 1, spatial 16×16,
   128 latent channels. Use the tokenizer config and weights delivered together.
 - Camera/LiDAR clocks: 30/10 Hz, synchronized by source-frame IDs. Camera-major
-  storage is not a spatial mosaic. See the [data contract](../../cosmos3-nano-sim-auto/shared/data-contract.md).
+  storage is not a spatial mosaic. See the [data contract](../../cosmos3-post-train-simulation-auto/references/sim-auto-data.md).
 - Fixed SDE levels: `[1.0, 0.9375, 0.8333333333333334, 0.625]`, then zero.
   Generic RF step-count/shift options do not replace this schedule.
 - The documented streaming export stores `rolling_kv_cache_chunks=2`,

@@ -101,7 +101,7 @@ Initial RGB must match the rendered views and start time. Joint LiDAR generation
 requires separately prepared, aligned HD-map range-map controls. Camera rendering
 does not produce those controls; never borrow them from an unrelated sample.
 For post-training captions, describe the actual recorded RGB targets using the
-[training data guide](../../../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md#training-captions)
+[training data guide](../../../../cosmos3-post-train-simulation-auto/references/data-contract.md#training-captions)
 instead of assigning hypothetical appearance to a future generated scene.
 
 ### Custom rigs and already-rendered controls

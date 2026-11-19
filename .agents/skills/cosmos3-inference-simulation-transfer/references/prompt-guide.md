@@ -79,7 +79,7 @@ $FRAMEWORK_DIR/cosmos_framework/inference/prompting_templates/external_api/t2v_i
 For inference appearance edits, change desired colors, materials, lighting or
 environment while preserving the spatial intent of the control. Start with
 one edit. Use [caption preparation](caption-guide.md) for new
-training targets and the [data contract](../../cosmos3-nano-sim-transfer/shared/data-contract.md) for alignment and
+training targets and the [data contract](../../cosmos3-post-train-simulation-transfer/references/data-contract.md) for alignment and
 resizing.
 
 Local preparation uses exclusive bounds `[0, decoded frame count)` and the

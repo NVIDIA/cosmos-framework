@@ -55,7 +55,7 @@ guidance choices and joint LiDAR timing.
   shared [camera-to-embedding mapping](input-preparation.md#2-map-physical-cameras-to-learned-identities).
   Map each camera to the closest supported identity and keep RGB, WSM and caption
   assignments consistent. For domain/rig adaptation, post-train Transfer-Auto
-  first and then [distill it](../../cosmos3-nano-sim-auto/post-training/SKILL.md).
+  first and then [distill it](../../cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto).
 - **Captions:** use the same
   [camera-local, training-aligned style](caption-policy.md#keep-training-and-inference-captions-aligned)
   as Transfer-Auto, checking appearance and motion across views and time.

@@ -196,7 +196,7 @@ is not the expected sidecar format. The example exporter uses one outer chunk co
 first window (end frame exclusive), with timestamped text inside. It writes interval-specific
 copies under `OUTPUT_ROOT/captions`; keep the originals in `CAPTION_ROOT` separately.
 For training, captions must describe your actual recorded RGB targets; see the
-[training caption policy](../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md#training-captions).
+[training caption policy](../../cosmos3-post-train-simulation-auto/references/data-contract.md#training-captions).
 
 ```python
 sampling = {

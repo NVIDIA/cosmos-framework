@@ -1,6 +1,6 @@
 # Troubleshoot Cosmos3-Nano-Sim-Transfer
 
-> **Skill note (not in the source):** this file holds the opening guidance and the Runtime, Model and runtime, Media and data and Inference sections of the Sim-Transfer troubleshooting skill, the matching rows of its failure playbook, and the support-request paragraph that closed "Training state" in the source (here under "Support request"). "Training state" is in the [Sim-Transfer troubleshooting skill](../../cosmos3-nano-sim-transfer/troubleshooting/SKILL.md#training-state).
+> **Skill note (not in the source):** this file holds the opening guidance and the Runtime, Model and runtime, Media and data and Inference sections of the Sim-Transfer troubleshooting sub-skill (cosmos-framework `main` 45fecab), the matching rows of its failure playbook, and the support-request paragraph that closed "Training state" in the source (here under "Support request"). "Training state" and its failure rows are in the Sim-Transfer post-training skill's [troubleshooting reference](../../cosmos3-post-train-simulation-transfer/references/troubleshooting.md#training-state).
 
 Start with the first failing operation and preserve the last completed
 checkpoint and existing outputs. Compare the effective inputs and model
@@ -74,7 +74,7 @@ edge and blur from RGB.
 Each training draw selects one control. A numeric stratum identifies a
 temporal length bucket, not a modality. Local-caption bounds are exclusive:
 `[0,121)` means frames 0 through 120. Generic video-caption JSONL instead uses
-inclusive ends. Follow the [local data contract](../../cosmos3-nano-sim-transfer/shared/local-dataset.md).
+inclusive ends. Follow the [local data contract](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md).
 
 If `local_simulation` cannot import, use the pinned Framework checkout and
 install its environment. The native local data route requires
@@ -145,6 +145,6 @@ and private media paths.
 - [Model contract](model-contract.md)
 - [Environment requirements](environment.md)
 - [Hugging Face examples](hf-sample.md)
-- [Local training data contract](../../cosmos3-nano-sim-transfer/shared/local-dataset.md)
+- [Local training data contract](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md)
 - [Inference parameters and coupled settings](inference-contract.md)
 - [Output files](output.md)

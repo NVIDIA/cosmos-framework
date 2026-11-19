@@ -1,6 +1,6 @@
 # Troubleshoot Auto inference
 
-> **Skill note (not in the source):** this file holds the inference symptoms of the Transfer-Auto and Sim-Auto troubleshooting skills and their stage-neutral text (collecting one failing example; diagnosing, correcting, verifying and reporting), word for word. Training, checkpoint, resume and distillation symptoms are in the [Transfer-Auto troubleshooting skill](../../cosmos3-nano-transfer-auto/troubleshooting/SKILL.md) and the [Sim-Auto troubleshooting skill](../../cosmos3-nano-sim-auto/troubleshooting/SKILL.md). "The symptom guide" named below is the Transfer-Auto symptom sections of this file together with the training sections of the [Transfer-Auto symptom guide](../../cosmos3-nano-transfer-auto/troubleshooting/references/symptom-guide.md); "the inference reference" is [Framework requests and sampling](input-and-execution.md).
+> **Skill note (not in the source):** this file holds the inference symptoms of the Transfer-Auto and Sim-Auto troubleshooting skills and their stage-neutral text (collecting one failing example; diagnosing, correcting, verifying and reporting), word for word. Training, checkpoint, resume and distillation symptoms are in the troubleshooting reference of the Auto post-train skill (`cosmos3-post-train-simulation-auto`): [Transfer-Auto](../../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-transfer-auto) and [Sim-Auto](../../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-sim-auto). "The symptom guide" named below is the Transfer-Auto symptom sections of this file together with the training sections of the [Transfer-Auto symptom guide](../../cosmos3-post-train-simulation-auto/references/troubleshooting.md#cosmos3-nano-transfer-auto-common-problems-and-checks) in that reference; "the inference reference" is [Framework requests and sampling](input-and-execution.md).
 
 ## Transfer-Auto
 
@@ -42,7 +42,7 @@ factor at a time.
 Return observations, hypotheses, the checks actually run, proposed corrections,
 and remaining uncertainty. Pass a corrected request to the
 [inference Skill](../SKILL.md#transfer-auto), or a state/topology issue to
-[post-training](../../cosmos3-nano-transfer-auto/post-training/SKILL.md).
+[post-training](../../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto).
 
 ### Side/rear morphing, front acceptable
 
@@ -128,13 +128,13 @@ Collect one failing request or training step, runtime/source revision, resolved
 config, artifact identity, logs and relevant outputs. Keep confidential inputs and
 credentials out of shared reports.
 
-| Symptom                                    | First checks                                                                                                                                                             |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Side/rear geometry mismatch                | Shared [input preparation](input-preparation.md): physical camera mapping, synchronized WSM, crop and actual per-view text                                               |
-| Short output or caption transition failure | [Input settings](sim-auto-inputs.md#request-fields): total horizon, source coverage, sidecar bounds and first-chunk selection                                            |
-| Missing metadata / HF load rejected        | [Export](../../cosmos3-nano-sim-auto/post-training/references/checkpoints.md#export-the-student): regular student, rolling profile, per-view text and matched tokenizers |
-| Unexpected CFG or sampler behavior         | Fixed four-step student; use the guidance-1 recipe, not bidirectional RF step/shift settings                                                                             |
-| Missing or misaligned LiDAR                | HD-map controls versus measured prefix, 30/10 Hz clocks, source IDs; causal measured prefix is at most one sweep                                                         |
+| Symptom                                    | First checks                                                                                                                                                                     |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Side/rear geometry mismatch                | Shared [input preparation](input-preparation.md): physical camera mapping, synchronized WSM, crop and actual per-view text                                                       |
+| Short output or caption transition failure | [Input settings](sim-auto-inputs.md#request-fields): total horizon, source coverage, sidecar bounds and first-chunk selection                                                    |
+| Missing metadata / HF load rejected        | [Export](../../cosmos3-post-train-simulation-auto/references/sim-auto-checkpoints.md#export-the-student): regular student, rolling profile, per-view text and matched tokenizers |
+| Unexpected CFG or sampler behavior         | Fixed four-step student; use the guidance-1 recipe, not bidirectional RF step/shift settings                                                                                     |
+| Missing or misaligned LiDAR                | HD-map controls versus measured prefix, 30/10 Hz clocks, source IDs; causal measured prefix is at most one sweep                                                                 |
 
 Preserve original inputs and the model's checkpoint/attention settings while
 isolating the issue. Apply the smallest correction and check the affected result.

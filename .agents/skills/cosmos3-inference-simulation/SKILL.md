@@ -8,8 +8,8 @@ description: >
   a caption and one edge, blur, depth or segmentation control video. Use when the user asks "run a Cosmos3 Simulation
   model", "which Simulation model do I need", "simulate what my robot or vehicle would observe" or "how do I validate
   a Simulation rollout". Not for Generator Transfer (cosmos3-inference-transfer), action inference
-  (cosmos3-inference-action), audiovisual generation (cosmos3-inference-generate-media) or post-training (each model's
-  post-training skill).
+  (cosmos3-inference-action), audiovisual generation (cosmos3-inference-generate-media) or post-training
+  (cosmos3-post-train-simulation).
 ---
 
 # Cosmos3 Simulation Inference: Entry
@@ -121,12 +121,14 @@ model-specific checks:
 
 ## Post-training
 
-Post-training is outside this skill and its three blocks. Each model has its own post-training skill:
+Post-training is outside this skill and its three blocks. Its entry skill is
+[cosmos3-post-train-simulation](../cosmos3-post-train-simulation/SKILL.md); it routes to the post-training skill of
+each model (Transfer-Auto and Sim-Auto are two sections of one skill):
 
-- [The Sim-Bimanual post-training skill](../cosmos3-nano-sim-bimanual/post-training/SKILL.md)
-- [The Transfer-Auto post-training skill](../cosmos3-nano-transfer-auto/post-training/SKILL.md)
-- [The Sim-Auto post-training skill](../cosmos3-nano-sim-auto/post-training/SKILL.md)
-- [The Sim-Transfer post-training skill](../cosmos3-nano-sim-transfer/post-training/SKILL.md)
+- [The Sim-Bimanual post-training skill](../cosmos3-post-train-simulation-bimanual/SKILL.md)
+- [The Transfer-Auto post-training skill](../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto)
+- [The Sim-Auto post-training skill](../cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto)
+- [The Sim-Transfer post-training skill](../cosmos3-post-train-simulation-transfer/SKILL.md)
 
 ## Reference files
 

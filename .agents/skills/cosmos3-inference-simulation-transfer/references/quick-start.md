@@ -50,14 +50,14 @@ history windows and source-size output.
 
 ## 3. Prepare the training bundle
 
-Follow [training-data preparation](../../cosmos3-nano-sim-transfer/shared/local-dataset.md#build-the-example2-bundle)
+Follow [training-data preparation](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md#build-the-example2-bundle)
 to build the native bundle from the same HF media and a HF tokenizer. The loader
 resizes control and target together, derives edge and blur during loading, and
 retains the 93% structured / 7% dense caption policy.
 
 ## 4. Train Stage 0 through Stage 3
 
-Follow the [training walkthrough](../../cosmos3-nano-sim-transfer/post-training/references/local-training.md).
+Follow the [training walkthrough](../../cosmos3-post-train-simulation-transfer/references/local-training.md).
 It starts at Stage 0 from [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano)
 and uses the checkpoints produced by your stages. Stage 0 uses 480/720;
 Stages 1–3 use 480. Causal chunk size stays one.

@@ -1,6 +1,6 @@
 # One daytime scene for both Auto models
 
-> **Skill note (not in the source):** the two training sections of this page ("Prepare the training bundle" and "Short training check") are in the [Transfer-Auto shared reference-scene page](../../cosmos3-nano-transfer-auto/shared/reference-scene.md).
+> **Skill note (not in the source):** the two training sections of this page ("Prepare the training bundle" and "Short training check") are in the [training bundle and short check](../../cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md) reference of the Auto post-train skill (`cosmos3-post-train-simulation-auto`).
 
 Use the same seven-camera scene for Transfer-Auto and Sim-Auto. It contains real
 RGB/LiDAR targets, shared WSM v4.0.1 controls and camera-local captions. Model
@@ -111,7 +111,7 @@ and change `daytime_scene/captions/` to
 Keep media, camera keys and other settings unchanged. Review all views together
 for consistent object appearance, physical motion and event timing, following
 the [inference checks](input-preparation.md#4-delegate-caption-authoring)
-or [target-grounded training guidance](../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md#training-captions).
+or [target-grounded training guidance](../../cosmos3-post-train-simulation-auto/references/data-contract.md#training-captions).
 
 ## Run inference
 
@@ -143,7 +143,7 @@ the camera/WSM and LiDAR inputs. Paths resolve relative to the JSONL file.
 ## Use your own data and verify results
 
 Keep confidential source files outside the repository. Follow the
-[training-data contract](../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md)
+[training-data contract](../../cosmos3-post-train-simulation-auto/references/data-contract.md)
 to produce equivalent paired assets and index rows; do not manufacture targets
 from generated outputs or label them with fictional weather.
 

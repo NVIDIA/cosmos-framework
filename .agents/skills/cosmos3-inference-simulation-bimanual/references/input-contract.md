@@ -1,6 +1,6 @@
 # Input contract
 
-> **Skill note (not in the source):** this file is the input part of the Sim-Bimanual data contract, moved verbatim from the data contract reference of the Sim-Bimanual post-training skill (cosmos-framework `main` 45fecab): its sections "Geometry and action mapping" and "Timing and sampling", then the inference action sidecar that closed it, here under an added heading. No link target changed. The local training bundle part of that data contract stays with [the Sim-Bimanual post-training skill](../../cosmos3-nano-sim-bimanual/post-training/SKILL.md).
+> **Skill note (not in the source):** this file is the input part of the Sim-Bimanual data contract, moved verbatim from the data contract reference of the Sim-Bimanual post-training skill (cosmos-framework `main` 45fecab): its sections "Geometry and action mapping" and "Timing and sampling", then the inference action sidecar that closed it, here under an added heading. No link target changed. The local training bundle part of that data contract is the [data contract](../../cosmos3-post-train-simulation-bimanual/references/data-contract.md) of the Sim-Bimanual post-training skill.
 
 ## Geometry and action mapping
 

@@ -40,8 +40,8 @@ hand the request to [inference](../SKILL.md#sim-auto). Record physical
 camera IDs, selected bounds, caption files and unresolved alignment checks.
 
 For training, use
-[target-grounded captions](../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md#training-captions)
-and the [Sim training-data contract](../../cosmos3-nano-sim-auto/shared/data-contract.md), not a WSM-only
+[target-grounded captions](../../cosmos3-post-train-simulation-auto/references/data-contract.md#training-captions)
+and the [Sim training-data contract](../../cosmos3-post-train-simulation-auto/references/sim-auto-data.md), not a WSM-only
 appearance-generation prompt as a label for recorded RGB.
 
 ## Request fields

@@ -5,7 +5,7 @@ predictions with the [inference tutorial](../SKILL.md), keeping checkpoint,
 actions, prompt, frame rate, preprocessing, and sampling settings fixed.
 
 Read the [model contract](model-contract.md),
-[environment requirements](../../cosmos3-nano-sim-bimanual/shared/release-workflow.md), and
+[environment requirements](../../cosmos3-post-train-simulation-bimanual/references/environment.md), and
 [evaluation contract](#evaluation-contract). Framework documents its two scoring
 paths in [evaluation](../../../../docs/evaluation.md).
 

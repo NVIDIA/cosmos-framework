@@ -32,7 +32,7 @@ Both paragraph and timestamped captions are supported. Our training data uses
 timestamped descriptions, and we have empirically found them more effective for
 generation. The [reference scene's two variants](reference-scene.md#choose-a-caption-style)
 show both formats and how to select them. Prefer timestamped captions for
-post-training too, using the [target-grounded training workflow](../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md#training-captions).
+post-training too, using the [target-grounded training workflow](../../cosmos3-post-train-simulation-auto/references/data-contract.md#training-captions).
 
 Read the [caption policy](#caption-policy) section completely before authoring.
 It contains the traffic, appearance, four-property, and timing rules.

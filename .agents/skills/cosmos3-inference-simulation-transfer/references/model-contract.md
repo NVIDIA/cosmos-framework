@@ -5,8 +5,8 @@ spatial control video. For example, a depth rendering of a moving robot arm
 controls its layout and motion while the caption describes the arm, materials,
 and surroundings. The output is a single-camera RGB video.
 
-This is the shared reference for [data preparation](../../cosmos3-nano-sim-transfer/shared/data-contract.md),
-[post-training](../../cosmos3-nano-sim-transfer/post-training/SKILL.md), and
+This is the shared reference for [data preparation](../../cosmos3-post-train-simulation-transfer/references/data-contract.md),
+[post-training](../../cosmos3-post-train-simulation-transfer/SKILL.md), and
 [inference](../SKILL.md). Use the Framework
 checkout from [setup](setup.md) and its matching model
 configuration.
@@ -29,7 +29,7 @@ window. Training predicts RGB conditioned on the control.
 
 Controls and targets must depict the same camera, times, and field of view.
 Inspect the paired videos to confirm alignment. Prepare each intended control
-using the [data-preparation guide](../../cosmos3-nano-sim-transfer/shared/data-contract.md).
+using the [data-preparation guide](../../cosmos3-post-train-simulation-transfer/references/data-contract.md).
 
 ## Geometry
 
@@ -75,7 +75,7 @@ position clock. Full history requires `S = 0`.
 
 The local training loader resamples the complete selected caption window to
 its length bucket and shares the resulting frame indices between RGB and
-control. See the [local data contract](../../cosmos3-nano-sim-transfer/shared/local-dataset.md) for exclusive bounds
+control. See the [local data contract](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md) for exclusive bounds
 and effective FPS.
 
 Decoded input timestamps and frame rate determine the reference output clock.
@@ -98,7 +98,7 @@ For distilled Stage 3 inference, use one caption per generated sequence.
 Preserve the Transfer prompt formatter and its effective duration, frame rate,
 and canvas metadata. Do not insert control-emphasis text or negative metadata:
 the distilled sampler has no negative-caption branch. Teacher CFG during
-training uses the separate [negative-prompt policy](../../cosmos3-nano-sim-transfer/post-training/references/canonical-recipe.md).
+training uses the separate [negative-prompt policy](../../cosmos3-post-train-simulation-transfer/references/canonical-recipe.md).
 Start a new request for a different caption.
 
 ## Model and output handoffs

@@ -81,14 +81,14 @@ For `example2`, that interval is frames 0–120, expressed by exclusive bounds
 4.033 seconds. Local preparation removes saved output metadata; the loader
 appends the actual sampled duration, FPS and canvas.
 
-Follow [local data preparation](../../cosmos3-nano-sim-transfer/shared/local-dataset.md) to attach reviewed
+Follow [local data preparation](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md) to attach reviewed
 structured captions to native Sim-Transfer data. Local JSONL uses
 `caption_path`, `caption_start: 0` and `caption_end` equal to the decoded frame
 count. Cut aligned RGB/control clips first for shorter annotations. Captions
 are embedded in `samples.json`; editing a standalone caption after preparation
 does not update the dataset.
 
-Use [generic manifest assembly](../../cosmos3-nano-sim-transfer/post-training/references/caption-manifest.md) only for loaders that
+Use [generic manifest assembly](../../cosmos3-post-train-simulation-transfer/references/caption-manifest.md) only for loaders that
 accept generic video-caption JSONL. That converter does not build Sim-Transfer
 controls or implement the structured/dense 93:7 mixture.
 
@@ -98,5 +98,5 @@ controls or implement the structured/dense 93:7 mixture.
 - [Prompt and caption formats](prompt-guide.md)
 - [Optional local captioning server](local-caption-server.md)
 - [Captioner prompt template](video_captioner.txt)
-- [Local training bundle preparation](../../cosmos3-nano-sim-transfer/shared/local-dataset.md)
-- [Generic video-caption manifest assembly](../../cosmos3-nano-sim-transfer/post-training/references/caption-manifest.md)
+- [Local training bundle preparation](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md)
+- [Generic video-caption manifest assembly](../../cosmos3-post-train-simulation-transfer/references/caption-manifest.md)
