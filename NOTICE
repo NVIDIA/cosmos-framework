@@ -3,8 +3,9 @@ Cosmos
 Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES.
 
 This file contains attribution notices for third-party source code that is
-adapted, copied, or vendored in this repository. Dependency notices are listed
-separately in ATTRIBUTIONS.md.
+adapted, copied, or vendored in this repository. Each entry identifies the
+upstream license for the code derived from that source. The full license texts
+are in THIRD_PARTY_LICENSES. Dependency notices are in ATTRIBUTIONS.md.
 
 HuggingFace Transformers / Qwen
 Source: https://github.com/huggingface/transformers
@@ -15,10 +16,10 @@ Notices:
   Copyright 2025 The Qwen Team and The HuggingFace Inc. team.
   Copyright 2025 HuggingFace Inc. team.
 Files:
-  cosmos_framework/model/generator/vlm/qwen3_vl/configuration_qwen3_vl.py
-  cosmos_framework/model/generator/vlm/qwen3_vl/qwen3_vl.py
-  cosmos_framework/model/generator/vlm/qwen3_vl/utils.py
-  cosmos_framework/model/generator/vlm/qwen3_vl/video_processing_qwen3_vl.py
+  cosmos_framework/model/generator/reasoner/qwen3_vl/configuration_qwen3_vl.py
+  cosmos_framework/model/generator/reasoner/qwen3_vl/qwen3_vl.py
+  cosmos_framework/model/generator/reasoner/qwen3_vl/utils.py
+  cosmos_framework/model/generator/reasoner/qwen3_vl/video_processing_qwen3_vl.py
 
 ByteDance-Seed Bagel / Qwen2 tokenizer
 Source: https://github.com/ByteDance-Seed/Bagel
@@ -44,3 +45,55 @@ Notice:
   Copyright (c) Facebook, Inc. and its affiliates.
 File:
   cosmos_framework/utils/lazy_config/__init__.py
+
+Pytorch RetinaFace
+Source: https://github.com/biubug6/Pytorch_Retinaface
+License: MIT
+File:
+  cosmos_framework/auxiliary/guardrail/face_blur_filter/retinaface_utils.py
+
+HiFi-GAN
+Source: https://github.com/jik876/hifi-gan
+License: MIT
+Files:
+  cosmos_framework/model/generator/tokenizers/audio/avae_utils/env.py
+  cosmos_framework/model/generator/tokenizers/audio/avae_utils/models.py
+  cosmos_framework/model/generator/tokenizers/audio/avae_utils/modules.py
+
+EnCodec
+Source: https://github.com/facebookresearch/encodec
+License: MIT (shared text with ConvNeXt)
+File:
+  cosmos_framework/model/generator/tokenizers/audio/avae_utils/modules_encodec.py
+
+Alias-Free Torch
+Source: https://github.com/junjun3518/alias-free-torch
+Adaptation: https://github.com/NVIDIA/BigVGAN/tree/4dbc17bc01a59f2c2bca2c19d44c48f6d7eaec64/alias_free_activation/torch
+License: Apache-2.0
+Directory:
+  cosmos_framework/model/generator/tokenizers/audio/avae_utils/alias_free_torch/
+
+Julius
+Source: https://github.com/adefossez/julius
+License: MIT
+File:
+  cosmos_framework/model/generator/tokenizers/audio/avae_utils/alias_free_torch/filter.py
+
+BigVGAN / Snake
+Sources: https://github.com/NVIDIA/BigVGAN/blob/4dbc17bc01a59f2c2bca2c19d44c48f6d7eaec64/activations.py
+  and https://github.com/EdwardDixon/snake
+License: MIT (separate notices for BigVGAN and Snake)
+File (Snake and SnakeBeta):
+  cosmos_framework/model/generator/tokenizers/audio/avae_utils/activations.py
+
+VITS
+Source: https://github.com/jaywalnut310/vits/blob/main/commons.py
+License: MIT
+File (fused_add_tanh_sigmoid_multiply):
+  cosmos_framework/model/generator/tokenizers/audio/avae_utils/activations.py
+
+Vocos and ConvNeXt
+Sources: https://github.com/gemelo-ai/vocos and https://github.com/facebookresearch/ConvNeXt
+License: MIT (separate notices for Vocos and ConvNeXt)
+File (ConvNeXtBlock):
+  cosmos_framework/model/generator/tokenizers/audio/avae_utils/modules.py

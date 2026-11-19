@@ -22,7 +22,6 @@ def evaluation_imports():
     evaluation_imports: Dictionary ( key = module name , value = alias  )  with python modules used in the evaluation.
     """
     return {
-            'Polygon':'plg',
             'numpy':'np'
             }
 
@@ -73,12 +72,19 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
         - method (required)  Global method metrics. Ex: { 'Precision':0.8,'Recall':0.9 }
         - samples (optional) Per sample metrics. Ex: {'sample1' : { 'Precision':0.8,'Recall':0.9 } , 'sample2' : { 'Precision':0.8,'Recall':0.9 }
     """
+    from shapely.geometry import Polygon
+    from shapely.validation import make_valid
+
     for module,alias in evaluation_imports().items():
         globals()[alias] = importlib.import_module(module)
 
+    def make_polygon(points):
+        polygon = Polygon(points)
+        return polygon if polygon.is_valid else make_valid(polygon)
+
     def polygon_from_points(points,correctOffset=False):
         """
-        Returns a Polygon object to use with the Polygon2 class from a list of 8 points: x1,y1,x2,y2,x3,y3,x4,y4
+        Returns polygon geometry from coordinates x1,y1,x2,y2,x3,y3,x4,y4.
         """
 
         if correctOffset: #this will substract 1 from the coordinates that correspond to the xmax and ymax
@@ -97,7 +103,7 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
         resBoxes[0,3]=int(points[6])
         resBoxes[0,7]=int(points[7])
         pointMat = resBoxes[0].reshape([2,4]).T
-        return plg.Polygon( pointMat)
+        return make_polygon(pointMat)
 
     def rectangle_to_polygon(rect):
         resBoxes=np.empty([1,8],dtype='int32')
@@ -112,15 +118,15 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
 
         pointMat = resBoxes[0].reshape([2,4]).T
 
-        return plg.Polygon( pointMat)
+        return make_polygon(pointMat)
 
     def rectangle_to_points(rect):
         points = [int(rect.xmin), int(rect.ymax), int(rect.xmax), int(rect.ymax), int(rect.xmax), int(rect.ymin), int(rect.xmin), int(rect.ymin)]
         return points
 
     def get_union(pD,pG):
-        areaA = pD.area();
-        areaB = pG.area();
+        areaA = pD.area
+        areaB = pG.area
         return areaA + areaB - get_intersection(pD, pG);
 
     def get_intersection_over_union(pD,pG):
@@ -130,10 +136,7 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
             return 0
 
     def get_intersection(pD,pG):
-        pInt = pD & pG
-        if len(pInt) == 0:
-            return 0
-        return pInt.area()
+        return pD.intersection(pG).area
 
     def compute_ap(confList, matchList,numGtCare):
         correct = 0
@@ -346,7 +349,7 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
                     for dontCarePol in gtDontCarePolsNum:
                         dontCarePol = gtPols[dontCarePol]
                         intersected_area = get_intersection(dontCarePol,detPol)
-                        pdDimensions = detPol.area()
+                        pdDimensions = detPol.area
                         precision = 0 if pdDimensions == 0 else intersected_area / pdDimensions
                         if (precision > evaluationParams['AREA_PRECISION_CONSTRAINT'] ):
                             detDontCarePolsNum.append( len(detPols)-1 )

@@ -1,6 +1,4 @@
 import base64
-import io
-import logging
 import math
 import os
 import os.path as osp
@@ -8,12 +6,12 @@ import warnings
 from typing import List
 
 import pandas as pd
-from PIL import Image
 from tqdm import tqdm
 
 from vlmeval.smp import (LMUDataRoot, decode_base64_to_image_file, download_file, dump,
                          encode_image_to_base64, get_intermediate_file_path, get_logger, listinstr,
                          load, md5, read_ok, toliststr)
+from ._pdf_pages import encode_pdf_pages
 from .image_base import ImageBaseDataset
 from .mmlongbench import MMLongBench_auxeval, anls_compute, concat_images
 from .utils.judge_util import build_judge
@@ -101,12 +99,6 @@ class DUDE(ImageBaseDataset):
 
     def dump_image(self, origin_line):
         os.makedirs(self.img_root, exist_ok=True)
-        try:
-            import fitz
-        except Exception as e:
-            logging.critical(f'{type(e)}: {e}')
-            logging.critical('Please use `pip install pymupdf` to parse PDF files.')
-
         line = origin_line.copy()
         if not isinstance(line['image_path'], List):
             line['image_path'] = [line['image_path']]
@@ -123,17 +115,7 @@ class DUDE(ImageBaseDataset):
             line['image'] = line['image_path']
         else:
             pdf_data = base64.b64decode(line['image'])
-            pdf_file = io.BytesIO(pdf_data)
-            encoded_images = []
-            with fitz.open(stream=pdf_file, filetype='pdf') as doc:
-                doc = doc[:self.max_pages]
-                for page in doc:
-                    image = page.get_pixmap(dpi=144)
-                    image_file = io.BytesIO(image.tobytes(output='png'))
-                    image = Image.open(image_file)
-                    encoded_image = encode_image_to_base64(image)
-                    encoded_images.append(encoded_image)
-            line['image'] = encoded_images
+            line['image'] = encode_pdf_pages(pdf_data, self.max_pages)
             print('process {}'.format(line['doc_id']))
 
         if 'image' in line:
