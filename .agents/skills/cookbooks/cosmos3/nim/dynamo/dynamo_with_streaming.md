@@ -76,13 +76,11 @@ Edge supports the same REST session API in BF16 and FP8. In both
   value: edge
 - name: NIM_PRECISION
   value: fp8  # or bf16
-- name: NIM_SPECULATIVE_METHOD
-  value: none
 ```
 
 Replace the existing variant and precision entries rather than adding
 duplicates. Keep the image, cache, and GPU selectors aligned between the Job and
-workers. Edge does not support DFlash and defaults to `none`. The shared
+workers. The shared
 frontend needs no model-specific change. The client discovers
 the Edge model from `/v1/streaming/config`. Use a separate streaming endpoint if
 running Edge alongside a Nano or Super pool.

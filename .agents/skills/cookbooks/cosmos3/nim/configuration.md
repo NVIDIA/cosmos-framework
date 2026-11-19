@@ -266,8 +266,7 @@ The presets configure these settings:
 
 On profiles with tensor parallelism above 1, both presets also set
 `NIM_MM_ENCODER_TP_MODE=data`, which replicates the vision encoder and splits
-media across TP ranks. Explicit settings take precedence over presets. On
-Edge, set `NIM_SPECULATIVE_METHOD=none` with `TPOT`.
+media across TP ranks. Explicit settings take precedence over presets.
 
 ### Speculative Decoding
 
@@ -276,13 +275,13 @@ The same controls apply to ordinary requests and streaming video sessions.
 
 | Name | Default | Use |
 | --- | --- | --- |
-| `NIM_SPECULATIVE_METHOD` | `dflash` for Nano/Super; `none` for Edge | Select `dflash`, GPU n-gram speculation (`ngram`), or `none` |
+| `NIM_SPECULATIVE_METHOD` | `dflash` | Select `dflash`, GPU n-gram speculation (`ngram`), or `none` |
 | `NIM_SPECULATIVE_CONFIG` | Empty object | Override speculative-decoding settings as JSON; `method` and `model` are reserved keys |
-| `NIM_DFLASH_MODEL_PATH` | Empty | Nano or Super Reasoner: use an absolute local DFlash directory containing `config.json` and `model.safetensors`; refer to [Local Directory](bring-your-own-checkpoint.md#local-directory) |
+| `NIM_DFLASH_MODEL_PATH` | Empty | Use an absolute local DFlash directory containing `config.json` and `model.safetensors`; refer to [Local Directory](bring-your-own-checkpoint.md#local-directory) |
 | `NIM_KV_CACHE_DTYPE` | Automatic | Override KV-cache precision with `bfloat16` or `fp8` |
 
-DFlash uses the matching bundled Nano or Super draft. Edge does not support
-DFlash. The `ngram` and `none` methods do not load a draft. A nonempty
+DFlash uses the bundled draft that matches the selected Edge, Nano, or Super
+profile. The `ngram` and `none` methods do not load a draft. A nonempty
 `NIM_SPECULATIVE_CONFIG` requires speculation to be enabled. DFlash proposes
 7 tokens by default; n-gram proposes 3. For example, add these Docker options:
 
@@ -302,7 +301,7 @@ An explicit `NIM_KV_CACHE_DTYPE` overrides this choice.
 | --- | --- | --- |
 | `NIM_MAX_MODEL_LEN` | `-1` (auto) | Let the runtime choose a context length, bounded by the checkpoint limit of 262,144 tokens |
 | `NIM_GPU_MEMORY_UTILIZATION` | Automatically sized, capped at `0.91` | Override the fraction of total GPU memory assigned to vLLM, in `(0,1]`; startup warns when it exceeds current free memory but does not reduce it |
-| `NIM_ASYNC_SCHEDULING` | Runtime default | Enable or disable asynchronous scheduling in standalone and Dynamo serving; streaming forces it off |
+| `NIM_ASYNC_SCHEDULING` | Standalone: vLLM default; Dynamo: `true` | Enable or disable asynchronous scheduling in standalone and Dynamo serving; streaming forces it off |
 
 The default vLLM allocation leaves room for video decoders, CUDA contexts, and
 `NIM_GPU_MEMORY_HEADROOM_GIB`. On unified-memory systems, it starts from 70%
@@ -331,6 +330,15 @@ Above `1`, the NIM starts CUDA MPS so the processes can share the GPU.
 More processes can reduce time to first token (TTFT) under concurrent video
 load, but can increase inter-token latency (ITL) and decoder memory use.
 Start with `1`, try `2`, and compare latency and memory on your workload.
+
+Each process reserves its own GPU memory outside vLLM: a 0.5 GiB CUDA context
+and, unless `NIM_MAX_VIDEOS_PER_PROMPT=0`, a decoder budget of
+`NIM_NVDEC_PEAK_DECODERS` × `NIM_NVDEC_BUDGET_PER_DECODER_MB`, capped by the
+GPU's NVDEC engine count. This reserve reduces the automatic vLLM allocation.
+If it does not fit, startup fails; lower the process count or the decoder
+budget. Above `1`, the NIM also multiplies `VLLM_MEDIA_LOADING_THREAD_COUNT`
+(default `16`) by the process count unless you set it explicitly.
+
 Add this option to the Reasoner Docker launch:
 
 ```bash
@@ -467,6 +475,8 @@ Leave these at their defaults unless you have measured a need.
 | --- | --- | --- | --- |
 | `NIM_OFFLOAD_MODE` | Generator | Automatic | Request `none`, `model`, or `layer` when the model provides it |
 | `NIM_GPU_MEMORY_HEADROOM_GIB` | Reasoner | `1` | Additional memory reserve in GiB, beyond video decoders and CUDA contexts; lowering it raises OOM risk |
+| `NIM_NVDEC_PEAK_DECODERS` | Reasoner | `8` | Maximum concurrent NVDEC decoders per video decode process, capped by the GPU's NVDEC engines; also sizes the decoder memory reserve |
+| `NIM_NVDEC_BUDGET_PER_DECODER_MB` | Reasoner | `500` | GPU memory reserved per decoder, in MiB; lowering it raises OOM risk |
 | `NIM_MODEL_PROFILE` | Both | Empty | Pin an exact profile ID from the current image |
 | `NIM_VIDEO_SAVE_QUALITY` | Generator | `7` | VP9 output quality 1–9; affects encoding, not diffusion |
 | `NIM_ENABLE_TORCH_COMPILE` | Generator | `true` | Enable the compilation path |
@@ -488,6 +498,7 @@ Leave these at their defaults unless you have measured a need.
 | `NIM_DISABLE_MM_PREPROCESSOR_CACHE` | Reasoner | `false` | Disable the multimodal preprocessor cache |
 | `NIM_MEDIA_IO_KWARGS` | Reasoner | Video backend `pynvvc` | Replace the whole operator-level media I/O JSON object |
 | `NIM_MM_PROCESSOR_KWARGS` | Reasoner | Unset | Operator-level multimodal processor options as a JSON object |
+| `NIM_MM_ENCODER_TP_MODE` | Reasoner | Unset; presets set `data` when tensor parallelism is above 1 | Vision-encoder tensor-parallel mode; `data` replicates the encoder and splits media across TP ranks |
 | `NIM_VIDEO_PRUNING_RATE` | Reasoner | `0.6` | Video-token pruning from 0 through 1; `0`, `none`, `null`, or an empty value disable pruning |
 | `NIM_VIDEO_PRUNING_METHOD` | Reasoner | `vidcom2` | `vidcom2` or `evs` when pruning is enabled |
 | `NIM_GUIDED_DECODING_BACKEND` | Reasoner | `xgrammar` | Structured-output backend |
