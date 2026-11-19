@@ -144,8 +144,6 @@ def compact_json_file(path: Path) -> str:
 
 def media_to_data_url(path: Path) -> str:
     """Read a supported local image or video as a base64 data URL."""
-    # Hugging Face snapshots symlink to extension-less blobs, so keep the given
-    # name for the media type; reading the file still follows the link.
     path = path.absolute()
     if not path.is_file():
         raise FileNotFoundError(f"Media file does not exist: {path}")
