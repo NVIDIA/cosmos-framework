@@ -48,7 +48,7 @@ the inputs and reads the outputs.
 
 ## 1. Environment setup
 
-Use a clean virtual environment with **Python 3.10+**, run from the **repo root** (the directory that
+Use a clean virtual environment with **Python 3.11+**, run from the **repo root** (the directory that
 holds this README):
 
 ```bash
@@ -76,6 +76,13 @@ Sanity check:
 ```bash
 python -c "import vlmeval; print('vlmeval OK')"
 ```
+
+For DUDE and MMLongBench runs that render PDF inputs, install the additional PDF
+dependencies from [requirements-pdf.txt](requirements-pdf.txt) with
+`pip install -r requirements-pdf.txt`. Use a fresh image cache when comparing
+PDFium renders with scores from a previous PDF backend. OCR spotting now uses
+Shapely for polygon overlap, and MegaBench near-string matching uses AnyAscii
+for transliteration. Edge cases can produce different scores from older runs.
 
 ---
 

@@ -1,12 +1,11 @@
 apted
-distance
 editdistance
 ipdb
 jieba
-Levenshtein
+rapidfuzz>=3.9.5,<4
 lxml
 nltk
 numpy
-Polygon3
+shapely>=2,<3
 tqdm
 zss

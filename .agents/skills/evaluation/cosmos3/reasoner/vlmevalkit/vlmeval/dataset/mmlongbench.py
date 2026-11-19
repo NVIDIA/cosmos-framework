@@ -1,5 +1,4 @@
 import base64
-import io
 import logging
 import math
 import os
@@ -16,6 +15,7 @@ from vlmeval.dataset.utils import build_judge, levenshtein_distance
 from vlmeval.smp import (decode_base64_to_image_file, dump, encode_image_to_base64,
                          get_intermediate_file_path, get_logger, listinstr, load, read_ok,
                          toliststr)
+from ._pdf_pages import encode_pdf_pages
 from .image_base import ImageBaseDataset
 
 logger = get_logger(__name__)
@@ -471,12 +471,6 @@ class MMLongBench(ImageBaseDataset):
 
     def dump_image(self, origin_line):
         os.makedirs(self.img_root, exist_ok=True)
-        try:
-            import fitz
-        except Exception as e:
-            logging.critical(f'{type(e)}: {e}')
-            logging.critical('Please use `pip install pymupdf` to parse PDF files.')
-
         line = origin_line.copy()
         line['image_path'] = line['image_path'][:self.max_pages]
         skip_pdf_parse = True
@@ -491,17 +485,7 @@ class MMLongBench(ImageBaseDataset):
             line['image'] = line['image_path']
         else:
             pdf_data = base64.b64decode(line['image'])
-            pdf_file = io.BytesIO(pdf_data)
-            encoded_images = []
-            with fitz.open(stream=pdf_file, filetype='pdf') as doc:
-                doc = doc[:self.max_pages]
-                for page in doc:
-                    image = page.get_pixmap(dpi=144)
-                    image_file = io.BytesIO(image.tobytes(output='png'))
-                    image = Image.open(image_file)
-                    encoded_image = encode_image_to_base64(image)
-                    encoded_images.append(encoded_image)
-            line['image'] = encoded_images
+            line['image'] = encode_pdf_pages(pdf_data, self.max_pages)
             print('process {}'.format(line['doc_id']))
 
         if 'image' in line:

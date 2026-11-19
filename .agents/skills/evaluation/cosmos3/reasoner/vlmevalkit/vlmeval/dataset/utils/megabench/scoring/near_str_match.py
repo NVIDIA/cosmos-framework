@@ -1,12 +1,12 @@
 import rapidfuzz
-import unidecode
+from anyascii import anyascii
 
 from .common.transformations import remove_def_indef_articles
 
 
 def approximate(text: str) -> str:
     """Return an approximation of the original string."""
-    return unidecode.unidecode(remove_def_indef_articles(text)).lower()
+    return anyascii(remove_def_indef_articles(text)).lower()
 
 
 class NearStrMatch:
