@@ -1435,6 +1435,41 @@ difference corresponds to at most 1 mm position-command or 0.01 rad orientation-
 per step; this is a numerical budget, not a safety or rollout-quality claim. Same-quantized-base
 portable reload retains zero numerical tolerances. A failed conversion gate is retained as a failure.
 
+### Three-seed rollout preservation (step 3a, 2026-11-19)
+
+Prospective protocol `3f7bca60…` (packet `gr00t-seed3-rollout-3c96ce8-v1`), fixed before any
+outcome: the selected LR `1e-5` recipe's update-200 NF4 and BF16 LoRA DCPs for training seeds 17,
+42 and 123, plus both frozen sources, each rolled out once on the 400 previously unused published
+LIBERO-Spatial cases (tasks 0-9 x initial states 10-49), rollout seed 17, inference build `3c96ce8`,
+settings identical to job 38523598. Every job admitted all six checkpoints (inventory, adapter
+seed, identical training contracts) and re-hashed them before loading. Primary guard: one-sided 95%
+upper NF4-vs-BF16 LoRA success loss <= 2 points, paired crossed training-seed x task bootstrap
+(10,000 draws, seed 6809).
+
+| Policy (job) | Seed 17 | Seed 42 | Seed 123 | Mean success |
+| --- | ---: | ---: | ---: | ---: |
+| NF4 LoRA (38705842/46/48) | 391/400 | 382/400 | 392/400 | 97.08% |
+| BF16 LoRA (38705843/45/49) | 391/400 | 387/400 | 392/400 | 97.50% |
+| NF4 frozen source (38705851) | | | | 391/400 = 97.75% |
+| BF16 frozen source (38705853) | | | | 395/400 = 98.75% |
+
+| Comparison | Point loss | Upper one-sided 95% loss | Margin |
+| --- | ---: | ---: | --- |
+| NF4 vs BF16 LoRA (primary) | 0.42 pt | **2.08 pt** | <= 2.0: **not met** |
+| NF4 LoRA vs own frozen source | 0.67 pt | 2.58 pt | reported |
+| BF16 LoRA vs own frozen source | 1.25 pt | 3.42 pt | reported |
+| Frozen NF4 vs BF16 source | 1.00 pt | 2.00 pt | reported |
+
+**The rollout preservation guard is not met** and remains a failure. The point loss is small and
+comes entirely from training seed 42 (seeds 17 and 123 tie exactly), but three seeds and ten tasks
+leave the bound just over the margin. Neither LoRA arm improves closed-loop success over its own
+frozen source on these near-saturated tasks. Scope: exposed development tasks, update-200
+checkpoints, three training seeds; not independent confirmation or real-robot behaviour.
+
+All eight rollouts passed acceptance. The in-job analysis (38705853) failed only because
+`sbatch --export` splits on commas and delivered one of seven job ids; the unchanged
+`run.analyze` was then run over all eight acceptance files (analysis SHA-256 `1ec98abf…`).
+
 ## Completed native engineering checks
 
 The [sealed `4cba88f` engineering receipts](evidence/native_qlora_gr00t_engineering_4cba88f.json)
