@@ -30,13 +30,13 @@ needed. Required tokenizer and VAE artifacts may be downloaded separately by
 their registered loaders.
 
 The four input specifications, captions, and control videos live in the
-[Cosmos Transfer cookbook](../.agents/skills/cookbooks/cosmos3/simulation/transfer).
+[Cosmos Transfer cookbook](../.agents/skills/cosmos3-inference-simulation-transfer).
 Point `COSMOS_COOKBOOK_ROOT` at the cookbook root, `.agents/skills` in this
 checkout, and materialize its Git LFS assets:
 
 ```bash
 export COSMOS_COOKBOOK_ROOT=/absolute/path/to/cosmos-framework/.agents/skills
-export SIM_TRANSFER_ROOT="$COSMOS_COOKBOOK_ROOT/cookbooks/cosmos3/simulation/transfer"
+export SIM_TRANSFER_ROOT="$COSMOS_COOKBOOK_ROOT/cosmos3-inference-simulation-transfer"
 git -C "$COSMOS_COOKBOOK_ROOT" lfs install --local
 git -C "$COSMOS_COOKBOOK_ROOT" lfs pull
 ```
@@ -79,7 +79,7 @@ The command selects incremental control encoding, a 30-latent-frame history,
 three attention-sink frames, and eager execution on one GPU. The dedicated
 Transfer path does not invoke guardrails; the command makes that setting
 explicit. See the
-[native cookbook recipe](../.agents/skills/cookbooks/cosmos3/simulation/transfer/transfer.md#cosmos-framework)
+[native cookbook recipe](../.agents/skills/cosmos3-inference-simulation-transfer/references/transfer-guide.md#cosmos-framework)
 for input requirements, supported canvases, and control-quality checks.
 
 ## Validate the output

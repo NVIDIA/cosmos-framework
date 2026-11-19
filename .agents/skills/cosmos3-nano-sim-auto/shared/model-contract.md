@@ -8,27 +8,7 @@ Cosmos3-Nano-Sim-Auto is the causal, four-step distilled descendant of
 Cosmos3-Nano-Transfer-Auto. Training constructs teachers and a fake-score network;
 inference loads only the exported student.
 
-## Preserve these model settings
-
-- Joint camera/LiDAR architecture: 11 camera identities plus one LiDAR identity,
-  LiDAR patch size 1, and camera-local text.
-- Causal history: three RGB latent frames per chunk, strict-past clean RGB for
-  controls, chunk-causal clean passes and a 0.4-second cross-view history window
-  with overlapping keys counted once.
-- RGB compression: temporal 4, spatial 16×16. LiDAR: temporal 1, spatial 16×16,
-  128 latent channels. Use the tokenizer config and weights delivered together.
-- Camera/LiDAR clocks: 30/10 Hz, synchronized by source-frame IDs. Camera-major
-  storage is not a spatial mosaic. See the [data contract](data-contract.md).
-- Fixed SDE levels: `[1.0, 0.9375, 0.8333333333333334, 0.625]`, then zero.
-  Generic RF step-count/shift options do not replace this schedule.
-- The documented streaming export stores `rolling_kv_cache_chunks=2`,
-  `rolling_kv_sink_chunks=1` and `rolling_prompt_policy=segmented`.
-  Preserve these in the inference artifact.
-
-The model uses learned physical sensor IDs; it does not infer camera identity
-from a filename or caption. Follow the shared
-[input-preparation](../../cosmos3-nano-transfer-auto/inference/references/input-preparation.md)
-and [caption guide](../../cosmos3-nano-transfer-auto/inference/references/caption-guide.md).
+> **Skill note (not in the source):** the section "Preserve these model settings" moved to the Sim-Auto section of the [Auto model contract](../../cosmos3-inference-simulation-auto/references/model-contract.md#sim-auto).
 
 ## Checkpoint handoffs
 
@@ -51,6 +31,6 @@ Tokenizers and other groups remain frozen. Keep teacher/student and regular/EMA
 identities explicit; do not weaken strict loading to conceal an incompatible artifact.
 
 Use [post-training](../post-training/SKILL.md),
-[inference](../inference/SKILL.md), or
+[inference](../../cosmos3-inference-simulation-auto/SKILL.md#sim-auto), or
 [troubleshooting](../troubleshooting/SKILL.md) for the selected task.
 Keep both Auto bundles together so the shared guides remain available.

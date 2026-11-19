@@ -58,6 +58,15 @@ env:
   # Deployment values (evaluator image, dashboard URL) live in repository variables, not in the mirrored tree.
   COSMOS_SKILL_EVAL_IMAGE: ${{ vars.COSMOS_SKILL_EVAL_IMAGE }}
   COSMOS_SKILL_EVAL_DASHBOARD: ${{ vars.COSMOS_SKILL_EVAL_DASHBOARD }}
+  # The runner's checkout is bind-mounted into the evaluator containers, whose git has the Git LFS filters configured
+  # system-wide: a `git status` there can make git-lfs install its hooks (post-checkout, post-commit, post-merge,
+  # pre-push) into this checkout's .git/hooks, owned by root. A runner host without git-lfs then fails every later
+  # `git checkout` in that workspace ("This repository is configured for Git LFS but 'git-lfs' was not found"), so one
+  # cell could turn a runner into one that fails each job it picks up. Git in these jobs therefore ignores repository
+  # hooks, and the cell jobs remove such hooks when they end.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: core.hooksPath
+  GIT_CONFIG_VALUE_0: /dev/null
 
 jobs:
   gate:
@@ -243,6 +252,14 @@ jobs:
           python3 .github/scripts/skill_eval/run_matrix.py cell --config .github/skill-eval.yml \
             --checkout "$GITHUB_WORKSPACE" --plan "$PLAN_JSON" --results-dir "$RUNNER_TEMP/cell-results" \
             --skill "$CELL_SKILL" --backend "$CELL_BACKEND" --case "$CELL_CASE"
+      - name: Leave the checkout without Git LFS hooks
+        if: always()
+        continue-on-error: true
+        run: |
+          for hook in post-checkout post-commit post-merge pre-push; do
+            file="$GITHUB_WORKSPACE/.git/hooks/$hook"
+            if [ -f "$file" ] && grep -q "git lfs" "$file"; then rm -f "$file" && echo "removed Git LFS hook $hook"; fi
+          done
       # The cell's outcome is persisted independently of the comment: the report job aggregates these files.
       - name: Keep the cell outcome as a run artifact
         if: always()
@@ -290,6 +307,14 @@ jobs:
           python3 .github/scripts/skill_eval/run_matrix.py cell --config .github/skill-eval.yml \
             --checkout "$GITHUB_WORKSPACE" --plan "$PLAN_JSON" --results-dir "$RUNNER_TEMP/cell-results" \
             --skill "$CELL_SKILL" --backend "$CELL_BACKEND" --case "$CELL_CASE"
+      - name: Leave the checkout without Git LFS hooks
+        if: always()
+        continue-on-error: true
+        run: |
+          for hook in post-checkout post-commit post-merge pre-push; do
+            file="$GITHUB_WORKSPACE/.git/hooks/$hook"
+            if [ -f "$file" ] && grep -q "git lfs" "$file"; then rm -f "$file" && echo "removed Git LFS hook $hook"; fi
+          done
       # The cell's outcome is persisted independently of the comment: the report job aggregates these files.
       - name: Keep the cell outcome as a run artifact
         if: always()

@@ -8,7 +8,7 @@ subsequent stages use your selected EMA checkpoints.
 ## Prepare the converter
 
 Use the clean Framework checkout and environment from
-[setup](../../shared/setup.md), installed with that checkout's
+[setup](../../../cosmos3-inference-simulation-transfer/references/setup.md), installed with that checkout's
 lockfile. No separate historical checkout is needed. The helper checks the
 converter's SHA-256 and import location, then records the actual Framework
 commit and package versions in the conversion receipt. Keep the checkout
@@ -22,11 +22,12 @@ cd "$FRAMEWORK_DIR"
 source .venv/bin/activate
 ```
 
-Preserve the [native-library environment](../../shared/environment.md).
+Preserve the [native-library environment](../../../cosmos3-inference-simulation-transfer/references/environment.md#complete-the-cuda-130-environment).
 Before downloading model weights, check the converter and installed runtime:
 
 ```bash
-python "$SIM_TRANSFER_SKILL/post-training/scripts/prepare_nano_dcp.py" check-env \
+# Skill note (not in the source): SIM_TRANSFER_SKILL is now the Sim-Transfer inference skill folder, so this script is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/prepare_nano_dcp.py".
+python "$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer/post-training/scripts/prepare_nano_dcp.py" check-env \
   --framework-dir "$FRAMEWORK_DIR"
 ```
 
@@ -43,7 +44,8 @@ through `main`.
 ```bash
 export NANO_HF_DIR="${NANO_HF_DIR:?Set a new absolute path for the Nano HF download}"
 export NANO_DCP_DIR="${NANO_DCP_DIR:?Set a new absolute path for the converted DCP}"
-python "$SIM_TRANSFER_SKILL/post-training/scripts/prepare_nano_dcp.py" convert \
+# Skill note (not in the source): SIM_TRANSFER_SKILL is now the Sim-Transfer inference skill folder, so this script is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/prepare_nano_dcp.py".
+python "$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer/post-training/scripts/prepare_nano_dcp.py" convert \
   --framework-dir "$FRAMEWORK_DIR" \
   --source-dir "$NANO_HF_DIR" \
   --output-dir "$NANO_DCP_DIR"

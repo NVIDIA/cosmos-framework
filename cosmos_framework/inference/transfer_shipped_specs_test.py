@@ -18,7 +18,7 @@ pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _COOKBOOK_SPECS = _REPO_ROOT / ".agents/skills/cookbooks/cosmos3/generator/transfer/specs"
-_SIM_TRANSFER_SKILL = _REPO_ROOT / ".agents/skills/cosmos3-nano-sim-transfer"
+_SIM_TRANSFER_SKILL = _REPO_ROOT / ".agents/skills/cosmos3-inference-simulation-transfer"
 
 
 def _nano_model_config() -> SimpleNamespace:
@@ -110,7 +110,7 @@ def test_sim_transfer_skill_requests_build_without_ignored_setting_warnings(
     assert len(requests) == 6
     # The skill's command: its defaults file plus these CLI flags.
     cli = OmniSampleOverrides(
-        defaults_file=_SIM_TRANSFER_SKILL / "inference/assets/sample_args.json",
+        defaults_file=_SIM_TRANSFER_SKILL / "assets/sample_args.json",
         autoregressive=True,
         seed=2025,
         num_steps=4,

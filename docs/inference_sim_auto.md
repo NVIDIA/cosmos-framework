@@ -8,26 +8,26 @@ using a fixed four-step sampler.
 
 The released model is optimized for the reference camera rig; a custom rig can
 produce degraded results even with valid camera IDs. The shared
-[rig guide](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-preparation.md#choose-reference-rig-or-custom-rig-generation)
+[rig guide](../.agents/skills/cosmos3-inference-simulation-auto/references/input-preparation.md#choose-reference-rig-or-custom-rig-generation)
 explains reference-rig WSM retargeting and custom-rig trials. Retargeted controls
 need matching initial RGB. For adaptation, [post-train Transfer-Auto](../.agents/skills/cosmos3-nano-transfer-auto/post-training/SKILL.md)
 on your rig's paired data, then [distill it into Sim-Auto](../.agents/skills/cosmos3-nano-sim-auto/post-training/SKILL.md).
 
-For a custom rig, use [Camera Rig Explorer](../.agents/skills/cookbooks/cosmos3/simulation/auto/wsm/docs/camera-rig/guide.md) and the
-[shared mapping and caption workflow](../.agents/skills/cosmos3-nano-sim-auto/inference/SKILL.md#start-here).
+For a custom rig, use [Camera Rig Explorer](../.agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/docs/camera-rig/guide.md) and the
+[shared mapping and caption workflow](../.agents/skills/cosmos3-inference-simulation-auto/references/start-here-and-sampling.md#start-here-sim-auto).
 Keep guidance and control guidance at 1 for the released student. Its learned
 four-step schedule replaces Transfer-Auto's sampling recipe; see
-[why the settings differ](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#sim-auto-uses-a-distilled-schedule).
+[why the settings differ](../.agents/skills/cosmos3-inference-simulation-auto/references/input-and-execution.md#sim-auto-uses-a-distilled-schedule).
 
 Both **480p (832×480) and 720p (1280×720)** are supported. Prefer
-`aspect_ratio: "16,9"` to best match training; see [size and aspect-ratio guidance](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#resolution-and-aspect-ratio).
+`aspect_ratio: "16,9"` to best match training; see [size and aspect-ratio guidance](../.agents/skills/cosmos3-inference-simulation-auto/references/input-and-execution.md#resolution-and-aspect-ratio).
 Sim-Auto supports long rolling generation; qualitative testing has shown
-multi-minute rollouts without significant visible quality loss. See [duration guidance](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#generation-length-and-long-rollouts)
+multi-minute rollouts without significant visible quality loss. See [duration guidance](../.agents/skills/cosmos3-inference-simulation-auto/references/input-and-execution.md#generation-length-and-long-rollouts)
 for 10-/30-second requests, full-horizon controls and long-rollout quality checks.
 
 Use aligned 30-FPS cameras for the reference recipe; current joint Sim-Auto
 requires 30-FPS camera timing with its 10-Hz LiDAR. See the
-[FPS guide](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#source-timing-model-fps-and-playback-fps)
+[FPS guide](../.agents/skills/cosmos3-inference-simulation-auto/references/input-and-execution.md#source-timing-model-fps-and-playback-fps)
 before experimenting with lower-rate inputs. Playback changes do not correct
 the model's interpretation of motion.
 

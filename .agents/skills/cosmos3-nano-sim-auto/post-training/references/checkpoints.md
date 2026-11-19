@@ -78,6 +78,6 @@ config does not supply the streaming profile.
 LiDAR weights/config. Remove machine-specific paths from export metadata before sharing.
 Preserve needed tokenizer assets and provenance separately.
 
-Run [inference](../../inference/SKILL.md) on fixed held-out controls.
+Run [inference](../../../cosmos3-inference-simulation-auto/SKILL.md#sim-auto) on fixed held-out controls.
 Check per-camera outputs, joint LiDAR, physical frame IDs and caption transitions.
 Successful conversion is not inference parity or quality validation.

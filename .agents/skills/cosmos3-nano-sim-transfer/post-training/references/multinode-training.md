@@ -12,7 +12,7 @@ Request your cluster's partition, account and QoS when allocating.
 Use the same checkout, Python environment, local assets and dataset paths on
 both nodes. Set `COSMOS_INTERNAL=0`, `COSMOS_TRAINING=1`, `COSMOS_SMOKE=0` and
 `COSMOS_DEVICE=cuda` as the stage guide specifies. Export the native
-library paths and `CUDA_HOME` from the [environment setup](../../shared/environment.md).
+library paths and `CUDA_HOME` from the [environment setup](../../../cosmos3-inference-simulation-transfer/references/environment.md#complete-the-cuda-130-environment).
 Set `IMAGINAIRE_OUTPUT_ROOT` to a writable shared directory at the same absolute
 path on both nodes. Checkpoints and tokenizer AOT packages are written beneath
 it. A node-local output directory prevents ranks from exchanging compiled

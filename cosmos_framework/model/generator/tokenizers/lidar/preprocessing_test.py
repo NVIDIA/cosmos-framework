@@ -29,7 +29,7 @@ pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 
 @pytest.fixture
 def exporters(monkeypatch):
-    auto = Path(__file__).resolve().parents[5] / ".agents/skills/cookbooks/cosmos3/simulation/auto"
+    auto = Path(__file__).resolve().parents[5] / ".agents/skills/cosmos3-inference-simulation-auto/scripts"
     monkeypatch.syspath_prepend(str(auto / "wsm"))
     from cosmos_auto.lidar import rangemap
     from cosmos_auto.lidar.control import save_control

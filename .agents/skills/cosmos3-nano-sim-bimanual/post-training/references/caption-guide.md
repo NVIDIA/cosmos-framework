@@ -43,7 +43,7 @@ the user explicitly authorizes that transfer.
 
 Automated output is a draft. Reject or correct a draft that changes handedness,
 object identity, temporal order, camera behavior, or the selected interval.
-Prompt expansion remains optional. See the [prompt guide](../../shared/prompt-guide.md).
+Prompt expansion remains optional. See the [prompt guide](../../../cosmos3-inference-simulation-bimanual/references/prompt-guide.md).
 
 ## Handoff record
 
