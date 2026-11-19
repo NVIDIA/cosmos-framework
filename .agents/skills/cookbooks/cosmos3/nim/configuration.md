@@ -256,11 +256,6 @@ Change controls one at a time and measure the effect.
 | --- | --- | --- |
 | `NIM_OPTIMIZATION_PRESET` | Unset | Reasoner only: apply the experimental `TTFT` or `TPOT` starting configuration (case-insensitive); Generator rejects it |
 
-`TTFT` lowers time to first token: it turns off speculation, uses a large batch
-budget, and decodes video in two processes. `TPOT` lowers time per output token:
-it uses DFlash and a small, chunked batch budget. Each preset sets these
-variables:
-
 | Variable | `TTFT` | `TPOT` |
 | --- | --- | --- |
 | `NIM_SPECULATIVE_METHOD` | `none` | `dflash` |
