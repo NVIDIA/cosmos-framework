@@ -74,12 +74,6 @@ docker run -d --name cosmos3-generator \
   "$NIM_IMAGE"
 ```
 
-The container uses the Generator name from
-[Launch Generator](deployment.md#launch-generator), so the log, cleanup, and
-monitoring commands on the other pages apply unchanged. If a Generator from
-another page is still running, remove it first with
-`docker rm -f cosmos3-generator`.
-
 Notes for this variant:
 
 - **Profile.** Multiview profiles are BF16 or FP8. Run the
