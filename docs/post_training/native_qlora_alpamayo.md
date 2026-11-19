@@ -1117,6 +1117,58 @@ The study runs the expert-LR 0.1x recipe for 512 updates with paired seeds 17, 4
 one arm per job (packet `alpamayo-expert-lr0p1-study-06a2b84-v1`, protocol SHA-256
 `9915de06…`). All six arms are required, and no endpoint is chosen by quality.
 
+### Expert-LR 0.1x 512-update study result (2026-11-19)
+
+**Verdict: `study_pass = false`, only because the memory guard's host-PSS completeness clause
+is unmet.** Both quality guards pass. The original 5% ADE improvement bar is **not** met.
+
+Arms: NF4/BF16 seed 17 `38726469`/`38726470` and NF4 seed 42 `38726472` (packet v2; stage
+timeout raised to 11,400 s after all six v1 arms hit the 5,000 s timeout), and BF16 seed 42
+`38757586` plus NF4/BF16 seed 123 `38757588`/`38757589` (packet v3: v2 plus byte-verified
+node-local cohort copies). v3 replaced v2 arm `38726471`, which failed on a mid-run Lustre ctime
+bump of the cohort JSONL. Protocol `9915de06…` is unchanged across v1 to v3, and every arm
+verified it. The unchanged `study.py` ran in analysis job `38763190` over all six job IDs.
+All arms completed 512 uninterrupted updates, the inventory and fresh-portable checks passed,
+and update 0 matched the retained seed-17 control in all six. Cost for the v2/v3 arms, the two
+cancelled duplicates and the analysis was **59,580 GPU-seconds**.
+
+NF4 vs BF16 LoRA (paired crossed seed/block bootstrap, 10,000 draws, seed 70241; margins 5% and
+0.10 m ADE / 0.25 m FDE):
+
+| Endpoint | Metric | NF4 | BF16 | Diff (rel.) | One-sided 95% upper bound | Guard |
+|---|---|---:|---:|---:|---:|---|
+| Fixed 512 | ADE | 1.9571 m | 1.9442 m | +0.0128 m (+0.66%) | +0.0279 m (+1.47%) | met |
+| Fixed 512 | FDE | 5.9973 m | 5.9633 m | +0.0340 m (+0.57%) | +0.0776 m (+1.34%) | met |
+| Equal elapsed | ADE | 1.9544 m | 1.9446 m | +0.0098 m (+0.50%) | +0.0354 m (+1.89%) | met |
+| Equal elapsed | FDE | 5.9812 m | 5.9597 m | +0.0215 m (+0.36%) | +0.0983 m (+1.71%) | met |
+
+At fixed 512, NF4 is worse than BF16 in every seed (ADE +1.13%, +0.39%, +0.44% for seeds 17, 42 and
+123), but far inside the margins. The equal-elapsed endpoints (the earlier final publication per
+seed) were NF4 512 / BF16 384 for seed 17, and NF4 384 / BF16 512 for seeds 42 and 123. Wall clock is
+therefore placement-dominated, not a precision effect.
+
+Against its own update-0 source (three-seed mean, update 512 vs update 0):
+
+| Arm | ADE | FDE | No-regression point | ADE upper bound < 0 | 5% ADE bar |
+|---|---:|---:|---|---|---|
+| NF4 LoRA | 1.9725 → 1.9571 m (−0.78%; bound +2.03%) | 6.1028 → 5.9973 m (−1.73%; bound +1.42%) | met | no | not met |
+| BF16 LoRA | 1.9560 → 1.9442 m (−0.60%; bound +2.02%) | 6.0747 → 5.9633 m (−1.83%; bound +1.11%) | met | no | not met |
+
+The improvements are small, and their bounds include zero. Training flow loss moved from 0.2671 to
+0.2682/0.2629/0.2623 (NF4, seeds 17/42/123) and from 0.2666 to 0.2689/0.2624/0.2629 (BF16). Seed 17 rose
+slightly in both precisions.
+
+Memory: the allocator and sampled peaks were identical across seeds. NF4/BF16 allocator peak
+**64.664/74.009 GiB** (10.03 GB = 9.345 GiB saved) and sampled owned-process peak **67.104/76.240 GiB**
+(9.137 GiB saved), so both 6 GiB floors pass in every seed. These reproduce the v11 memory
+pair above exactly. The guard also requires complete host PSS in both arms of each seed. The
+v10 observer reported incomplete host PSS for NF4 seed 17 and BF16 seeds 17 and 42, so seeds 17 and
+42 fail that clause and `memory_floor_all_seeds = false`. Under the pre-locked rule this stays a
+study failure. The complete-evidence memory claim rests on the separate v11 pair (`38759905`/`38759906`).
+
+Scope: exposed development cohort (256 clips, 32 unverified coarse blocks), three seeds, open-loop
+ADE/FDE only. These are exploratory bounds, not independent confirmation or closed-loop driving.
+
 ### Activation-recompute probe (`38702473` + rerun `38703092`)
 
 This diagnostic probe used the expert-LR 0.1x recipe for 24 paused updates with 2-row
