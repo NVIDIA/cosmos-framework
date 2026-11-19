@@ -30,8 +30,8 @@ python -m cosmos_framework.scripts.train --sft-toml=examples/toml/sft_config/<re
 ## Distillation
 
 - [Sim-Auto](../training_sim_auto.md): three stages from Transfer-Auto, TF → TF-dCM → SF-DMD. To adapt Sim-Auto to your domain, adapt Transfer-Auto first and then distill, rather than running SFT on the released Sim-Auto checkpoint; this preserves its few-step generation.
-- Sim-Transfer: a bidirectional [Stage 0 teacher](../training_sim_transfer_stage0.md), then [Stages 1–3](../../.agents/skills/cosmos3-nano-sim-transfer/post-training/SKILL.md): teacher forcing, four-step distillation and self-forcing.
-- Sim-Bimanual: [Stages 0–3](../../.agents/skills/cosmos3-nano-sim-bimanual/post-training/SKILL.md) from Cosmos3-Nano. [Check the training data](../bimanual_data_preflight.md) before loading weights.
+- Sim-Transfer: a bidirectional [Stage 0 teacher](../training_sim_transfer_stage0.md), then [Stages 1–3](../../.agents/skills/cosmos3-post-train-simulation-transfer/SKILL.md): teacher forcing, four-step distillation and self-forcing.
+- Sim-Bimanual: [Stages 0–3](../../.agents/skills/cosmos3-post-train-simulation-bimanual/SKILL.md) from Cosmos3-Nano. [Check the training data](../bimanual_data_preflight.md) before loading weights.
 - [Super four-step (DMD2)](../../.agents/skills/cookbooks/cosmos3/generator/audiovisual/distill/README.md): Cosmos3-Super-Text2Image or Cosmos3-Super-Image2Video as the teacher, the matching `-4Step` checkpoint as the initial student. A six-iteration functional recipe, not a production reproduction.
 
 ## RL

@@ -34,13 +34,14 @@ from cosmos_framework.checkpoint.dcp import (
     AsyncMode,
     CustomLoadPlanner,
     _DataloaderWrapper,
+    restore_rand_state,
 )
 from cosmos_framework.checkpoint.dcp import (
     DistributedCheckpointer as _DistributedCheckpointer,
 )
 from cosmos_framework.checkpoint.dcp import ModelWrapper as VFMModelWrapper
 from cosmos_framework.model.generator.distillation.optimizer import OptimizerContainerLike, is_optimizer_container
-from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
+from cosmos_framework.utils.generator.rand_state import get_rand_state_dict
 
 __all__: tuple[str, ...] = (
     "DistributedCheckpointer",
@@ -291,7 +292,7 @@ class DistributedCheckpointer(_DistributedCheckpointer):
                     )
                     grad_scaler.load_state_dict(_state_dict["grad_scaler"])
                     iteration = _state_dict["iteration"]
-                    set_rand_state_dict(_state_dict.get(rng_key, current_rng_state))
+                    restore_rand_state(_state_dict.get(rng_key, current_rng_state), cur_key_ckpt_full_path, rng_key)
 
                 elif key == "dataloader":
                     # Per-rank dataloader-state resume (main's base checkpointer). Skips
@@ -309,11 +310,7 @@ class DistributedCheckpointer(_DistributedCheckpointer):
                         log.info(f"No dataloader checkpoint found at {dataloader_pkl_path}", rank0_only=False)
                         continue
                     log.info(f"- Loading the dataloader {cur_key_ckpt_full_path}...", rank0_only=False)
-                    _state_dict = easy_io.load(
-                        dataloader_pkl_path,
-                        file_format="pkl",
-                        backend_key=source.backend_key,
-                    )
+                    _state_dict = self._load_pkl(dataloader_pkl_path, source.backend_key)
                     dataloader_wrapper = _DataloaderWrapper(self.callbacks)
                     if dataloader_wrapper.has_state():
                         dataloader_wrapper.load_state_dict(_state_dict)

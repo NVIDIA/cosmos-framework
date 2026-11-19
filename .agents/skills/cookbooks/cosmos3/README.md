@@ -18,7 +18,7 @@ local Framework environment below with ModelOpt, datasets, and notebook tooling.
 | [TensorRT-Edge-LLM](#tensorrt-edge-llm) | On-device TensorRT runtime for Cosmos3-Edge reasoning and DROID policy | Reasoner (Edge), Generator (Action / Policy) |
 | [Transformers](#transformers) | Hugging Face Transformers inference | Reasoner |
 | [vLLM](#vllm) | OpenAI-compatible reasoning server (image/video understanding) | Reasoner |
-| [vLLM-Omni](#vllm-omni) | OpenAI-compatible generation server (image/video/audio/action/transfer) | Generator (Audiovisual, Action, **Transfer**), Simulation ([Transfer-Auto](simulation/auto/auto.md), [Sim-Auto](simulation/auto/run_sim_auto_with_vllm_omni.ipynb), [Sim-Transfer](simulation/transfer/transfer.md#vllm-omni)) |
+| [vLLM-Omni](#vllm-omni) | OpenAI-compatible generation server (image/video/audio/action/transfer) | Generator (Audiovisual, Action, **Transfer**), Simulation ([Transfer-Auto](../../cosmos3-inference-simulation-auto/references/transfer-auto-guide.md), [Sim-Auto](../../cosmos3-inference-simulation-auto/references/sim-auto-vllm-omni.md), [Sim-Transfer](../../cosmos3-inference-simulation-transfer/references/transfer-guide.md#vllm-omni)) |
 | [Cosmos3 NIM](#cosmos3-nim) | Prebuilt NGC container serving either the Generator (image/video/action/transfer) or the Reasoner from one image | Reasoner, Generator (Audiovisual, Action, Transfer) |
 
 ## Prerequisites
@@ -612,13 +612,13 @@ graphs compile.
 ## vLLM-Omni
 
 OpenAI-compatible **generation** server (image/video/audio/action/transfer) for the
-Generator cookbooks and the [Transfer-Auto](simulation/auto/auto.md),
-[Sim-Auto](simulation/auto/run_sim_auto_with_vllm_omni.ipynb), and
-[Sim-Transfer](simulation/transfer/transfer.md#vllm-omni) Simulation cookbooks. For the
-Sim-Transfer model, use its [Docker setup and server instructions](simulation/transfer/transfer.md#vllm-omni)
-or the [runnable notebook](simulation/transfer/run_transfer_with_vllm_omni.ipynb).
+Generator cookbooks and the [Transfer-Auto](../../cosmos3-inference-simulation-auto/references/transfer-auto-guide.md),
+[Sim-Auto](../../cosmos3-inference-simulation-auto/references/sim-auto-vllm-omni.md), and
+[Sim-Transfer](../../cosmos3-inference-simulation-transfer/references/transfer-guide.md#vllm-omni) Simulation cookbooks. For the
+Sim-Transfer model, use its [Docker setup and server instructions](../../cosmos3-inference-simulation-transfer/references/transfer-guide.md#vllm-omni)
+or the [runnable notebook](../../cosmos3-inference-simulation-transfer/references/vllm-omni.md).
 
-For Sim-Auto, use the [dedicated notebook](simulation/auto/run_sim_auto_with_vllm_omni.ipynb)
+For Sim-Auto, use the [dedicated notebook](../../cosmos3-inference-simulation-auto/references/sim-auto-vllm-omni.md)
 for its Docker runtime, HTTP server setup, the shared seven-camera daytime sample,
 and output validation. It generates 297 frames per camera at 30 FPS with seed 0 and
 tensor parallel size 1, alone or with joint LiDAR.
