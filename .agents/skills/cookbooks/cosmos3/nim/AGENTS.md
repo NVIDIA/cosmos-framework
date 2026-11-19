@@ -20,6 +20,10 @@ workflow, load `.agents/skills/cosmos3-nim-user/SKILL.md`.
   on the customer's endpoint. A single run or a timeout value is not expected
   service latency.
 
+For Reasoner tuning, use `configuration.md`: shared speculation controls apply
+to ordinary and streaming requests. Start video decoding at one process and
+compare TTFT, ITL, and memory before increasing concurrency.
+
 ## Safety
 
 - Never ask for the value of `NGC_API_KEY`, another token, private media, or

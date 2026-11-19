@@ -68,16 +68,16 @@ GPU SKU allowlist:
 Use homogeneous GPUs. Mixed-GPU configurations are not supported, and
 Reasoner requires the same compute capability on every GPU. Do not add VRAM
 across devices. Each GPU in the selected layout must meet the floor in total
-and in free memory at startup. On a discrete GPU, Reasoner measures free
-memory after a 4-GiB runtime reserve (`NIM_GPU_MEMORY_HEADROOM_GIB`).
+and in free memory at startup. Reasoner checks free memory after reserving
+space for video decoders, CUDA contexts, and `NIM_GPU_MEMORY_HEADROOM_GIB` (default 1 GiB).
 On unified-memory systems, Generator uses only rows with
 **Model offload = None** and **Guardrails = Resident**.
 
 ### Unified-Memory Thresholds
 
 On unified-memory systems, **effective shared memory** is 70% of the
-device-reported total. The rest stays with the host. The same share is the
-default Reasoner `NIM_GPU_MEMORY_UTILIZATION`.
+device-reported total. The rest stays with the host. Reasoner subtracts
+runtime reserves from this pool before sizing vLLM.
 
 | Runtime/Profile | Effective Shared-Memory Floor | Unified-Memory Policy |
 | --- | ---: | --- |
@@ -86,7 +86,8 @@ default Reasoner `NIM_GPU_MEMORY_UTILIZATION`.
 | Generator `nano` FP8 | 44 GiB | Resident model and guardrails |
 | Generator `super` BF16 | 150 GiB | Resident model and guardrails |
 | Generator `super` FP8 | 93 GiB | Resident model and guardrails |
-| Reasoner `edge` BF16 or FP8 | 12 GiB/device | No CPU/model offload |
+| Reasoner `edge` BF16 | 16 GiB/device | No CPU/model offload |
+| Reasoner `edge` FP8 | 14.5 GiB/device | No CPU/model offload |
 | Reasoner `nano` BF16, FP8, or NVFP4 | 23.1 GiB/device | No CPU/model offload |
 | Reasoner `super` BF16, TP1 | 135 GiB/device | No CPU/model offload |
 | Reasoner `super` FP8, TP1 | 67 GiB/device | No CPU/model offload |
@@ -270,8 +271,8 @@ Reasoner does not use Generator latency/throughput or model-offload selectors:
 
 | Model | Precision | GPUs | Tensor Parallelism | Minimum VRAM/Device | System-Memory Floor | Minimum Compute Capability |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `edge` | BF16 | 1 | 1 | 12 GiB | 8 GiB | 8.0 |
-| `edge` | FP8 | 1 | 1 | 12 GiB | 8 GiB | 8.9 |
+| `edge` | BF16 | 1 | 1 | 16 GiB | 5 GiB | 8.0 |
+| `edge` | FP8 | 1 | 1 | 14.5 GiB | 5 GiB | 8.9 |
 | `nano` | BF16 | 1 | 1 | 23.1 GiB | 24 GiB | 8.0 |
 | `nano` | FP8 | 1 | 1 | 23.1 GiB | 17 GiB | 8.9 |
 | `nano` | NVFP4 | 1 | 1 | 23.1 GiB | 17 GiB | 10.0 |

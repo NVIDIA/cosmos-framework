@@ -29,7 +29,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: model-download
-          image: nvcr.io/nim/nvidia/cosmos3:2.1.0
+          image: nvcr.io/nim/nvidia/cosmos3:2.2.0
           imagePullPolicy: IfNotPresent
           workingDir: /opt/nim
           command:

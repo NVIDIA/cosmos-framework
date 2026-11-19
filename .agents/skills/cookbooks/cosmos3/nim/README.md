@@ -12,7 +12,7 @@ contains two runtimes, but each container runs only one:
   Completions and, when enabled, the Responses API.
 
 > Deployment commands pin the current release image,
-> `nvcr.io/nim/nvidia/cosmos3:2.1.0`. Compatible configurations are in the
+> `nvcr.io/nim/nvidia/cosmos3:2.2.0`. Compatible configurations are in the
 > [Support Matrix](support-matrix.md).
 
 ## Architecture
@@ -107,6 +107,9 @@ require `NIM_MODEL_VARIANT=multiview`. Examples save outputs under the ignored
 
 Validate the selected configuration with representative requests before
 production use.
+
+For Reasoner tuning, refer to [Speculative Decoding](configuration.md#speculative-decoding)
+and [Video Decode Concurrency](configuration.md#video-decode-concurrency).
 
 ## AI-Assisted Usage
 
