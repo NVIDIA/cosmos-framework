@@ -256,17 +256,23 @@ Change controls one at a time and measure the effect.
 | --- | --- | --- |
 | `NIM_OPTIMIZATION_PRESET` | Unset | Reasoner only: apply the experimental `TTFT` or `TPOT` starting configuration (case-insensitive); Generator rejects it |
 
-The unchunked minimum is 16,384 tokens for Nano/Super and 24,300 for Edge.
-The presets configure these settings:
+`TTFT` lowers time to first token: it turns off speculation, uses a large batch
+budget, and decodes video in two processes. `TPOT` lowers time per output token:
+it uses DFlash and a small, chunked batch budget. Each preset sets these
+variables:
 
-| Preset | Speculation | Batch-token budget | Multimodal input chunking | Video decode processes |
-| --- | --- | --- | --- | --- |
-| `TTFT` | `none` | `32768` with at least 70 GiB of usable GPU memory; otherwise the unchunked minimum | Off | `2` |
-| `TPOT` | `dflash` | `4096` | On | Default (`1`) |
+| Variable | `TTFT` | `TPOT` |
+| --- | --- | --- |
+| `NIM_SPECULATIVE_METHOD` | `none` | `dflash` |
+| `NIM_MAX_NUM_BATCHED_TOKENS` | `32768` with at least 70 GiB of usable GPU memory; otherwise the unchunked minimum | `4096` |
+| `NIM_DISABLE_CHUNKED_MM_INPUT` | Not set (default `true`, unchunked) | `0` (chunked) |
+| `NIM_VIDEO_DECODE_PROCESSES` | `2` | Not set (default `1`) |
+| `NIM_MM_ENCODER_TP_MODE` | `data` when tensor parallelism is above 1 | `data` when tensor parallelism is above 1 |
 
-On profiles with tensor parallelism above 1, both presets also set
-`NIM_MM_ENCODER_TP_MODE=data`, which replicates the vision encoder and splits
-media across TP ranks. Explicit settings take precedence over presets.
+The unchunked minimum is 16,384 tokens for Nano/Super and 24,300 for Edge; a
+preset raises its batch budget to this minimum when multimodal input is
+unchunked. `data` encoder mode replicates the vision encoder and splits media
+across TP ranks. Explicit settings take precedence over presets.
 
 ### Speculative Decoding
 
@@ -323,9 +329,9 @@ latency, and throughput.
 
 ### Video Decode Concurrency
 
-`NIM_VIDEO_DECODE_PROCESSES` sets the number of video-decoding processes.
-The default is `1`; supported values are `1`, `2`, `4`, `8`, and `16`.
-Above `1`, the NIM starts CUDA MPS so the processes can share the GPU.
+| Name | Default | Use |
+| --- | --- | --- |
+| `NIM_VIDEO_DECODE_PROCESSES` | `1`; the `TTFT` preset sets `2` | Number of processes that decode uploaded video: `1`, `2`, `4`, `8`, or `16`; above `1`, the NIM starts CUDA MPS so the processes share the GPU |
 
 More processes can reduce time to first token (TTFT) under concurrent video
 load, but can increase inter-token latency (ITL) and decoder memory use.
@@ -345,9 +351,8 @@ Add this option to the Reasoner Docker launch:
 -e NIM_VIDEO_DECODE_PROCESSES=2
 ```
 
-For Kubernetes, add it to the container's `env` list. The `TTFT` preset sets
-it to `2`; an explicit value takes precedence. This controls uploaded-video
-decoding. Stateful streaming clients decode video into images themselves.
+For Kubernetes, add it to the container's `env` list. An explicit value
+overrides the `TTFT` preset. This controls uploaded-video decoding. Stateful streaming clients decode video into images themselves.
 
 ### Streaming Video Sessions
 
