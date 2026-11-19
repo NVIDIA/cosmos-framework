@@ -5,22 +5,25 @@ description: >
   preparing the example dataset and Wan2.2 VAE, converting the base
   checkpoint to DCP, launching distributed training (paired launch shell
   recommended, raw `torchrun` as an alternative), running T2V/I2V/V2V
-  inference with the trained DCP checkpoint, and optionally exporting it
-  to Hugging Face safetensors. Use when the user asks how to post-train
-  Cosmos3, fine-tune on a custom video dataset, export a trained
-  checkpoint, or invoke one of the recipe launch shells
-  (`launch_sft_vision_nano.sh`, `launch_sft_llava_ov.sh`,
-  `launch_sft_videophy2_nano.sh`, plus the `_super` LoRA
-  variant) — or any question about `cu130-train` /
-  `cu128-train`, `convert_model_to_dcp` / `export_model` / `train`, or
-  SFT output paths. For dataset captioning / JSONL assembly, see
-  `docs/dataset_jsonl.md`.
+  inference with the trained DCP checkpoint, and optionally exporting it to
+  Hugging Face safetensors. Use when the user asks how to
+  post-train Cosmos3, fine-tune on a custom video dataset, export a
+  trained checkpoint, or
+  invoke one of the recipe launch shells (`launch_sft_vision_nano.sh`,
+  `launch_sft_llava_ov.sh`, `launch_sft_videophy2_nano.sh`,
+  plus the `_super` LoRA variant)
+  — or any question about `cu130-train` / `cu128-train`,
+  `convert_model_to_dcp` / `export_model` / `train`,
+  or SFT output paths. For dataset captioning / JSONL assembly, see
+  `docs/dataset_jsonl.md`. Also use for reasoner video-QA SFT/evaluation,
+  dense or PEFT training with native Framework checkpoints.
 ---
 
 # Cosmos3 Post-Training (SFT)
 
 ## When to use this skill
 
+- For bounded hyperparameter search across prepared reasoner SFT trials, use **cosmos-automl**. This skill remains the entrypoint for preparing or running an individual training recipe.
 - User wants to fine-tune Cosmos3-Nano (or Cosmos3-Super via LoRA) on the example Bridge video dataset or a custom video dataset (SFT)
 - User asks which fields in a recipe TOML to override (`[model.parallelism].data_parallel_shard_degree`, `[dataloader_train].max_samples_per_batch`, `[optimizer].lr`, `[trainer].max_iter`, `[checkpoint].load_path`, ...) or which experiment SKU to pick
 - User wants to convert a base Hugging Face checkpoint to DCP, or convert a trained DCP back to safetensors
@@ -33,6 +36,33 @@ description: >
 All paths below are relative to the cosmos3 package root (`../../../` from this skill file). All `uv run` / `python` / `torchrun` / `bash` commands should also be run from there.
 
 ## Where to find answers
+
+### Reasoner video-QA workflows
+
+For managed conversation/task-aware video training or evaluation, read the
+[reasoner guide](../../../tools/cosmos_workflows/models/cosmos3-reasoner/guide.md).
+It supplies Framework planners, dataset validation, dense/PEFT contracts,
+automatic checkpoint preparation, and structured completion checks. Do not
+impose those gates on ordinary native generator recipes.
+
+The model resolver maps `nvidia/Cosmos3-Nano` and `nvidia/Cosmos3-Edge` to this
+reasoner (vision-language) contract. Generator SFT of the same checkpoints uses
+the native recipes below, not the resolver or the reasoner planner.
+
+- For Nano, collect the explicit `qwen3_vl` versus `cosmos3_omni` checkpoint
+  choice, frame sampling, train/validation inputs, and dense/PEFT settings.
+  Framework's native converter prepares the checkpoint; preserve the source.
+- For evaluation, use `evaluation_workflow.py` beside the planner. Inherit
+  training inputs, ask only for its unresolved fields, and submit only a
+  checksum-valid `ready=true` plan after approval.
+- Before managed submission, use the platform and launch references in
+  `cosmos3-setup`. Keep nested specs, record-before-submit ordering, and
+  backend-reported completion; report token-weighted losses and task-aware metrics.
+- For task-aware input only, use the [validation reference](../../../tools/cosmos_workflows/models/cosmos3-reasoner/references/dataset-validate.md)
+  and, if needed, the [conversion reference](../../../tools/cosmos_workflows/models/cosmos3-reasoner/references/dataset-convert.md).
+  Native generator JSONL preparation remains in `docs/dataset_jsonl.md`.
+
+### Native recipe workflows
 
 The canonical reference is `docs/training.md`. Use this table to route questions:
 
@@ -70,11 +100,17 @@ The canonical reference is `docs/training.md`. Use this table to route questions
 - **Training extras are a separate group**: SFT requires the `cu130-train` / `cu128-train` install group, not the inference-only `cu130` / `cu128`. Re-running `uv sync` with the wrong group silently leaves training deps uninstalled.
 - **Recipe = paired `examples/launch_sft_<r>.sh` + `examples/toml/sft_config/<r>.toml`**: the `.sh` declares `TOML_FILE` directly (full repo-relative path) plus `: "${DATASET_PATH:=…}"` / `: "${BASE_CHECKPOINT_PATH:=…}"` defaults that line up with where Steps 1+2 land, then sources `examples/_sft_launcher_common.sh`. `export`ed values in the user's shell win over the defaults. The helper forwards into `cosmos_framework.scripts.train --sft-toml=$TOML_FILE`, with any `TAIL_OVERRIDES` bash-array entries appended after `--` as Hydra-style `key.path=value` overrides (applied last on top of the pydantic-validated TOML schema in `cosmos_framework/configs/toml_config/sft_config.py`). `MASTER_PORT` defaults to `50012` in the helper; set it in the launcher (or `export`) only if you need to co-launch multiple jobs on one node.
 - **Option A (paired launch shell) vs Option B (raw `torchrun`)**: Option A resolves the env-var trio (`DATASET_PATH` / `BASE_CHECKPOINT_PATH` / `WAN_VAE_PATH`) from `examples/` defaults so unset env runs out of the box. Option B requires you to either export those env vars yourself or hand-edit the TOML to inline the paths; the TOMLs use `${ENV:DATASET_PATH}` interpolation that's resolved at TOML load time.
-- **`IMAGINAIRE_OUTPUT_ROOT` controls the entire output tree**: setting `IMAGINAIRE_OUTPUT_ROOT=outputs/train` makes everything land under `outputs/train/<job.project>/<job.group>/<job.name>/` (logs, `config.yaml`, `checkpoints/iter_<N>`, callback outputs). Unset, training falls back to `/tmp/imaginaire4-output/...`.
+- **`IMAGINAIRE_OUTPUT_ROOT` controls the entire output tree**: setting `IMAGINAIRE_OUTPUT_ROOT=outputs/train` makes everything land under `outputs/train/<job.project>/<job.group>/<job.name>/` (logs, `config.yaml`, `checkpoints/iter_<N>`, callback outputs). The paired example launchers set it from `OUTPUT_ROOT`, defaulting to the repository's `outputs/train/`. Direct CLI/torchrun calls with it unset fall back to `/tmp/cosmos-framework-output/`. To resume an existing run, explicitly select the output root containing that run and keep its project/group/name; changing the default directory does not move existing checkpoints.
 - **W&B is disabled by default**: every recipe TOML sets `[job].wandb_mode = "disabled"`. To log to W&B, flip it to `"online"` in the TOML and export `WANDB_API_KEY` before launching.
 - **Inference uses the DCP checkpoint directly**: the standard flow points `cosmos_framework.scripts.inference` at `$RUN_DIR/checkpoints/iter_<N>` together with `--config-file $RUN_DIR/config.yaml`. The Hugging Face safetensors export (`$RUN_DIR/model`) is optional — only needed if you want a portable single-file checkpoint.
 - **Parallelism degree must match topology**: in the TOML `[model.parallelism]` block, `data_parallel_shard_degree × data_parallel_replicate_degree × context_parallel_shard_degree` must equal `WORLD_SIZE`. `-1` autoselects `data_parallel_shard_degree` from torchrun world size. Mismatch → FSDP init failure.
 - **`--dryrun`**: `cosmos_framework.scripts.train` accepts `--dryrun` to validate the config end-to-end without launching training. Use it whenever iterating on TOML keys or Hydra overrides.
+
+## Bundled assets
+
+| Asset                                                                                                                            | Path                                                                                                     | Used by                                            |
+| -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Four RoboVQA clips with QA rows, split 3 / 1 (train / validation); Hugging Face `Tianli/robovqa`, revision `eb58194`, Apache-2.0 | `.agents/skills/cosmos3-post-training/assets/reasoner_video_qa/` (source and changes in its `README.md`) | the reasoner planner example and this skill's eval |
 
 ## Related skills
 

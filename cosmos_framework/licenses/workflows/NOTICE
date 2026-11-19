@@ -1,5 +1,5 @@
-Cosmos Framework reasoner evaluation and checkpoint utilities incorporate
-Apache-2.0 material from NVIDIA Cosmos action utilities and Cosmos-RL.
+Cosmos Framework runtime implementations incorporate Apache-2.0 material from
+NVIDIA dataset adapters and Cosmos-RL.
 Source attribution, original paths, and original-file SHA256 values are
 recorded in provenance.json.
 

@@ -1,0 +1,220 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+network_arch: cosmos3-reasoner
+huggingface_model_ids:
+- nvidia/Cosmos3-Nano
+- nvidia/Cosmos3-Edge
+aliases:
+- Cosmos3 Nano Reasoner
+- Cosmos3-Nano
+- Cosmos3-Edge
+container_image: cosmos-framework:local  # versions-key: images.containers.cosmos_framework
+training_contract: references/training-contract.yaml
+required_credentials: []
+conditional_credentials:
+  HF_TOKEN: required only when fetching a gated Hugging Face checkpoint; not required for a complete local checkpoint
+  NGC_API_KEY: required only when pulling or converting an authenticated nvcr.io image; not required for an existing local image or SQSH
+gpu_spec_key: model.parallelism.data_parallel_shard_degree
+node_spec_key: model.parallelism.data_parallel_replicate_degree
+runtime_requirements:
+  gpu_host:
+    min_driver_version: '580'
+    min_container_toolkit_version: '1.19.1'
+workflow_contract:
+  planner: scripts/cosmos_workflow.py
+  nano_checkpoint_intake:
+    explicit_user_choice_required: true
+    choices:
+      qwen3_vl: direct_compatible_huggingface_checkpoint
+      cosmos3_omni: native_exact_key_conversion_to_qwen3_vl_before_training
+    inference_from_checkpoint_or_history: forbidden
+    conversion_storage:
+      docker: user_owned_checkpoint_dir_on_docker_host
+      slurm: compute_verified_shared_checkpoint_dir
+    runtime_model_path: verified_direct_or_converted_qwen3_vl_path
+    source_checkpoint_mutation: forbidden
+    nano_architecture_mapping:
+      model_id: Qwen/Qwen3-VL-8B-Instruct
+      user_input_required: false
+      revision_resolution: automatic_immutable_hub_commit
+    preparation_runtime:
+      source: training_image_or_sqsh
+      separate_user_input: forbidden
+      entrypoint: cosmos_framework.scripts.convert_model_to_vlm_safetensors
+      sqsh_required_entries:
+      - cosmos_framework/scripts/convert_model_to_vlm_safetensors.py
+    huggingface_revision_resolution:
+      user_commit_sha_required: false
+      default_requested_ref: main
+      optional_user_ref: branch_tag_or_commit
+      resolved_value: immutable_hub_commit_sha
+      local_snapshot_identity: content_fingerprint
+      private_model_blocker: request_HF_TOKEN_presence_only
+  framework_checkpoint_action: scripts/framework_checkpoint_action.py
+  action_helper_dependencies:
+    framework_checkpoint:
+      entrypoint: scripts/framework_checkpoint_action.py
+      files:
+      - scripts/framework_checkpoint_action.py
+      - scripts/cosmos_common.py
+    staging_contract: spec_bundle.execution.supporting_files
+    staging_owner: selected_platform
+  metric_extractor: scripts/extract_cosmos_metrics.py
+  diagnostic_subset:
+    policy: opt-in only; never submit a separate smoke job unless the user explicitly requests it
+    train_samples: max(16, total_gpus)
+    validation_samples: max(8, total_gpus)
+  parity_fingerprint:
+  - train record and media fingerprints
+  - validation record and media fingerprints
+  - original and resolved runtime paths
+  - system prompt
+  - checkpoint identity and format
+  - frame count
+  - optimizer, scheduler, batch size, epochs, and random seed
+  - container digest
+  public_model_profiles:
+    cosmos3_edge:
+      checkpoint_input: public Hugging Face model ID with automatically resolved immutable commit or complete local snapshot
+      alternate_workload_checkpoint: false
+      checkpoint_mutation: false
+      runtime_processor_defaults:
+        frames: 6
+        frame_width: 1280
+        frame_height: 720
+        max_video_pixels: 5529600
+        sequence_length: 16000
+        attention_implementation: flash_attention_2
+      provenance: base checkpoint and runtime processor profile have independent fingerprints
+  dataset_resolution:
+    default: auto
+    families: [video_conversation, task_aware_video_reasoning]
+    selection_inputs:
+    - annotation structure and metadata
+    - record and unique-media counts
+    - media reuse ratio and byte-size distribution
+    - declared resolution, FPS, and duration
+    - model tier and explicit user overrides
+    forbidden_routing_inputs: [dataset project name, benchmark name, directory basename, historical path]
+  cosmos_framework_video_runtime:
+    profile: torchcodec-cuda-on-demand
+    decoder: torchcodec
+    device: cuda
+    device_binding: explicit_local_rank
+    frame_transfer: cuda_uint8_to_host_pil
+    dataloader:
+      workers: 1
+      prefetch_factor:
+        video_conversation: 4
+        task_aware_video_reasoning: 2
+      multiprocessing_context: spawn
+      persistent_workers: true
+      pin_memory: true_for_video_conversation
+    sft_process_threads: 8
+    decoder_threads: 1
+    decoded_frame_cache: rank_local_memory_populated_on_demand
+    capacity_default: inspected_unique_media_count
+    nano_per_forward_batch_default: effective_global_batch_divided_by_total_gpus
+    nano_gradient_accumulation_default: 1
+    batcher: resume_safe_contiguous
+    actual_device_attestation: first_successful_decode_per_rank
+    actual_device_requirement: resolved_device_equals_cuda_local_rank
+    prewarm: false
+    disk_cache: false
+    validation:
+      selection_inputs: [dataset_family, validation_record_count, validation_unique_media_count]
+      auto_repeated_media_condition: video_conversation_and_record_count_greater_than_unique_media_count
+      shard_strategy: media_grouped
+      padded_multiset: preserved_exactly
+      finite_stream: true
+      video_feature_cache: rank_local_gpu_embeddings_populated_on_demand
+      feature_cache_capacity_default: min_inspected_unique_media_capacity_512
+      feature_cache_environment: COSMOS_FRAMEWORK_VALIDATION_VIDEO_FEATURE_CACHE_SIZE
+      processed_video_cache: worker_local_host_tensors_populated_on_demand
+      processed_video_cache_capacity_default: inspected_unique_media_capacity
+      processed_video_cache_environment: COSMOS_FRAMEWORK_VALIDATION_PROCESSED_VIDEO_CACHE_SIZE
+      exact_validation_batch: preserved_from_user_contract
+      maximum_throughput_frontload:
+        selection_condition: repeated_media_and_user_selected_validation_batch_at_least_2
+        unique_per_batch_default: min_8_and_half_validation_batch
+        environment: COSMOS_FRAMEWORK_VALIDATION_CACHE_FRONTLOAD_UNIQUE_PER_BATCH
+      deferred_metric_scalar_transfer: validation_end
+      prewarm: false
+      disk_cache: false
+actions:
+  evaluate:
+    pre_action: scripts/framework_checkpoint_action.py
+    supported_platforms: [docker, slurm, kubernetes, brev, virtualenv]
+    command: cosmos-reasoner-evaluate --config {config_path}
+    config_format: toml
+    mode: config
+    execution_contract:
+      source: scripts/evaluation_workflow.py output spec_bundle.execution
+      platform_owned: [helper_staging, container_mounts, distributed_launcher, timeout, child_exit_preservation]
+      model_owned: [runtime_attestation, evaluator_command, metric_extraction, structured_success]
+    inputs:
+      dataset.annotation_path:
+        type: file
+      dataset.media_dir:
+        type: folder
+        selective:
+          annotation: dataset.annotation_path
+          format: json
+          keys:
+          - video
+          - video_id
+          - image
+          - image_id
+          - media
+          - media_path
+      model.model_name:
+        type: folder
+    outputs:
+      results_dir:
+        type: folder
+    upload_excludes:
+    - inputs/
+  inference:
+    pre_action: scripts/framework_checkpoint_action.py
+    supported_platforms: [docker, slurm, kubernetes, brev, virtualenv]
+    command: cosmos-reasoner-inference
+    mode: args
+    inputs:
+      model_path:
+        type: folder
+      media:
+        type: file
+        description: extracted video/image file; for a directory, declare type folder in the submitted bundle
+    outputs:
+      results_dir:
+        type: folder
+    upload_excludes:
+    - inputs/
+  quantize:
+    supported: false
+    reason: no validated DCP or PEFT checkpoint quantization route
+  export:
+    command: python -m cosmos_framework.scripts.export_vlm_dcp
+    mode: args
+    planner: scripts/framework_checkpoint_action.py
+    supported_platforms: [docker, slurm, kubernetes, brev, virtualenv]
+  inference_microservice:
+    command: cosmos-reasoner-serve
+    mode: args
+    pre_action: scripts/framework_checkpoint_action.py
+    supported_platforms: [docker, slurm, kubernetes, brev, virtualenv]
+  train:
+    supported_platforms: [docker, slurm]
+    command: python -m cosmos_framework.scripts.train --sft-toml={config_path}
+    config_format: toml
+    mode: config
+    execution_contract:
+      source: scripts/cosmos_workflow.py sealed Framework plan
+      dataset_binding: environment
+      output_binding: IMAGINAIRE_OUTPUT_ROOT
+    outputs:
+      results_dir:
+        type: folder
+    upload_excludes:
+    - inputs/

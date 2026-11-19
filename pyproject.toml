@@ -59,6 +59,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+workflows = [
+  "cosmos-framework[reasoner-eval]",
+  "fastapi",
+  "httpx",
+  "jsonschema",
+  "uvicorn",
+]
 automl = ["nvidia-automl-core==0.1.0"]
 automl-prompts = ["nvidia-automl-core==0.1.0", "gepa==0.1.2"]
 quantization = ["datasets", "nvidia-modelopt==0.44.0"]
@@ -171,6 +178,10 @@ train = [
 
 
 [project.scripts]
+cosmos-dataset = "cosmos_framework.scripts.dataset:main"
+cosmos-reasoner-inference = "cosmos_framework.scripts.inference_reasoner:main"
+cosmos-reasoner-serve = "cosmos_framework.scripts.serve_reasoner:main"
+cosmos-reasoner-quantize = "cosmos_framework.scripts.quantize_reasoner:main"
 cosmos-automl = "cosmos_framework.scripts.automl:main"
 cosmos-reasoner-evaluate = "cosmos_framework.evaluation.reasoner.evaluate:main"
 
