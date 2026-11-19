@@ -16,7 +16,7 @@ import tyro
 from torch.utils._pytree import tree_flatten
 
 from cosmos_framework.inference.args import OmniSampleArgs, OmniSampleOverrides, check_auto_fps_options
-from cosmos_framework.inference.common.auto_fps import auto_camera_fps
+from cosmos_framework.inference.common.auto_fps import attach_auto_camera_fps, auto_camera_fps
 from cosmos_framework.inference.inference import OmniInference
 from cosmos_framework.inference.multiview import get_multiview_sample_data
 
@@ -214,3 +214,29 @@ def test_real_rgb_and_wsm_saver_preserves_frames_at_output_fps(
         assert float(stream["duration"]) == pytest.approx(30.0)
     recorded = json.loads((tmp_path / "sample_outputs.json").read_text())["args"]
     assert (recorded["fps"], recorded["output_fps"]) == (30, 10)
+
+
+@pytest.mark.parametrize("camera_fps", [30, None])
+def test_auto_camera_fps_attaches_to_a_struct_training_config(camera_fps: int | None) -> None:
+    """A checkpoint exported from a training run carries a struct-mode config typed by the training config class."""
+    from dataclasses import dataclass
+
+    from omegaconf import OmegaConf
+    from omegaconf.errors import ConfigAttributeError, ConfigKeyError
+
+    @dataclass
+    class SelfForcingDMDConfig:
+        video_temporal_causal: bool = True
+
+    trained = OmegaConf.structured(SelfForcingDMDConfig())
+    with pytest.raises((ConfigAttributeError, ConfigKeyError)):
+        trained._auto_camera_fps = camera_fps  # the failure #323 introduced for trained checkpoints
+    attach_auto_camera_fps(trained, camera_fps)
+    assert trained._auto_camera_fps == camera_fps
+    with pytest.raises((ConfigAttributeError, ConfigKeyError)):  # only that one assignment lifted struct mode
+        trained.some_other_unknown_key = 1
+    assert getattr(trained, "_auto_camera_fps", None) == camera_fps
+
+    published = SimpleNamespace(video_temporal_causal=False)
+    attach_auto_camera_fps(published, camera_fps)
+    assert published._auto_camera_fps == camera_fps
