@@ -6,6 +6,7 @@ This directory contains:
 
 - `ci.Dockerfile` — minimal CI image (CUDA base + uv + just + Python 3.13 + pre-commit); not intended for local training or inference.
 - `nightly.Dockerfile` — full runtime image built on the NGC PyTorch base (`nvcr.io/nvidia/pytorch:${BASE_VERSION}-py3`) with all dependencies installed via `uv pip install -r pyproject.toml --all-extras`. Use this for nightly local builds when the recommended base image's pinned PyTorch version is too old.
+- `quantize.Dockerfile` — extends a locally built Framework image with the isolated `llm-compressor` overlay (`requirements-quantize.txt`, installed under `/opt/quantize_deps`) that `cosmos-reasoner-quantize` loads; the training environment is not modified.
 - `entrypoint.sh` — container entrypoint; executes the command without mutating the packaged Python environment.
 
 The root `Dockerfile` writes source hashes and runtime versions to

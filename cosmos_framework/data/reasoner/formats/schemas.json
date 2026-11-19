@@ -1,0 +1,3722 @@
+{
+  "cosmos-video-reasoning-v1.0/reasoning.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://nvidia.com/schemas/cosmos-video-reasoning-v1.0/reasoning.schema.json",
+    "title": "cosmos-video-reasoning-v1.0 annotation file",
+    "description": "A single cosmos-video-reasoning-v1.0 annotation file. The file contains a flat list of training items. metadata.type is the schema discriminator (always 'annotation'); metadata.task is an optional free-form label (typically the task name when produced by the metropolis-v3.0 converter). question, answer, and reasoning are free-form strings — the format does not impose per-task structure.",
+    "type": "object",
+    "required": [
+      "format",
+      "metadata",
+      "items"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "type": "string",
+        "const": "cosmos-video-reasoning-v1.0"
+      },
+      "metadata": {
+        "type": "object",
+        "required": [
+          "type",
+          "license"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "annotation",
+            "description": "Schema discriminator. Always 'annotation' for cosmos-video-reasoning-v1.0 annotation files."
+          },
+          "task": {
+            "type": "string",
+            "description": "Optional free-form label for the items in this file. Encouraged to be meaningful — the metropolis-v3.0 converter writes the source task name here (e.g. 'bcq', 'mcq', 'open_qa')."
+          },
+          "date": {
+            "type": "string",
+            "description": "ISO 8601 date string."
+          },
+          "description": {
+            "type": "string"
+          },
+          "license": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "media_root": {
+        "description": "Root for resolving each item's video_id / image_id. null → resolve relative to the dataset root. A relative string → resolved as a subdirectory under the dataset root. An absolute path → used as-is (useful for shared media stores).",
+        "oneOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "question",
+            "answer"
+          ],
+          "additionalProperties": true,
+          "oneOf": [
+            {
+              "required": [
+                "video_id"
+              ]
+            },
+            {
+              "required": [
+                "image_id"
+              ]
+            }
+          ],
+          "properties": {
+            "video_id": {
+              "type": "string",
+              "description": "Path to the video file relative to media_root (or to the dataset root if media_root is null)."
+            },
+            "image_id": {
+              "type": "string",
+              "description": "Path to the image file relative to media_root (or to the dataset root if media_root is null)."
+            },
+            "question": {
+              "type": "string",
+              "description": "Free-form prompt presented to the model. May embed task-specific framing (multiple-choice options, format instructions, etc.) directly."
+            },
+            "answer": {
+              "type": "string",
+              "description": "Free-form expected answer."
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Optional chain-of-thought / rationale. Free-form."
+            },
+            "item_index": {
+              "type": "string",
+              "description": "Optional per-item identifier."
+            }
+          }
+        }
+      }
+    }
+  },
+  "cosmos-reason-v1.0/meta.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/cosmos-reason-v1.0/meta.schema.json",
+    "title": "Cosmos Reason Dataset Index",
+    "description": "Index file for a Cosmos Reason v1.0 dataset. Maps each training sample to its conversation file and associated media file.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "samples"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "cosmos-reason-v1.0",
+        "description": "Format version - must be 'cosmos-reason-v1.0' for this schema"
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "meta",
+            "description": "File type identifier (must be 'meta')"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this dataset"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this dataset is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "samples": {
+        "type": "array",
+        "description": "List of training samples, each linking a unique ID to a conversation file and a media file",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "id",
+            "conversation",
+            "media"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Unique identifier for this training sample",
+              "minLength": 1
+            },
+            "conversation": {
+              "type": "string",
+              "description": "Relative path from dataset root to the conversation JSON file (e.g. 'text/sample_001.json')",
+              "pattern": "^text/.+\\.json$"
+            },
+            "media": {
+              "type": "string",
+              "description": "Relative path from dataset root to the associated media file (e.g. 'media/video_001.mp4')",
+              "pattern": "^media/.+"
+            }
+          }
+        }
+      }
+    }
+  },
+  "cosmos-reason-v1.0/conversation.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/cosmos-reason-v1.0/conversation.schema.json",
+    "title": "Cosmos Reason Conversation",
+    "description": "Single training sample conversation for Cosmos Reason v1.0. Contains alternating user/assistant turns with optional system preamble. Media references use positional placeholders (image_0, video_0) resolved via meta.json.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "conversations"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "cosmos-reason-v1.0",
+        "description": "Format version - must be 'cosmos-reason-v1.0' for this schema"
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "conversation",
+            "description": "File type identifier (must be 'conversation')"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this conversation sample"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "conversations": {
+        "type": "array",
+        "description": "Ordered list of conversation turns. Must start with 'user' (optionally preceded by one 'system' turn) and alternate user/assistant.",
+        "minItems": 2,
+        "items": {
+          "type": "object",
+          "required": [
+            "role",
+            "content"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "role": {
+              "type": "string",
+              "enum": [
+                "system",
+                "user",
+                "assistant"
+              ],
+              "description": "Role of the message author"
+            },
+            "reasoning_content": {
+              "type": "array",
+              "description": "Optional chain-of-thought reasoning trace. Present only on assistant turns. Each item is a text block containing the model's internal reasoning before producing the final answer.",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "type",
+                  "text"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "Reasoning trace text",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            "content": {
+              "type": "array",
+              "description": "List of content items for this turn",
+              "minItems": 1,
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "description": "Text content item",
+                    "required": [
+                      "type",
+                      "text"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "text"
+                      },
+                      "text": {
+                        "type": "string",
+                        "description": "Text content",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "description": "Image content item. The 'image' field is a positional placeholder (e.g. 'image_0') resolved to the actual file via meta.json.",
+                    "required": [
+                      "type",
+                      "image"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "image"
+                      },
+                      "image": {
+                        "type": "string",
+                        "description": "Positional placeholder for the image (e.g. 'image_0')",
+                        "pattern": "^image_[0-9]+$"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "description": "Video content item. The 'video' field is a positional placeholder (e.g. 'video_0') resolved to the actual file via meta.json.",
+                    "required": [
+                      "type",
+                      "video"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "video"
+                      },
+                      "video": {
+                        "type": "string",
+                        "description": "Positional placeholder for the video (e.g. 'video_0')",
+                        "pattern": "^video_[0-9]+$"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "metropolis-v3.0/tasks/video_summarization.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/metropolis-v3.0/video_summarization.schema.json",
+    "title": "Video Summarization Task Annotation",
+    "description": "Captioning task for summarizing temporal events in a video. Each item provides a question prompt, an answer summary, optional reasoning, and an optional timestamp window.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "items"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "items": {
+        "type": "array",
+        "description": "Array of event summarization items, one per video or temporal segment",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "question",
+            "answer"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "video_id": {
+              "type": "string",
+              "description": "Reference to video ID (matches directory name in contextual/)"
+            },
+            "question": {
+              "type": "string",
+              "description": "The summarization prompt or guidance for the event summary"
+            },
+            "answer": {
+              "type": "string",
+              "description": "Answer summary"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Optional step-by-step reasoning trace"
+            },
+            "timestamp": {
+              "type": "object",
+              "description": "Optional temporal window of the event within the video",
+              "additionalProperties": false,
+              "properties": {
+                "start": {
+                  "type": "number",
+                  "description": "Start time in seconds",
+                  "minimum": 0
+                },
+                "end": {
+                  "type": "number",
+                  "description": "End time in seconds",
+                  "minimum": 0
+                }
+              }
+            },
+            "image_id": {
+              "type": "string",
+              "description": "Reference to image_id in image_*.json",
+              "minLength": 1
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "video_id"
+              ]
+            },
+            {
+              "required": [
+                "image_id"
+              ]
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Task type identifier (must be 'video_summarization')",
+            "const": "video_summarization"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "metropolis-v3.0/tasks/causal_linkage.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/metropolis-v3.0/causal_linkage.schema.json",
+    "title": "Causal Linkage Task Annotation",
+    "description": "Causal reasoning task for videos: given two timestamps t1 and t2, explain the causal relationship between the event observed at t1 and the resulting situation at t2.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "items"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "items": {
+        "type": "array",
+        "description": "Array of causal linkage items, one per question-answer pair",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "video_id",
+            "t1",
+            "t2",
+            "question",
+            "answer"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "video_id": {
+              "type": "string",
+              "description": "Reference to video ID (matches directory name in contextual/)"
+            },
+            "video_type": {
+              "type": "string",
+              "enum": [
+                "anomaly",
+                "normal"
+              ],
+              "description": "High-level content classification of the video"
+            },
+            "t1": {
+              "type": "string",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+              "description": "Timestamp of the causal event in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '01:30', '00:01:30', '01:30.5')"
+            },
+            "t2": {
+              "type": "string",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+              "description": "Timestamp of the resulting situation in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '01:30', '00:01:30', '01:30.5')"
+            },
+            "question": {
+              "type": "string",
+              "description": "Full natural-language question asking to explain the causal relationship between t1 and t2"
+            },
+            "answer": {
+              "type": "string",
+              "description": "Free-text causal explanation of how the event at t1 led to the situation at t2"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Optional step-by-step reasoning trace leading to the answer"
+            }
+          }
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Task type identifier (must be 'causal_linkage')",
+            "const": "causal_linkage"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "examples": [
+      {
+        "version": "metropolis-v3.0",
+        "items": [
+          {
+            "video_id": "Accident-Bench_land_space_NgN5FWA3yGs",
+            "video_type": "anomaly",
+            "t1": "00:00:01.00",
+            "t2": "00:00:07.00",
+            "question": "Explain the relationship between the event at 00:00:01 and the situation at 00:00:07.",
+            "answer": "At 00:00:01, a dark pickup truck enters the intersection from the right to initiate a left-hand turn, while at 00:00:07, a silver sedan has come to a complete halt in the center of the intersection, facing the opposite direction of its original travel. The relationship between these two moments is a direct causal link resulting from a failure to yield right-of-way.",
+            "reasoning": "The video begins by establishing a baseline of normal traffic flow at a busy intersection. At 00:00:01, several vehicles including a white utility van and a tan minivan are stopped at a red light..."
+          }
+        ],
+        "metadata": {
+          "type": "causal_linkage",
+          "description": "Causal linkage between traffic events and resulting situations in anomalous ITS videos"
+        }
+      }
+    ]
+  },
+  "metropolis-v3.0/tasks/temporal_description.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/metropolis-v3.0/temporal_description.schema.json",
+    "title": "Temporal Event Description Task Annotation",
+    "description": "Dense video captioning task: given a temporal segment defined by [t1, t2], describe in natural language what happened during that segment.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "items"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "items": {
+        "type": "array",
+        "description": "Array of temporal event description items, one per question-answer pair",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "video_id",
+            "t1",
+            "t2",
+            "question",
+            "answer"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "video_id": {
+              "type": "string",
+              "description": "Reference to video ID (matches directory name in contextual/)"
+            },
+            "video_type": {
+              "type": "string",
+              "enum": [
+                "anomaly",
+                "normal"
+              ],
+              "description": "High-level content classification of the video"
+            },
+            "t1": {
+              "type": "string",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+              "description": "Segment start time in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '01:30', '00:01:30', '01:30.5')"
+            },
+            "t2": {
+              "type": "string",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+              "description": "Segment end time in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '01:30', '00:01:30', '01:30.5')"
+            },
+            "question": {
+              "type": "string",
+              "description": "Natural-language question asking what occurred in the video between t1 and t2 (e.g. 'What happened in the video between 00:00:02 and 00:00:08?')"
+            },
+            "answer": {
+              "type": "string",
+              "description": "Natural-language description of the events that occurred in the segment [t1, t2]"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Optional step-by-step reasoning trace leading to the answer"
+            }
+          }
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Task type identifier (must be 'temporal_description')",
+            "const": "temporal_description"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "examples": [
+      {
+        "version": "metropolis-v3.0",
+        "items": [
+          {
+            "video_id": "Accident-Bench/land_space/medium/videos/3KSHg1inZS8.mp4",
+            "video_type": "anomaly",
+            "t1": "00:00:02.00",
+            "t2": "00:00:06.00",
+            "question": "What happened in the video between 00:00:02 and 00:00:06?",
+            "answer": "A silver sedan initiates a left turn across oncoming traffic without yielding, causing a T-bone collision with a straight-moving vehicle. Simultaneously, a dark pickup truck is struck by a FedEx truck. By 00:00:06 the sedan has spun to a halt, the pickup has finished its clockwise rotation, and all surrounding traffic has come to a full stop.",
+            "reasoning": "Between 00:00:02 and 00:00:06 two simultaneous failures occur at the intersection: the silver sedan turns left without checking for oncoming traffic, and the pickup erratically exits the queue. The resulting collisions unfold rapidly over four seconds before the scene stabilises."
+          }
+        ],
+        "metadata": {
+          "type": "temporal_description",
+          "description": "Natural-language descriptions of anomalous traffic events within specified temporal segments"
+        }
+      }
+    ]
+  },
+  "metropolis-v3.0/tasks/bcq.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/metropolis-v3.0/bcq.schema.json",
+    "title": "Event Verification Task Annotation",
+    "description": "Event verification task annotation for videos. Each item asks a yes/no question about whether a described event occurs in a video identified by video_id.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "items"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "items": {
+        "type": "array",
+        "description": "Array of verification items, one per event to verify",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "question",
+            "answer"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "video_id": {
+              "type": "string",
+              "description": "Reference to video ID (matches directory name in contextual/)"
+            },
+            "question": {
+              "type": "string",
+              "description": "Yes/no question about whether a specific event occurs in the video"
+            },
+            "answer": {
+              "type": "string",
+              "enum": [
+                "Yes",
+                "No"
+              ],
+              "description": "Answer: 'Yes' if the event occurs, 'No' otherwise"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Optional step-by-step reasoning trace leading to the answer"
+            },
+            "image_id": {
+              "type": "string",
+              "description": "Reference to image_id in image_*.json",
+              "minLength": 1
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "video_id"
+              ]
+            },
+            {
+              "required": [
+                "image_id"
+              ]
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Task type identifier (must be 'bcq')",
+            "const": "bcq"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "metropolis-v3.0/tasks/bcq_openended.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/metropolis-v3.0/bcq_openended.schema.json",
+    "title": "Event Verification Open-Ended Task Annotation",
+    "description": "Binary classification QA task annotation where the answer begins with 'Yes' or 'No' followed by an open-ended explanation. Each item asks a yes/no question about a video or image identified by video_id or image_id.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "items"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "items": {
+        "type": "array",
+        "description": "Array of verification items, one per event to verify",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "question",
+            "answer"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "video_id": {
+              "type": "string",
+              "description": "Reference to video ID (matches directory name in contextual/)"
+            },
+            "question": {
+              "type": "string",
+              "description": "Yes/no question about whether a specific event occurs in the video"
+            },
+            "answer": {
+              "type": "string",
+              "pattern": "^(Yes|No)\\. [\\s\\S]+",
+              "description": "Answer starting with 'Yes' or 'No' followed by a period, a space, and an open-ended explanation (e.g. 'Yes. The car turns left at the intersection.')"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Optional step-by-step reasoning trace leading to the answer"
+            },
+            "image_id": {
+              "type": "string",
+              "description": "Reference to image_id in image_*.json",
+              "minLength": 1
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "video_id"
+              ]
+            },
+            {
+              "required": [
+                "image_id"
+              ]
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Task type identifier (must be 'bcq_openended')",
+            "const": "bcq_openended"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "metropolis-v3.0/tasks/open_qa.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/metropolis-v3.0/open_qa.schema.json",
+    "title": "Video Open-Ended QA Task Annotation",
+    "description": "Open-ended question answering task for videos. Each item pairs a natural-language question with a free-form answer for the video identified by video_id.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "items"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "items": {
+        "type": "array",
+        "description": "Array of open-ended QA items, one per question-answer pair",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "question",
+            "answer"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "video_id": {
+              "type": "string",
+              "description": "Reference to video ID (matches directory name in contextual/)"
+            },
+            "question": {
+              "type": "string",
+              "description": "Natural-language question about the video content"
+            },
+            "answer": {
+              "type": "string",
+              "description": "Free-form answer to the question"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Optional step-by-step reasoning trace leading to the answer"
+            },
+            "image_id": {
+              "type": "string",
+              "description": "Reference to image_id in image_*.json",
+              "minLength": 1
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "video_id"
+              ]
+            },
+            {
+              "required": [
+                "image_id"
+              ]
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Task type identifier (must be 'open_qa')",
+            "const": "open_qa"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "metropolis-v3.0/tasks/mcq_openended.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/metropolis-v3.0/mcq_openended.schema.json",
+    "title": "Video MCQ Open-Ended Task Annotation",
+    "description": "Multiple-choice question task annotation where the answer begins with a single letter followed by an open-ended explanation. Each item poses a question (optionally with explicit options) for the video or image identified by video_id or image_id.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "items"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "items": {
+        "type": "array",
+        "description": "Array of classification items, one per video or image",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "question",
+            "answer"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "video_id": {
+              "type": "string",
+              "description": "Reference to video ID (matches directory name in contextual/)"
+            },
+            "question": {
+              "type": "string",
+              "description": "Classification question. May embed the options inline (e.g. 'A) car B) truck ...')"
+            },
+            "options": {
+              "type": "object",
+              "description": "Optional mapping of answer letter to choice text (e.g. {\"A\": \"passenger car\", \"B\": \"truck\"}). Use when choices are not embedded in the question.",
+              "minProperties": 2,
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "answer": {
+              "type": "string",
+              "pattern": "^[A-Z]\\. [\\s\\S]+",
+              "description": "Answer starting with a single uppercase letter identifying the correct option, followed by a period, a space, and an open-ended explanation (e.g. 'A. The vehicle is a passenger car.')"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Optional step-by-step reasoning trace leading to the answer"
+            },
+            "item_metadata": {
+              "type": "object",
+              "description": "Optional additional metadata for this item",
+              "additionalProperties": true
+            },
+            "image_id": {
+              "type": "string",
+              "description": "Reference to image_id in image_*.json",
+              "minLength": 1
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "video_id"
+              ]
+            },
+            {
+              "required": [
+                "image_id"
+              ]
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Task type identifier (must be 'mcq_openended')",
+            "const": "mcq_openended"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "metropolis-v3.0/tasks/scene_description.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/metropolis-v3.0/scene_description.schema.json",
+    "title": "Scene Description Task Annotation",
+    "description": "Captioning task for describing the visual scene or environment. Supports both image and video raw types. Each item provides a question prompt, an answer caption, and optional reasoning.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "items"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "items": {
+        "type": "array",
+        "description": "Array of scene description items, one per image or video",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "question",
+            "answer"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "image_id": {
+              "type": "string",
+              "description": "Reference to image ID (matches directory name in contextual/). Required when raw_type is image."
+            },
+            "video_id": {
+              "type": "string",
+              "description": "Reference to video ID (matches directory name in contextual/). Required when raw_type is video."
+            },
+            "question": {
+              "type": "string",
+              "description": "The captioning prompt or guidance for the scene description"
+            },
+            "answer": {
+              "type": "string",
+              "description": "Scene description"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Optional step-by-step reasoning trace"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "video_id"
+              ]
+            },
+            {
+              "required": [
+                "image_id"
+              ]
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Task type identifier (must be 'scene_description')",
+            "const": "scene_description"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "metropolis-v3.0/tasks/temporal_localization.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/metropolis-v3.0/temporal_localization.schema.json",
+    "title": "Temporal Localization Task Annotation",
+    "description": "Temporal grounding task for videos: given a natural-language query describing an event, predict the start and end timestamps of that event within the video.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "items"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "items": {
+        "type": "array",
+        "description": "Array of temporal localization items, one per question-answer pair",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "video_id",
+            "t1",
+            "t2",
+            "question",
+            "answer"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "video_id": {
+              "type": "string",
+              "description": "Reference to video ID (matches directory name in contextual/)"
+            },
+            "video_type": {
+              "type": "string",
+              "enum": [
+                "anomaly",
+                "normal"
+              ],
+              "description": "High-level content classification of the video"
+            },
+            "t1": {
+              "type": "string",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+              "description": "Event start time in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '01:30', '00:01:30', '01:30.5')"
+            },
+            "t2": {
+              "type": "string",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+              "description": "Event end time in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '01:30', '00:01:30', '01:30.5')"
+            },
+            "question": {
+              "type": "string",
+              "description": "Natural-language question asking when a specific event occurs in the video"
+            },
+            "answer": {
+              "type": "object",
+              "description": "Predicted temporal span as a structured object with start and end timecodes",
+              "required": [
+                "start",
+                "end"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+                  "description": "Predicted start time in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds"
+                },
+                "end": {
+                  "type": "string",
+                  "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+                  "description": "Predicted end time in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds"
+                }
+              }
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Optional step-by-step reasoning trace leading to the answer"
+            }
+          }
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Task type identifier (must be 'temporal_localization')",
+            "const": "temporal_localization"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "examples": [
+      {
+        "version": "metropolis-v3.0",
+        "items": [
+          {
+            "video_id": "Accident-Bench_land_space_3KSHg1inZS8",
+            "video_type": "anomaly",
+            "question": "When does the side-impact collision between the dark pickup truck and the turning silver sedan occur? Please provide the result in json format with 'HH:MM:SS.ff' format for time depiction for the event. Use keywords 'start', 'end' in the json output.",
+            "answer": {
+              "start": "00:00:02",
+              "end": "00:00:06"
+            },
+            "reasoning": "The video begins with a stable baseline of urban traffic flow at a busy intersection. From 00:00:00 to 00:00:02, traffic on the main thoroughfare proceeds straight with the right-of-way...",
+            "t1": "00:00:02.00",
+            "t2": "00:00:06.00"
+          }
+        ],
+        "metadata": {
+          "type": "temporal_localization",
+          "description": "Temporal localization of anomalous traffic events (collisions, near-misses) in ITS videos"
+        }
+      }
+    ]
+  },
+  "metropolis-v3.0/tasks/mcq.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://developer.nvidia.com/cosmos-dataset/schemas/metropolis-v3.0/mcq.schema.json",
+    "title": "Video MCQ Task Annotation",
+    "description": "Multiple-choice question task annotation for videos. Each item poses a question (optionally with explicit options) and records a single-letter answer for the video identified by video_id.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "items"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "items": {
+        "type": "array",
+        "description": "Array of classification items, one per video",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "question",
+            "answer"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "video_id": {
+              "type": "string",
+              "description": "Reference to video ID (matches directory name in contextual/)"
+            },
+            "question": {
+              "type": "string",
+              "description": "Classification question. May embed the options inline (e.g. 'A) car B) truck ...')"
+            },
+            "options": {
+              "type": "object",
+              "description": "Optional mapping of answer letter to choice text (e.g. {\"A\": \"passenger car\", \"B\": \"truck\"}). Use when choices are not embedded in the question.",
+              "minProperties": 2,
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "answer": {
+              "type": "string",
+              "pattern": "^[A-Za-z]$",
+              "description": "Single-letter answer key identifying the correct option (e.g. 'A')"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Optional step-by-step reasoning trace leading to the answer"
+            },
+            "item_metadata": {
+              "type": "object",
+              "description": "Optional additional metadata for this item",
+              "additionalProperties": true
+            },
+            "image_id": {
+              "type": "string",
+              "description": "Reference to image_id in image_*.json",
+              "minLength": 1
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "video_id"
+              ]
+            },
+            {
+              "required": [
+                "image_id"
+              ]
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Task type identifier (must be 'mcq')",
+            "const": "mcq"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "metropolis-v3.0/contextual/chunks.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://github.com/NVIDIA/nvidia-cosmos-dataset/schemas/metropolis-v3.0/chunks.schema.json",
+    "title": "Video Chunks Annotation Schema (metropolis-v3.0)",
+    "description": "Schema for chunks_*.json - Dense temporal video chunks with captions (Cosmos dataset metropolis-v3.0). Each chunk describes a consecutive segment of a video using frame numbers, with optional semantic tags.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "video_id",
+      "chunks"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "chunks",
+            "description": "Contextual type identifier"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "Dataset-level tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "video_id": {
+        "type": "string",
+        "description": "Reference to video file (matches video_id in video_*.json)"
+      },
+      "chunks": {
+        "type": "array",
+        "description": "Ordered list of consecutive temporal video chunks. Chunks may overlap at boundaries but should not be identical in time range.",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "chunk_id",
+            "start",
+            "end",
+            "description"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "chunk_id": {
+              "type": "string",
+              "description": "Unique identifier for this chunk within the file",
+              "examples": [
+                "chunk_001",
+                "chunk_002"
+              ]
+            },
+            "start": {
+              "type": "string",
+              "description": "Chunk start time in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '00:02', '00:02.70', '00:01:30')",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+              "examples": [
+                "00:00",
+                "00:02",
+                "00:02.70"
+              ]
+            },
+            "end": {
+              "type": "string",
+              "description": "Chunk end time in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '00:04', '00:04.50', '00:01:35')",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+              "examples": [
+                "00:02",
+                "00:03.80",
+                "00:04.50"
+              ]
+            },
+            "description": {
+              "type": "string",
+              "description": "Dense caption describing what happens in this temporal segment"
+            },
+            "tags": {
+              "type": "array",
+              "description": "Semantic tags for this chunk (e.g. normal_flow, collision, aftermath)",
+              "items": {
+                "type": "string"
+              },
+              "examples": [
+                [
+                  "normal_flow"
+                ],
+                [
+                  "collision",
+                  "left_turn_violation"
+                ],
+                [
+                  "aftermath",
+                  "vehicle_stalled"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    "examples": [
+      {
+        "version": "metropolis-v3.0",
+        "metadata": {
+          "type": "chunks",
+          "date": "2026-03-27",
+          "description": "Dense temporal chunks for ITS collision video"
+        },
+        "video_id": "collision_video_001",
+        "chunks": [
+          {
+            "chunk_id": "chunk_001",
+            "start": "00:00",
+            "end": "00:02.70",
+            "description": "Traffic flows normally. A white sedan travels in lane 5, a gray sedan in lane 3.",
+            "tags": [
+              "normal_flow"
+            ]
+          },
+          {
+            "chunk_id": "chunk_002",
+            "start": "00:02.70",
+            "end": "00:04.50",
+            "description": "The gray sedan initiates a left turn from lane 3, colliding with the white sedan in lane 5.",
+            "tags": [
+              "collision",
+              "left_turn_violation"
+            ]
+          },
+          {
+            "chunk_id": "chunk_003",
+            "start": "00:04.50",
+            "end": "00:09.00",
+            "description": "The white sedan strikes a tree on the sidewalk and stalls. The gray sedan exits the frame.",
+            "tags": [
+              "aftermath",
+              "vehicle_stalled"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "metropolis-v3.0/contextual/msted.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://github.com/NVIDIA/nvidia-cosmos-dataset/schemas/metropolis-v3.0/msted.schema.json",
+    "title": "Multi-Scale Spatio-Temporal Event Description Schema (metropolis-v3.0)",
+    "description": "Schema for msted_*.json - Multi-Scale Spatio-Temporal Event Description (Cosmos dataset metropolis-v3.0). MSTED is an auto-generated annotation that captures scene context, temporal/spatial localization, and structured event characterization at multiple scales.",
+    "type": "object",
+    "required": [
+      "version",
+      "metadata",
+      "video_id",
+      "scene_description",
+      "temporal_spatial_localization",
+      "event_description"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "msted",
+            "description": "Contextual type identifier"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "Dataset-level tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "video_id": {
+        "type": "string",
+        "description": "Reference to video file (matches video_id in video_*.json)"
+      },
+      "sources": {
+        "type": "array",
+        "description": "List of contextual files used to generate this MSTED (e.g. video_human.json, events_human.json, chunks_auto.json)",
+        "items": {
+          "type": "string"
+        }
+      },
+      "scene_description": {
+        "type": "string",
+        "description": "Holistic Scene Description: environment, weather, time of day, scene layout, and pre-event baseline behavior — establishing the normal operational context so that the event of focus can be accurately characterized relative to that baseline."
+      },
+      "temporal_spatial_localization": {
+        "type": "array",
+        "description": "Temporal and Spatial Localization: a chronological narrative of the event's progression with precise start/end times and spatial region, anchoring all downstream annotations to verifiable evidence in the video.",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "start",
+            "end",
+            "description"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "start": {
+              "type": "string",
+              "description": "Segment start time in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '00:02', '00:02.70', '00:01:30')",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$"
+            },
+            "end": {
+              "type": "string",
+              "description": "Segment end time in flexible timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '00:04', '00:04.50', '00:01:35')",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$"
+            },
+            "description": {
+              "type": "string",
+              "description": "Chronological narrative of what occurs in this temporal segment"
+            },
+            "spatial_region": {
+              "type": "string",
+              "description": "Spatial location within the frame or scene where this segment occurs"
+            }
+          }
+        }
+      },
+      "event_description": {
+        "type": "object",
+        "description": "Event of Focus Description: a structured characterization of the salient event identified in the video. Key names are flexible — use whatever fields best describe the event. All values must be strings. Suggested fields: category, description, temporal_description, spatial_location, cause, consequence.",
+        "minProperties": 1,
+        "additionalProperties": {
+          "type": "string"
+        }
+      }
+    },
+    "examples": [
+      {
+        "version": "metropolis-v3.0",
+        "metadata": {
+          "type": "msted",
+          "date": "2026-03-27",
+          "description": "MSTED for ITS collision video"
+        },
+        "video_id": "collision_video_001",
+        "sources": [
+          "video_auto.json",
+          "events_auto.json",
+          "chunks_auto.json"
+        ],
+        "scene_description": "The video captures a high-angle view of a busy urban arterial road on a sunny day. The scene features a five-lane, two-way thoroughfare with vehicles flowing in both directions.",
+        "temporal_spatial_localization": [
+          {
+            "start": "00:00",
+            "end": "00:02.70",
+            "description": "Traffic flows normally. A white sedan travels in lane 5, a gray sedan in lane 3."
+          },
+          {
+            "start": "00:02.70",
+            "end": "00:04.50",
+            "description": "The gray sedan initiates a left turn from lane 3, colliding with the white sedan in lane 5.",
+            "spatial_region": "Center of intersection, lanes 3-5"
+          }
+        ],
+        "event_description": {
+          "category": "Left-Turn Collision / Vehicle Stalled",
+          "description": "A gray sedan attempted a left turn from a middle lane, failing to yield to a white sedan traveling straight in the outer lane.",
+          "temporal_description": "The primary collision occurs between frames 81 and 135, with secondary impact immediately after.",
+          "spatial_location": "Travel lanes of Rainier Ave S near the intersection.",
+          "cause": "Improper left turn by the gray sedan, which failed to ensure the lane was clear.",
+          "consequence": "Property damage to both vehicles and a roadside tree. The white sedan was disabled on the sidewalk."
+        }
+      }
+    ]
+  },
+  "metropolis-v3.0/contextual/video.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://github.com/NVIDIA/nvidia-cosmos-dataset/schemas/metropolis-v3.0/video.schema.json",
+    "title": "Video Metadata Schema",
+    "description": "Schema for video.json - Global metadata for video assets in Cosmos dataset format metropolis-v3.0",
+    "type": "object",
+    "required": [
+      "version",
+      "video_id",
+      "format",
+      "fps",
+      "duration",
+      "height",
+      "width",
+      "metadata"
+    ],
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "video_id": {
+        "type": "string",
+        "description": "Unique identifier for the video",
+        "minLength": 1,
+        "examples": [
+          "video_001",
+          "cam1_20251115_093000"
+        ]
+      },
+      "format": {
+        "type": "string",
+        "description": "Video container format",
+        "enum": [
+          "mp4",
+          "avi",
+          "mov",
+          "mkv",
+          "webm"
+        ],
+        "examples": [
+          "mp4"
+        ]
+      },
+      "rectified": {
+        "type": "boolean",
+        "description": "Whether the video has been rectified (lens distortion corrected)",
+        "default": false
+      },
+      "scenario_info": {
+        "type": "string",
+        "description": "Information about the video creation scenario, environment, equipment, and purpose",
+        "examples": [
+          "Warehouse operations - forklift safety monitoring",
+          "Smart city intersection - traffic flow analysis"
+        ]
+      },
+      "scene_description": {
+        "type": "string",
+        "description": "Spatial characteristics and layout of the scene (environment, lighting, objects, spatial arrangement)",
+        "examples": [
+          "Large warehouse with high ceilings, fluorescent lighting, multiple aisles with shelving units, concrete floor",
+          "Four-way intersection in urban setting, traffic lights at all corners, crosswalks, moderate vehicle and pedestrian traffic"
+        ]
+      },
+      "event_summary": {
+        "type": "string",
+        "description": "Temporal overview of key actions, occurrences, or changes throughout the video duration",
+        "examples": [
+          "Forklift approaches worker, worker steps aside, forklift passes safely",
+          "Vehicles stop at red light, pedestrian crosses, light turns green, traffic resumes"
+        ]
+      },
+      "camera_id": {
+        "type": "string",
+        "description": "Reference to camera ID in calibration.json for accessing intrinsic/extrinsic parameters",
+        "examples": [
+          "cam_001",
+          "camera_front_left"
+        ]
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Annotation type identifier (must be 'video')",
+            "const": "video"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "fps": {
+        "type": "integer",
+        "description": "Frames per second (frame rate)",
+        "minimum": 1,
+        "maximum": 240,
+        "examples": [
+          24,
+          30,
+          60
+        ]
+      },
+      "duration": {
+        "type": "number",
+        "description": "Total duration of the video in seconds",
+        "exclusiveMinimum": 0,
+        "examples": [
+          10.5,
+          30,
+          120.5
+        ]
+      },
+      "height": {
+        "type": "integer",
+        "description": "Video frame height in pixels",
+        "minimum": 1,
+        "examples": [
+          720,
+          1080,
+          2160
+        ]
+      },
+      "width": {
+        "type": "integer",
+        "description": "Video frame width in pixels",
+        "minimum": 1,
+        "examples": [
+          1280,
+          1920,
+          3840
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "examples": [
+      {
+        "version": 2,
+        "video_id": "warehouse_forklift_001",
+        "format": "mp4",
+        "rectified": false,
+        "scenario_info": "Warehouse operations - forklift near-miss scenario from IsaacSim",
+        "scene_description": "Large warehouse with high ceilings and fluorescent lighting. Multiple rows of industrial shelving with pallets. Concrete floor with yellow safety markings. Forklift operating in center aisle.",
+        "event_summary": "Forklift approaches intersection, worker walking perpendicular path, worker notices forklift and stops, forklift passes through intersection, worker continues walking.",
+        "camera_id": "cam_overhead_01"
+      }
+    ]
+  },
+  "metropolis-v3.0/contextual/image.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://github.com/NVIDIA/nvidia-cosmos-dataset/schemas/metropolis-v3.0/image.schema.json",
+    "title": "Image Metadata Schema",
+    "description": "Schema for image.json - Global metadata for image assets in Cosmos dataset format metropolis-v3.0",
+    "type": "object",
+    "required": [
+      "version",
+      "image_id",
+      "format",
+      "height",
+      "width",
+      "metadata"
+    ],
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "image_id": {
+        "type": "string",
+        "description": "Unique identifier for the image",
+        "minLength": 1,
+        "examples": [
+          "image_001",
+          "warehouse_cam1_20251115_093000"
+        ]
+      },
+      "format": {
+        "type": "string",
+        "description": "Image format",
+        "enum": [
+          "png",
+          "jpg",
+          "jpeg",
+          "bmp",
+          "tiff",
+          "webp"
+        ],
+        "examples": [
+          "png",
+          "jpg"
+        ]
+      },
+      "rectified": {
+        "type": "boolean",
+        "description": "Whether the image has been rectified (lens distortion corrected)",
+        "default": false
+      },
+      "scenario_info": {
+        "type": "string",
+        "description": "Information about the image capture scenario, environment, equipment, and purpose",
+        "examples": [
+          "Warehouse aisle - forklift inspection photo",
+          "Smart city intersection - traffic monitoring snapshot"
+        ]
+      },
+      "caption": {
+        "type": "string",
+        "description": "Textual description of the image content",
+        "examples": [
+          "Warehouse aisle with forklift carrying pallet, worker in high-visibility vest walking nearby",
+          "Urban intersection with stopped vehicles at red light, pedestrian crossing in crosswalk"
+        ]
+      },
+      "camera_id": {
+        "type": "string",
+        "description": "Reference to camera ID in calibration.json for accessing intrinsic/extrinsic parameters",
+        "examples": [
+          "cam_001",
+          "camera_overhead"
+        ]
+      },
+      "timestamp": {
+        "type": "string",
+        "description": "ISO 8601 timestamp when image was captured",
+        "format": "date-time",
+        "examples": [
+          "2025-11-15T14:30:00Z",
+          "2025-11-15T14:30:00.123+00:00"
+        ]
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Annotation type identifier (must be 'image')",
+            "const": "image"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "height": {
+        "type": "integer",
+        "description": "Image height in pixels",
+        "minimum": 1,
+        "examples": [
+          720,
+          1080,
+          2160
+        ]
+      },
+      "width": {
+        "type": "integer",
+        "description": "Image width in pixels",
+        "minimum": 1,
+        "examples": [
+          1280,
+          1920,
+          3840
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "examples": [
+      {
+        "version": 2,
+        "image_id": "warehouse_aisle_001",
+        "format": "png",
+        "rectified": false,
+        "scenario_info": "Warehouse operations - safety inspection photo captured from overhead camera",
+        "caption": "Wide view of warehouse aisle with yellow forklift carrying wooden pallet. Worker in orange vest and yellow hard hat walking perpendicular to forklift path. Multiple shelving units with boxes in background.",
+        "camera_id": "cam_overhead_01",
+        "timestamp": "2025-11-15T14:30:00Z"
+      },
+      {
+        "version": 2,
+        "image_id": "intersection_snap_042",
+        "format": "jpg",
+        "rectified": true,
+        "caption": "Four-way intersection with vehicles stopped at red light, pedestrian in crosswalk",
+        "camera_id": "traffic_cam_north"
+      }
+    ]
+  },
+  "metropolis-v3.0/contextual/events.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://github.com/NVIDIA/nvidia-cosmos-dataset/schemas/metropolis-v3.0/events.schema.json",
+    "title": "Event Detection Annotations Schema (metropolis-v3.0)",
+    "description": "Schema for events.json - Temporal event detection and description (Cosmos dataset metropolis-v3.0)",
+    "type": "object",
+    "required": [
+      "version",
+      "events",
+      "metadata"
+    ],
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "events": {
+        "type": "array",
+        "description": "List of temporal events detected in the video",
+        "items": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "start_time",
+            "end_time"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string",
+              "description": "Unique identifier for the event",
+              "examples": [
+                "event_000000",
+                "near_miss_001",
+                "evt_traffic_violation_003"
+              ]
+            },
+            "start_time": {
+              "type": "string",
+              "description": "Event start time as timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '00:02', '00:02.70', '00:01:30')",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+              "examples": [
+                "00:00",
+                "00:02",
+                "00:02.70"
+              ]
+            },
+            "end_time": {
+              "type": "string",
+              "description": "Event end time as timecode: MM:SS or HH:MM:SS with optional fractional seconds (e.g. '00:04', '00:04.50', '00:01:35')",
+              "pattern": "^(\\d{2}:)?\\d{2}:\\d{2}(\\.\\d+)?$",
+              "examples": [
+                "00:02",
+                "00:03.80",
+                "00:04.50"
+              ]
+            },
+            "category": {
+              "type": "string",
+              "description": "Primary category/type of the event",
+              "examples": [
+                "near_miss",
+                "collision",
+                "traffic_violation",
+                "loading",
+                "unloading",
+                "person_fall",
+                "vehicle_stop"
+              ]
+            },
+            "sub_category": {
+              "type": "array",
+              "description": "List of sub-categories providing more specific classification",
+              "items": {
+                "type": "string"
+              },
+              "examples": [
+                [
+                  "person_dodge",
+                  "forklift_stop"
+                ],
+                [
+                  "red_light_run",
+                  "pedestrian_crossing"
+                ],
+                [
+                  "safe_distance_maintained"
+                ]
+              ]
+            },
+            "instances": {
+              "type": "array",
+              "description": "List of object_ids (from instances.json) involved in the event",
+              "items": {
+                "type": "string"
+              },
+              "examples": [
+                [
+                  "forklift_13",
+                  "worker_01"
+                ],
+                [
+                  "car_05",
+                  "pedestrian_12"
+                ]
+              ]
+            },
+            "event_caption": {
+              "type": "string",
+              "description": "Natural language description of the event (may use templates with {object_id} placeholders)",
+              "examples": [
+                "Forklift {forklift_13} approaches worker {worker_01}, who steps aside to avoid collision",
+                "Vehicle {car_05} runs red light while pedestrian {pedestrian_12} is crossing",
+                "Pallet {pallet_a12} is loaded onto forklift {forklift_13}"
+              ]
+            },
+            "severity": {
+              "type": "string",
+              "description": "Severity level of the event",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "examples": [
+                "high",
+                "medium"
+              ]
+            },
+            "group_id": {
+              "type": "string",
+              "description": "Reference to a group_id in the top-level groups array, for linking related events",
+              "examples": [
+                "collision_sequence_01",
+                "loading_operation_01"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Annotation type identifier (must be 'events')",
+            "const": "events"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "groups": {
+        "type": "array",
+        "description": "Definitions of event groups for organizing related events",
+        "items": {
+          "type": "object",
+          "required": [
+            "group_id"
+          ],
+          "properties": {
+            "group_id": {
+              "type": "string",
+              "description": "Unique identifier for the event group",
+              "examples": [
+                "collision_sequence_01",
+                "loading_operation_01"
+              ]
+            },
+            "description": {
+              "type": "string",
+              "description": "Human-readable description of what this group represents",
+              "examples": [
+                "Sequence of events leading to a near-miss collision"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "video_id": {
+        "type": "string",
+        "description": "Reference to video_id in the corresponding video annotation file",
+        "examples": [
+          "camera_01",
+          "camera_02"
+        ]
+      },
+      "instances_source": {
+        "type": "string",
+        "description": "Filename of the instances annotation file containing object definitions",
+        "examples": [
+          "instances_annot1.json",
+          "instances_human.json"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "examples": [
+      {
+        "version": "metropolis-v3.0",
+        "metadata": {
+          "type": "events",
+          "date": "2026-03-25",
+          "description": "Event annotations for warehouse scene",
+          "license": "Apache-2.0",
+          "tags": [
+            "warehouse",
+            "safety"
+          ]
+        },
+        "groups": [
+          {
+            "group_id": "near_miss_sequence_01",
+            "description": "Sequence of events around a forklift near-miss incident"
+          }
+        ],
+        "events": [
+          {
+            "event_id": "event_000000",
+            "start_time": "00:00.33",
+            "end_time": "00:00.53",
+            "category": "near_miss",
+            "group_id": "near_miss_sequence_01",
+            "instances": [
+              "forklift_13",
+              "worker_01"
+            ],
+            "event_caption": "Forklift {forklift_13} approaches worker {worker_01}, who steps aside to avoid collision",
+            "severity": "high"
+          },
+          {
+            "event_id": "event_000001",
+            "start_time": "00:00.57",
+            "end_time": "00:00.77",
+            "category": "loading",
+            "instances": [
+              "forklift_13",
+              "pallet_a12"
+            ],
+            "event_caption": "Forklift {forklift_13} picks up pallet {pallet_a12}",
+            "severity": "low"
+          }
+        ]
+      }
+    ]
+  },
+  "metropolis-v3.0/contextual/calibration.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://github.com/NVIDIA/nvidia-cosmos-dataset/schemas/metropolis-v3.0/calibration.schema.json",
+    "title": "Camera Calibration Schema",
+    "description": "Schema for calibration.json - Camera calibration parameters for spatial understanding (Cosmos dataset metropolis-v3.0)",
+    "type": "object",
+    "required": [
+      "version",
+      "calibrationType",
+      "sensors",
+      "metadata"
+    ],
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "calibrationType": {
+        "type": "string",
+        "description": "Type of calibration coordinate system",
+        "enum": [
+          "cartesian",
+          "polar",
+          "spherical"
+        ],
+        "default": "cartesian"
+      },
+      "sensors": {
+        "type": "object",
+        "description": "Dictionary of sensor calibrations, keyed by sensor_id",
+        "patternProperties": {
+          "^.*$": {
+            "type": "object",
+            "description": "Calibration parameters for a single sensor (camera)",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "Type of sensor",
+                "enum": [
+                  "camera",
+                  "lidar",
+                  "radar",
+                  "depth"
+                ],
+                "examples": [
+                  "camera"
+                ]
+              },
+              "coordinates": {
+                "type": "object",
+                "description": "2D coordinates of the sensor in the scene",
+                "properties": {
+                  "x": {
+                    "type": "number",
+                    "description": "X coordinate"
+                  },
+                  "y": {
+                    "type": "number",
+                    "description": "Y coordinate"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y"
+                ]
+              },
+              "scaleFactor": {
+                "type": "number",
+                "description": "Scale factor for coordinate transformation",
+                "examples": [
+                  1,
+                  0.5,
+                  2
+                ]
+              },
+              "translationToGlobalCoordinates": {
+                "type": "object",
+                "description": "Translation vector to global coordinate system",
+                "properties": {
+                  "x": {
+                    "type": "number",
+                    "description": "X translation"
+                  },
+                  "y": {
+                    "type": "number",
+                    "description": "Y translation"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y"
+                ]
+              },
+              "attributes": {
+                "type": "object",
+                "description": "Additional sensor-specific attributes",
+                "properties": {
+                  "fps": {
+                    "type": "number",
+                    "description": "Frames per second (for cameras)",
+                    "minimum": 0,
+                    "examples": [
+                      24,
+                      30,
+                      60
+                    ]
+                  },
+                  "direction": {
+                    "type": "number",
+                    "description": "2D direction angle in degrees",
+                    "minimum": 0,
+                    "maximum": 360
+                  },
+                  "direction3d": {
+                    "type": "array",
+                    "description": "3D orientation [roll, pitch, yaw] in radians",
+                    "items": {
+                      "type": "number"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "examples": [
+                      [
+                        0,
+                        0,
+                        0
+                      ],
+                      [
+                        0.1,
+                        -0.2,
+                        1.57
+                      ]
+                    ]
+                  },
+                  "frameWidth": {
+                    "type": "integer",
+                    "description": "Frame width in pixels",
+                    "minimum": 1,
+                    "examples": [
+                      1920,
+                      1280,
+                      640
+                    ]
+                  },
+                  "frameHeight": {
+                    "type": "integer",
+                    "description": "Frame height in pixels",
+                    "minimum": 1,
+                    "examples": [
+                      1080,
+                      720,
+                      480
+                    ]
+                  }
+                }
+              },
+              "intrinsicMatrix": {
+                "type": "array",
+                "description": "3x3 camera intrinsic matrix [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                },
+                "minItems": 3,
+                "maxItems": 3,
+                "examples": [
+                  [
+                    [
+                      1000,
+                      0,
+                      960
+                    ],
+                    [
+                      0,
+                      1000,
+                      540
+                    ],
+                    [
+                      0,
+                      0,
+                      1
+                    ]
+                  ]
+                ]
+              },
+              "extrinsicMatrix": {
+                "type": "array",
+                "description": "3×4 or 4×4 camera extrinsic matrix [R|t]",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 4,
+                  "maxItems": 4
+                },
+                "minItems": 3,
+                "maxItems": 4,
+                "examples": [
+                  [
+                    [
+                      1,
+                      0,
+                      0,
+                      0
+                    ],
+                    [
+                      0,
+                      1,
+                      0,
+                      0
+                    ],
+                    [
+                      0,
+                      0,
+                      1,
+                      0
+                    ]
+                  ]
+                ]
+              },
+              "cameraMatrix": {
+                "type": "array",
+                "description": "3x4 camera projection matrix P = K[R|t]",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 4,
+                  "maxItems": 4
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "homography": {
+                "type": "array",
+                "description": "3x3 homography matrix for ground plane projection",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "distortionCoefficients": {
+                "type": "array",
+                "description": "Lens distortion coefficients [k1, k2, p1, p2, k3, ...]",
+                "items": {
+                  "type": "number"
+                },
+                "examples": [
+                  [
+                    0.1,
+                    -0.05,
+                    0.001,
+                    0.002,
+                    0.01
+                  ]
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Annotation type identifier (must be 'calibration')",
+            "const": "calibration"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "additionalProperties": false,
+    "examples": [
+      {
+        "version": 2,
+        "calibrationType": "cartesian",
+        "sensors": {
+          "cam_001": {
+            "type": "camera",
+            "coordinates": {
+              "x": 10.5,
+              "y": 20.3
+            },
+            "scaleFactor": 1,
+            "translationToGlobalCoordinates": {
+              "x": 0,
+              "y": 0
+            },
+            "attributes": {
+              "fps": 30,
+              "direction": 90,
+              "direction3d": [
+                0,
+                0,
+                1.57
+              ],
+              "frameWidth": 1920,
+              "frameHeight": 1080
+            },
+            "intrinsicMatrix": [
+              [
+                1000,
+                0,
+                960
+              ],
+              [
+                0,
+                1000,
+                540
+              ],
+              [
+                0,
+                0,
+                1
+              ]
+            ],
+            "extrinsicMatrix": [
+              [
+                1,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                1,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                1,
+                5
+              ]
+            ],
+            "distortionCoefficients": [
+              0.1,
+              -0.05,
+              0.001,
+              0.002
+            ]
+          },
+          "cam_002": {
+            "type": "camera",
+            "coordinates": {
+              "x": 25,
+              "y": 20.3
+            },
+            "attributes": {
+              "fps": 30,
+              "frameWidth": 1920,
+              "frameHeight": 1080
+            },
+            "intrinsicMatrix": [
+              [
+                1000,
+                0,
+                960
+              ],
+              [
+                0,
+                1000,
+                540
+              ],
+              [
+                0,
+                0,
+                1
+              ]
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "metropolis-v3.0/contextual/objects.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://github.com/NVIDIA/nvidia-cosmos-dataset/schemas/metropolis-v3.0/objects.schema.json",
+    "title": "Object Detection Annotations Schema",
+    "description": "Schema for objects.json - Per-frame object detection annotations (Cosmos dataset metropolis-v3.0)",
+    "type": "object",
+    "required": [
+      "version",
+      "frames",
+      "metadata"
+    ],
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "frames": {
+        "type": "object",
+        "description": "Dictionary of frames with detections, keyed by frame_id",
+        "patternProperties": {
+          "^.*$": {
+            "type": "object",
+            "description": "Detection annotations for a single frame",
+            "required": [
+              "format",
+              "frame_number",
+              "instances"
+            ],
+            "properties": {
+              "format": {
+                "type": "string",
+                "description": "Image format of the frame",
+                "enum": [
+                  "png",
+                  "jpg",
+                  "jpeg",
+                  "bmp"
+                ],
+                "examples": [
+                  "png"
+                ]
+              },
+              "frame_number": {
+                "type": "integer",
+                "description": "Sequential frame number (0-indexed)",
+                "minimum": 0,
+                "examples": [
+                  0,
+                  11,
+                  250
+                ]
+              },
+              "instances": {
+                "type": "array",
+                "description": "List of object instances detected in this frame",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "object_id",
+                    "bounding_box_2d_tight"
+                  ],
+                  "properties": {
+                    "object_id": {
+                      "type": "string",
+                      "description": "Reference to object_id in instances.json",
+                      "examples": [
+                        "forklift_13",
+                        "worker_01",
+                        "pallet_a12"
+                      ]
+                    },
+                    "bounding_box_2d_tight": {
+                      "type": "array",
+                      "description": "Tight 2D bounding box [xmin, ymin, xmax, ymax] in pixels",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 4,
+                      "maxItems": 4,
+                      "examples": [
+                        [
+                          5,
+                          5,
+                          10,
+                          10
+                        ],
+                        [
+                          100.5,
+                          200.3,
+                          350.8,
+                          450.2
+                        ]
+                      ]
+                    },
+                    "bounding_box_2d_loose": {
+                      "type": "array",
+                      "description": "Loose 2D bounding box [xmin, ymin, xmax, ymax] with context padding",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 4,
+                      "maxItems": 4,
+                      "examples": [
+                        [
+                          0,
+                          0,
+                          15,
+                          15
+                        ],
+                        [
+                          90,
+                          190,
+                          360,
+                          460
+                        ]
+                      ]
+                    },
+                    "mask": {
+                      "type": "array",
+                      "description": "Instance segmentation mask in RLE (Run-Length Encoding) format",
+                      "items": {
+                        "type": "number"
+                      },
+                      "examples": [
+                        [
+                          376.97,
+                          176.91,
+                          398.81,
+                          176.91,
+                          401.24,
+                          312.82
+                        ]
+                      ]
+                    },
+                    "occluded": {
+                      "type": "boolean",
+                      "description": "Whether the object is partially occluded",
+                      "examples": [
+                        false,
+                        true
+                      ]
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "Whether the object extends beyond frame boundaries",
+                      "examples": [
+                        false,
+                        true
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Annotation type identifier (must be 'objects')",
+            "const": "objects"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "video_id": {
+        "type": "string",
+        "description": "Reference to video_id in the corresponding video annotation file",
+        "examples": [
+          "camera_01",
+          "camera_02"
+        ]
+      },
+      "instances_source": {
+        "type": "string",
+        "description": "Filename of the instances annotation file containing object definitions",
+        "examples": [
+          "instances_annot1.json",
+          "instances_human.json"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "examples": [
+      {
+        "version": 2,
+        "frames": {
+          "frame_000011": {
+            "format": "png",
+            "frame_number": 11,
+            "instances": [
+              {
+                "object_id": "forklift_13",
+                "bounding_box_2d_tight": [
+                  450,
+                  300,
+                  650,
+                  550
+                ],
+                "bounding_box_2d_loose": [
+                  440,
+                  290,
+                  660,
+                  560
+                ],
+                "mask": [
+                  376.97,
+                  176.91,
+                  398.81,
+                  176.91,
+                  401.24,
+                  312.82
+                ],
+                "occluded": false,
+                "truncated": false
+              },
+              {
+                "object_id": "worker_01",
+                "bounding_box_2d_tight": [
+                  150,
+                  200,
+                  220,
+                  400
+                ],
+                "bounding_box_2d_loose": [
+                  140,
+                  190,
+                  230,
+                  410
+                ],
+                "occluded": false,
+                "truncated": false
+              }
+            ]
+          },
+          "frame_000012": {
+            "format": "png",
+            "frame_number": 12,
+            "instances": [
+              {
+                "object_id": "forklift_13",
+                "bounding_box_2d_tight": [
+                  470,
+                  305,
+                  670,
+                  555
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "metropolis-v3.0/contextual/tracking.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://github.com/NVIDIA/nvidia-cosmos-dataset/schemas/metropolis-v3.0/tracking.schema.json",
+    "title": "Multi-Object Tracking Schema",
+    "description": "Schema for tracking.json - 4D multi-object tracking across time and cameras (Cosmos dataset metropolis-v3.0)",
+    "type": "object",
+    "required": [
+      "version",
+      "frames",
+      "metadata"
+    ],
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "frames": {
+        "type": "object",
+        "description": "Dictionary of frames with tracking data, keyed by frame_id",
+        "patternProperties": {
+          "^.*$": {
+            "type": "array",
+            "description": "List of tracked objects in this frame",
+            "items": {
+              "type": "object",
+              "required": [
+                "object_id",
+                "3d_location"
+              ],
+              "properties": {
+                "object_id": {
+                  "type": "string",
+                  "description": "Reference to object_id in instances.json",
+                  "examples": [
+                    "forklift_13",
+                    "worker_01",
+                    "car_05"
+                  ]
+                },
+                "3d_location": {
+                  "type": "array",
+                  "description": "3D coordinates [x, y, z] of object center in meters",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3,
+                  "examples": [
+                    [
+                      5.2,
+                      10.3,
+                      0
+                    ],
+                    [
+                      12.5,
+                      8.1,
+                      1.2
+                    ]
+                  ]
+                },
+                "3d_bounding_box_scale": {
+                  "type": "array",
+                  "description": "3D bounding box dimensions [width, length, height] in meters",
+                  "items": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "minItems": 3,
+                  "maxItems": 3,
+                  "examples": [
+                    [
+                      2,
+                      3.5,
+                      2
+                    ],
+                    [
+                      0.6,
+                      0.4,
+                      1.8
+                    ]
+                  ]
+                },
+                "3d_bounding_box_rotation": {
+                  "type": "array",
+                  "description": "3D bounding box rotation [roll, pitch, yaw] in radians",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3,
+                  "examples": [
+                    [
+                      0,
+                      0,
+                      0
+                    ],
+                    [
+                      0,
+                      0,
+                      1.57
+                    ],
+                    [
+                      0.1,
+                      -0.05,
+                      3.14
+                    ]
+                  ]
+                },
+                "2d_bounding_box_visible": {
+                  "type": "object",
+                  "description": "2D bounding boxes projected in each camera view where object is visible",
+                  "patternProperties": {
+                    "^.*$": {
+                      "type": "array",
+                      "description": "2D bounding box [xmin, ymin, xmax, ymax] in camera's image coordinates",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 4,
+                      "maxItems": 4,
+                      "examples": [
+                        [
+                          100,
+                          200,
+                          300,
+                          500
+                        ],
+                        [
+                          450.5,
+                          320.8,
+                          680.2,
+                          550.1
+                        ]
+                      ]
+                    }
+                  },
+                  "examples": [
+                    {
+                      "cam_001": [
+                        100,
+                        200,
+                        300,
+                        500
+                      ],
+                      "cam_002": [
+                        450,
+                        320,
+                        680,
+                        550
+                      ]
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Annotation type identifier (must be 'tracking')",
+            "const": "tracking"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "additionalProperties": false,
+    "examples": [
+      {
+        "version": 2,
+        "frames": {
+          "frame_000042": [
+            {
+              "object_id": "forklift_13",
+              "3d_location": [
+                5.2,
+                10.3,
+                0
+              ],
+              "3d_bounding_box_scale": [
+                2,
+                3.5,
+                2
+              ],
+              "3d_bounding_box_rotation": [
+                0,
+                0,
+                1.57
+              ],
+              "2d_bounding_box_visible": {
+                "cam_001": [
+                  450,
+                  300,
+                  650,
+                  550
+                ],
+                "cam_002": [
+                  120,
+                  280,
+                  280,
+                  480
+                ]
+              }
+            },
+            {
+              "object_id": "worker_01",
+              "3d_location": [
+                3.5,
+                11.8,
+                0
+              ],
+              "3d_bounding_box_scale": [
+                0.6,
+                0.4,
+                1.8
+              ],
+              "3d_bounding_box_rotation": [
+                0,
+                0,
+                3.14
+              ],
+              "2d_bounding_box_visible": {
+                "cam_001": [
+                  150,
+                  200,
+                  220,
+                  400
+                ]
+              }
+            }
+          ],
+          "frame_000043": [
+            {
+              "object_id": "forklift_13",
+              "3d_location": [
+                5.7,
+                10.3,
+                0
+              ],
+              "3d_bounding_box_scale": [
+                2,
+                3.5,
+                2
+              ],
+              "3d_bounding_box_rotation": [
+                0,
+                0,
+                1.57
+              ],
+              "2d_bounding_box_visible": {
+                "cam_001": [
+                  470,
+                  305,
+                  670,
+                  555
+                ],
+                "cam_002": [
+                  140,
+                  285,
+                  300,
+                  485
+                ]
+              }
+            },
+            {
+              "object_id": "worker_01",
+              "3d_location": [
+                3.5,
+                13,
+                0
+              ],
+              "3d_bounding_box_scale": [
+                0.6,
+                0.4,
+                1.8
+              ],
+              "3d_bounding_box_rotation": [
+                0,
+                0,
+                3.14
+              ],
+              "2d_bounding_box_visible": {
+                "cam_001": [
+                  148,
+                  180,
+                  218,
+                  380
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "metropolis-v3.0/contextual/instances.schema.json": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://github.com/NVIDIA/nvidia-cosmos-dataset/schemas/metropolis-v3.0/instances.schema.json",
+    "title": "Object Instances Schema",
+    "description": "Schema for instances.json - Definitions of all unique object instances in the scene (Cosmos dataset metropolis-v3.0)",
+    "type": "object",
+    "required": [
+      "version",
+      "instances",
+      "metadata"
+    ],
+    "properties": {
+      "version": {
+        "type": "string",
+        "const": "metropolis-v3.0",
+        "description": "Schema version - must be '3.0' for this schema"
+      },
+      "instances": {
+        "type": "object",
+        "description": "Dictionary of object instances, keyed by unique object_id",
+        "patternProperties": {
+          "^.*$": {
+            "type": "object",
+            "description": "Single object instance definition",
+            "required": [
+              "object_type",
+              "instance_id",
+              "semantic_id"
+            ],
+            "properties": {
+              "object_type": {
+                "type": "string",
+                "description": "Category/type of the object",
+                "examples": [
+                  "person",
+                  "forklift",
+                  "car",
+                  "truck",
+                  "pallet",
+                  "traffic_light",
+                  "pedestrian"
+                ]
+              },
+              "instance_id": {
+                "type": "integer",
+                "description": "Unique instance ID corresponding to pixel value in instance segmentation images",
+                "minimum": 0,
+                "examples": [
+                  1,
+                  32,
+                  110
+                ]
+              },
+              "semantic_id": {
+                "type": "integer",
+                "description": "Semantic category ID corresponding to pixel value in semantic segmentation images",
+                "minimum": 0,
+                "examples": [
+                  1,
+                  10,
+                  31
+                ]
+              },
+              "color": {
+                "type": "array",
+                "description": "RGB color for visualization [r, g, b]",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "minItems": 3,
+                "maxItems": 3,
+                "examples": [
+                  [
+                    255,
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    255,
+                    0
+                  ],
+                  [
+                    0,
+                    0,
+                    255
+                  ]
+                ]
+              },
+              "caption": {
+                "type": "string",
+                "description": "Textual description of the object instance",
+                "examples": [
+                  "Yellow forklift with extended forks",
+                  "Worker wearing high-visibility vest",
+                  "Red sedan stopped at traffic light"
+                ]
+              },
+              "images": {
+                "type": "array",
+                "description": "List of image IDs (matching directory names in contextual/) where this instance is present",
+                "items": {
+                  "type": "string"
+                },
+                "examples": [
+                  [
+                    "image_000001",
+                    "image_000005"
+                  ]
+                ]
+              },
+              "videos": {
+                "type": "array",
+                "description": "List of video IDs (matching directory names in contextual/) where this instance is present",
+                "items": {
+                  "type": "string"
+                },
+                "examples": [
+                  [
+                    "camera_01",
+                    "camera_02"
+                  ]
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "metadata": {
+        "type": "object",
+        "description": "File metadata for identification and cataloging",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Annotation type identifier (must be 'instances')",
+            "const": "instances"
+          },
+          "date": {
+            "type": "string",
+            "description": "Creation date in ISO 8601 format (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this annotation file"
+          },
+          "license": {
+            "type": "string",
+            "description": "License under which this annotation is distributed"
+          },
+          "tags": {
+            "type": "array",
+            "description": "List of tags for categorization and search",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "additionalProperties": false,
+    "examples": [
+      {
+        "version": "metropolis-v3.0",
+        "metadata": {
+          "type": "instances",
+          "date": "2026-03-25",
+          "description": "Instance definitions for intersection scene",
+          "license": "Apache-2.0",
+          "tags": [
+            "transportation"
+          ]
+        },
+        "instances": {
+          "vehicle_01": {
+            "object_type": "car",
+            "instance_id": 1,
+            "semantic_id": 3,
+            "color": [
+              255,
+              0,
+              0
+            ],
+            "caption": "Red sedan stopped at intersection",
+            "videos": [
+              "camera_01"
+            ]
+          },
+          "vehicle_02": {
+            "object_type": "bus",
+            "instance_id": 2,
+            "semantic_id": 4,
+            "color": [
+              0,
+              0,
+              255
+            ],
+            "caption": "City bus approaching from east",
+            "videos": [
+              "camera_01",
+              "camera_02"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}
