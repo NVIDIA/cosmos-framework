@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "failuregen"
+version = "0.1.0"
+description = "Generate matched robot failure and control rollouts with a Cosmos3 forward-dynamics model"
+readme = {text = "Generate robot failure videos with the adapted Cosmos3-Nano forward-dynamics checkpoint. See the recipe README two directories above this package.", content-type = "text/markdown"}
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "pyarrow>=14",
+    "av>=11",
+    "pillow>=10",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+cosmos = ["torch", "lerobot", "safetensors"]
+export = ["lerobot", "pandas>=2"]
+notebook = ["huggingface-hub>=0.25", "ipykernel", "jupyterlab"]
+dev = ["pytest>=7", "pandas>=2"]
+
+[project.scripts]
+failuregen = "failuregen.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

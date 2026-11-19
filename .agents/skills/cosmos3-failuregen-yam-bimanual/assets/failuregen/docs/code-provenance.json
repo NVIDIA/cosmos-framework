@@ -1,0 +1,136 @@
+{
+  "description": "Source revisions and file hashes for the modules used in reference generation job3218072. The recorded modules were copied without algorithm changes. The separate workflow.py module supplies a portable notebook entry point.",
+  "source_commit": "014c5a8c900e2a052ec5039cd6b20846b855bd31",
+  "files": [
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/__init__.py",
+      "sha256": "8d3c2b6ea9ab69792d1f5b6646f8e8281a311464000ed10ad5e201a67b3bbb83",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/__init__.py",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/contract.py",
+      "sha256": "42b72ede5b27782f659be4b2be8d710eaec12da570e8fedd77c4ede25c638182",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/contract.py",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/prepare.py",
+      "sha256": "c27262b8a2dd0d2dfdd63014f3d6a5625ba83568169f602e780d33b970ca19cd",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/prepare.py",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/prepare_eef.py",
+      "sha256": "f5c698299549fd0844d1a0bb94d954e25c542778cddc5b24af92bb04e4144f6e",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/prepare_eef.py",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/prepare_replay.py",
+      "sha256": "d1372715351a58f042804207189ee1c4c753a21aa59dd2d7b990892989abab1f",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/prepare_replay.py",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/failure_test.py",
+      "sha256": "07f7662d783d6e0e7df10d52a8a6bbe5678eb07398492e2b0b9ecd10e9c772c2",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/failure_test.py",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/failure_types.py",
+      "sha256": "68b4fffb3123b7b9026f1f6853266ac501b09785d52144b96614166ecf195199",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/failure_types.py",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/failure_types_review.py",
+      "sha256": "88f68eb7ed960a95ea962b90d7d45d78e9ca2210087422a305701bd4a883fb32",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/failure_types_review.py",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/scripts/prepare_labeling.py",
+      "sha256": "47c95b4c933c2aed159efd962ab20df6109e8f1cc15f3c00f04aa3c96e2724a4",
+      "source": "failure-types/eval-v6-20261002/prepare_labeling.py"
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/launch.py",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/launch.py",
+      "sha256": "0cc07b39c9243a85cc0748d24b4f07565129993f897b5136df1abed087e46817",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/train.py",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/train.py",
+      "sha256": "03a47d5ea3efb1a6730de71a18214a162c5a2ad0d61bba76baca78be13f0e8bd",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/experiment.py",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/experiment.py",
+      "sha256": "5e09917e7be249c44c0d0e92c66c22e24577faa3f2f5b8063a2235e20643461f",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/dataset.py",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/dataset.py",
+      "sha256": "3bb89948689dd1ccc2bcb52cf37e16d26f8a6a335518b23f7de6768c93d9669d",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/convert.py",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/convert.py",
+      "sha256": "2e560cda1bbb3e8a963bb1063958b0584bc32d5bb8c55ac0c0be014d5a02075d",
+      "matches_job3218072_snapshot": true
+    },
+    {
+      "path": "assets/failuregen/src/failuregen/yam_training/expand.py",
+      "source": "cosmos-failure-gen/src/failuregen/yam_training/expand.py",
+      "sha256": "0a57643d6a3984c4668c5ca7f389c514ab4406ac68077cc124d665791ce717bd",
+      "matches_job3218072_snapshot": true
+    }
+  ],
+  "run_recipe_source": "failure-types/eval-v6-20261002/job3218072/recipes.json",
+  "run_recipe_sha256": "6399adb473d1b484a56b5df34a0eaae7fe7b2aeef6b4fa491c20a7d3aee084a7",
+  "selection_wrapper_source": "failure-types/eval-v6-20261002/plan_batch.py",
+  "supporting_repositories": {
+    "yam-data-collection": "4effa311d78b88afba34d2d1d646ee8a317dc30b",
+    "data-labeling": "a749cfc330b36a2992653b4a4b3ddfc9a3417730"
+  },
+  "configurations": [
+    {
+      "path": "assets/failuregen/configs/generated_labeling.json",
+      "source": "failure-types/eval-v6-20261002/labeler-all-job3218072/labeling_config.json",
+      "changes": "none",
+      "sha256": "76a6892f2cfcfbd0e75a25ca4dca2f0743885cc14f1187d186c318c084624b45"
+    },
+    {
+      "path": "assets/failuregen/configs/source_labeling.json",
+      "source": "cosmos_real_eval_20261002_reviewed_20261005_f6a30dec/sources/labeling_config.json",
+      "changes": "Removed recovery_attempt from failure-state vocabulary; added LeRobot camera path patterns. Recovery remains on the task-phase track.",
+      "sha256": "ea6b5d33dd0bc3b3b7156d54ede922389b2a8c1ba92e2d98a76e7b0bcfdcc46b"
+    },
+    {
+      "path": "assets/failuregen/configs/yam_eef_gb200.toml",
+      "source": "cosmos-failure-gen/configs/yam_eef_gb200.toml",
+      "changes": "none",
+      "sha256": "8cdfb582b391fa3e9fac0cf63704ff994dd42c5e788171f52174902d19b99fbf"
+    }
+  ],
+  "cpu_verification": {
+    "full_plan_matches_saved_run_batch": true,
+    "verified_action_windows": 162,
+    "max_raw_abs_error": 8.881784197001252e-16,
+    "max_normalized_abs_error": 0,
+    "run_failure_candidates": 108,
+    "run_total_clips": 378,
+    "reference": "failure-types/eval-v6-20261002/job3218072/batch.json and its saved raw/normalized action inputs",
+    "showcase_clips": 3,
+    "showcase_normalized_actions_match_reference": true,
+    "showcase_generation_seed": 0
+  },
+  "gpu_inference_rerun": false,
+  "hash_scope": "The recorded sha256 values and matches_job3218072_snapshot flags describe the reference sources before repository lint, formatting, and license-header cleanup. They are historical provenance, not checksums of the current packaged files."
+}
