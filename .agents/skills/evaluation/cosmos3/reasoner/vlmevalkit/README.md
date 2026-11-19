@@ -85,7 +85,7 @@ Serve the model behind an OpenAI-compatible `/v1/chat/completions` endpoint (see
 **[Reasoner with vLLM](../../../../cosmos3-inference-reasoning/references/reasoner-readme.md#run-with-vllm)**):
 
 ```bash
-vllm serve nvidia/Cosmos3-Nano \
+VLLM_USE_FLASHINFER_SAMPLER=0 vllm serve nvidia/Cosmos3-Nano \
   --async-scheduling \
   --allowed-local-media-path / \
   --port 8080 \
@@ -103,6 +103,46 @@ configs request, and `--allowed-local-media-path /` lets it read local media. (R
 `--tensor-parallel-size` for larger models.) Any OpenAI-compatible server works (vLLM, SGLang, TGI, a
 hosted NIM, …) as long as it answers `POST /v1/chat/completions` and `GET /v1/models`; the wrapper
 health-checks the endpoint and auto-detects the served model id from `/v1/models`.
+
+The pinned serving image `vllm/vllm-openai:cosmos3@sha256:db0bb920b0b54e82ea96a98659bbd21921f87d0dcfc86feffdafa2db3f08be55`
+(vLLM `0.23.1rc1.dev1306+gbfee6a802`) does **not** expose
+`--trust-request-mm-kwargs` in `vllm serve --help=all`: the supported equivalent
+is its unconditional request override path. `renderers/online_renderer.py`
+passes request `mm_processor_kwargs` into `RenderParams`; `renderers/hf.py`
+forwards those settings into the multimodal prompt/processor. Do not add the
+unsupported flag or replace this digest merely to obtain it. Other runtime
+versions must be checked for their own trust/override policy.
+
+`vlmeval.execution_evidence` records redacted requested/observed execution
+evidence per response and aggregates it with `aggregate_execution_records`.
+`CosmosReason2` collection is opt-in via `execution_evidence_dir` and
+`execution_processor_profile`; disabled collection does not change its payload
+or return API. Evidence requests raw token IDs but retains only visual groups,
+actual response model, usage and finish reasons—not prompts, text token IDs,
+labels, media, endpoint URLs or credentials.
+
+Nano's explicit processor profile comes from the pinned public
+[`config.json`](https://huggingface.co/nvidia/Cosmos3-Nano/resolve/e59a53c25979a090fa8706c9acc0c254a6e89b92/config.json)
+and [`preprocessor_config.json`](https://huggingface.co/nvidia/Cosmos3-Nano/resolve/e59a53c25979a090fa8706c9acc0c254a6e89b92/preprocessor_config.json):
+patch 16, spatial merge 2, temporal patch 2. Each bounded consecutive visual
+token group yields spatial grid area `tokens × (16 × 2)²` **pixels**; video
+groups yield **frame slots** `groups × 2`, not decoded or unique frame counts.
+These derivations assume that processor profile and unpruned placeholder
+expansion, not a server-attested revision. Per-group geometry is checked, not
+just total tokens. Width/height, decoder FPS, decoded frame counts and effective
+generation settings remain explicitly unknown when the response cannot expose
+them. Non-32-aligned image inputs can be resized by the processor, so original
+input dimensions are not relabeled as effective pixel geometry. Requested
+generation/revision and historical scientific provenance remain requests and
+provenance; they are not newly verified by a successful completion.
+
+`processor_profile_for(model, revision)` returns the pinned Nano profile for
+`nvidia/Cosmos3-Nano`. For another model, set `COSMOS_PROCESSOR_PROFILE` to a
+JSON object copied from that checkpoint's processor configuration, with
+`patch_size`, `spatial_merge_size`, `temporal_patch_size`, `image_token_id`,
+`video_token_id`, `vision_start_token_id`, `vision_end_token_id` and
+`profile_model` equal to the served model name. A profile written for a
+different model is rejected; without one, other models' geometry stays unknown.
 
 ---
 
