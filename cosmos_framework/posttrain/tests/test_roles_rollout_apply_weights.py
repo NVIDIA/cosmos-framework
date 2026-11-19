@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Weight-sync correctness (spec §7.1), HF-free: rollout starts from RANDOM and is populated by the
+"""Weight-sync correctness, HF-free: rollout starts from RANDOM and is populated by the
 sync alone; after a policy update, a second sync propagates it. A single shared loopback WeightComm
 composes producer export and rollout apply in one process (the real NCCL path is the GPU e2e)."""
 

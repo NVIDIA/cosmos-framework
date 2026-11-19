@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Deferred token-mean normalisation across micro-batches (spec §3.5) and the
+"""Deferred token-mean normalisation across micro-batches and the
 poisoned-window countdown that keeps a skipped chunk from contaminating the next
-optimizer step (spec §5.2)."""
+optimizer step."""
 
 from __future__ import annotations
 

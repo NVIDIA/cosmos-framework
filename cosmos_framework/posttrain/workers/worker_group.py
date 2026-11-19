@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""WorkerGroup / Replica / rank abstraction (DESIGN §1.1, §1.2, spec 2026-07-22 §2.1).
+"""WorkerGroup / Replica / rank abstraction.
 
 A WorkerGroup is defined by **ports + a body**. v0 degenerate form: 1 replica,
 in-process body. The interface is the real one so a Ray-backed, multi-replica
 implementation drops in later without touching role/runner code.
 
-**Handle contract (spec 2026-07-22 §2.1/§2.2):** every WG method returns a `Handle`, and any
+**Handle contract:** every WG method returns a `Handle`, and any
 `Handle` passed as an arg is auto-resolved before the body runs. The SAME recipe
 works sync/async/local/ray: only the bound *backend* differs.
 - local sync ⇒ eager Handle (value in hand)
@@ -22,7 +22,7 @@ from typing import Any, Callable, Optional
 
 
 class Handle:
-    """Result handle (spec 2026-07-22 §2.1).
+    """Result handle.
 
     Holds either an eager value (local sync) or a remote ref + getter (e.g. a Ray
     ObjectRef + ray.get). The recipe never cares which — it just gets resolved at
@@ -81,12 +81,12 @@ class LocalPeerClient:
 
 
 class CollectiveHandle(Handle):
-    """Mesh result handle (DESIGN §1.1 replica×rank / spec 2026-07-22 §2.1). Holds one ObjectRef per
+    """Mesh result handle. Holds one ObjectRef per
     (replica, rank); at the next WG boundary the backend aligns it onto each consumer
     actor via an AlignPolicy and forwards the producer ObjectRef into the actor, which
     resolves it actor-side. The controller forwards only the tiny ref — never the
     producer's metadata payload — and bulk is pulled peer-to-peer at materialize time
-    (DESIGN §3.4/#7)."""
+    ."""
 
     def __init__(self, refs: dict, shape: tuple, getter=None):
         self._refs = refs  # {(r, k): ref}
@@ -166,7 +166,7 @@ def release_result_handles(*values: Any) -> None:
 
 
 class Scatter:
-    """Dispatch marker (spec 2026-07-22 §2.4): wrap a per-cell sequence so the backend gives
+    """Dispatch marker: wrap a per-cell sequence so the backend gives
     consumer cell ``(r, k)`` element ``seq[r]`` instead of broadcasting the whole
     sequence. ``len(seq)`` must equal the consumer's replica count. The mesh backend
     (`GridBackend`) interprets it; a local/eager backend gets the raw sequence back
@@ -199,7 +199,7 @@ class RankAligned:
 
 
 class Sharded:
-    """Dispatch marker for cross-replica redistribution (spec 2026-07-22 §2.2).
+    """Dispatch marker for cross-replica redistribution.
 
     Declares "the producer's total output, redistributed evenly across my replicas".
     Units are producer cells per its declared sub-shape (row-major). The realization
@@ -215,7 +215,7 @@ class Sharded:
         on_metadata: if True, declares that split= operates only on the metadata skeleton
                      (fast-path optimization via field-level pulling; requires release protocol).
         select: optional ``"module:fn"`` reference to an ingress-selection predicate (e.g.
-                mini/micro/dp chunking, spec 2026-08-12 §3.4). With ``select_params``, selection is
+                mini/micro/dp chunking). With ``select_params``, selection is
                 opt-in when the call supplies one of those kwargs; without them, selection is an
                 unconditional part of the registered edge contract.
         select_params: names of the SIBLING call kwargs that parameterise ``select`` (e.g.
@@ -261,7 +261,7 @@ class Sharded:
 
 
 class Mirror:
-    """Dispatch marker for explicit replication (spec 2026-07-22 §2.2).
+    """Dispatch marker for explicit replication.
 
     Declares "replicate the producer to every consumer replica". Producer must have
     exactly 1 unit (P == 1); explicit use is for eval-style edges where the same
@@ -300,9 +300,9 @@ class Dispatched:
         index: split shard index this replica keeps (``r % n`` under a split op; 0 otherwise —
             see ``workers.dispatch.split_index``), NOT the consumer replica index.
         n: scaling parameter (1 for "one", count for "reduce" or "split").
-        readers: expected reader count (for refcounted bulk pull; spec 2026-07-22 §2.4).
+        readers: expected reader count (for refcounted bulk pull).
         on_metadata: if True, adaptation operates on metadata only (skip bulk for dropped entries).
-        select: optional ``"module:fn"`` ingress-selection predicate ref (spec 2026-08-12 §3.4),
+        select: optional ``"module:fn"`` ingress-selection predicate ref,
             carried for the actor to apply after materialization. ``None`` ⇒ no selection — this
             is the DPO case, which shares this edge but never passes the control kwargs.
         select_kw: the resolved selection kwargs (e.g. ``{"mini": 0, "micro": 1, "n_mini": 1,
@@ -321,7 +321,7 @@ class Dispatched:
 
 
 def take_control_kwargs(spec: Sharded | None, kw: dict) -> tuple[dict, dict | None]:
-    """Split a call's kwargs into (body kwargs, selection kwargs) (spec 2026-08-12 §3.4).
+    """Split a call's kwargs into (body kwargs, selection kwargs).
 
     Selection is OPT-IN on the presence of ``spec.select_params``: DPO shares the SAME
     ``("trainer", "train", "batch")`` registry entry as GRPO but never passes mini/micro/n_mini/
@@ -348,7 +348,7 @@ def take_control_kwargs(spec: Sharded | None, kw: dict) -> tuple[dict, dict | No
 
 
 def scatter(seq: Any) -> Scatter:
-    """Mark ``seq`` for per-replica scatter in a WG method call (spec 2026-07-22 §2.4).
+    """Mark ``seq`` for per-replica scatter in a WG method call.
 
     ``sim.run_tasks(scatter(bins), policy=policy)`` hands cell ``r`` its ``bins[r]``.
 
@@ -362,7 +362,7 @@ def scatter(seq: Any) -> Scatter:
 
 
 def _local_select(role: str, method: str, args: tuple, kw: dict) -> tuple[tuple, dict]:
-    """Apply the local (backend-less) path's ingress selection, if any (spec 2026-08-12 §3.4).
+    """Apply the local (backend-less) path's ingress selection, if any.
 
     The local path never reaches ``GridBackend._actor_args``/``_align_one`` — ``WorkerGroup``'s
     ``self._backend is None`` branch invokes the body directly — so it must apply the SAME
@@ -486,17 +486,17 @@ class WorkerGroup:
         self.dispatch_profile: str | None = dispatch_profile
         # needs_bulk: does this WG's body COMPUTE on bulk fields (so its inputs must be
         # materialized), or does it only route/filter on metadata? A consumer-declared
-        # port property (DESIGN §3.4 field-level / move-once-where-needed); the bind/
+        # port property; the bind/
         # transport layer pulls bulk only at WGs that set this. Default False ⇒ BulkRefs
-        # flow through untouched (e.g. reward-on-text, buffer holds metadata, §5).
+        # flow through untouched (e.g. reward-on-text, buffer holds metadata).
         self.needs_bulk: bool = needs_bulk
-        self.placement: dict[str, Any] = placement  # pin_to / colocate_with — consumed by Placement (§4)
+        self.placement: dict[str, Any] = placement  # pin_to / colocate_with — consumed by Placement
         self._backend: Any = None  # set by bind_device_groups(); None ⇒ local sync-eager
 
     def _bind_backend(self, backend: Any) -> None:
         self._backend = backend
 
-    # Placement introspection (DESIGN §4.1): real methods (not routed through
+    # Placement introspection: real methods (not routed through
     # __getattr__ to a body) so a driver reads node IP / GPU from the bound backend
     # without reaching into `_backend`. Empty for the local/eager backend (one
     # in-process cell, no placement to report).
@@ -535,11 +535,11 @@ class WorkerGroup:
             # RankAligned unwraps its one eager producer value.
             args = tuple(_resolve_local_dispatch(a) for a in args)
             kw = {k: _resolve_local_dispatch(v) for k, v in kw.items()}
-            args, kw = _local_select(self.role, method, args, kw)  # spec 2026-08-12 §3.4
+            args, kw = _local_select(self.role, method, args, kw)  # the implementation
             return Handle(getattr(self.body, method)(*args, **kw))  # default local sync-eager
         submit = self._backend.submit
         if "kind" in inspect.signature(submit).parameters:
-            # GridBackend-only (Task A4, spec 2026-07-22 §2.1): thread this WG's role — the
+            # GridBackend-only (Task A4): thread this WG's role — the
             # dispatch registry's "kind" in `(kind, method, param)` — through so `submit`
             # can look up per-edge routing specs. RayBackend/ReplicaBackend don't declare
             # a `kind` parameter (untouched by this task) and fall through to the plain

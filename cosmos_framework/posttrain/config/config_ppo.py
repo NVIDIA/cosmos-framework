@@ -97,14 +97,13 @@ def _model_dp_worlds(config: PosttrainPPOConfig) -> tuple[int, int]:
 
     spec = native_policy_build_spec(config)
     if spec is None or not str(getattr(spec, "value_builder", "")):
-        raise ValueError("PPO model_backend='i4' requires a native policy and value builder")
+        raise ValueError("PPO model_backend='native' requires a native policy and value builder")
     policy = resolve_policy_parallelism(config, policy_ranks)
     return policy[0] * policy[1], critic_ranks
 
 
 def validate_ppo_config(config: PosttrainPPOConfig) -> None:
     """Validate only constraints spanning independently owned config sections."""
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.config.build import normalize_model_backend, resolve_precision
     from cosmos_framework.posttrain.config.rl import require_full_emergency_plan
     from cosmos_framework.posttrain.control.placement import (
@@ -113,6 +112,7 @@ def validate_ppo_config(config: PosttrainPPOConfig) -> None:
     )
     from cosmos_framework.posttrain.data.packer import validate_data_packer_factories
     from cosmos_framework.posttrain.roles.env.prompt import validate_dataset_source
+    from cosmos_framework.utils.lazy_config import instantiate
 
     if config.algorithm != "ppo":
         raise ValueError(f"PPO requires algorithm='ppo', got {config.algorithm!r}")

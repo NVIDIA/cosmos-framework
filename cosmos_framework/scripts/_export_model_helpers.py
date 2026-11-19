@@ -20,9 +20,9 @@ from typing import TYPE_CHECKING, Any, Callable
 import numpy as np
 
 if TYPE_CHECKING:
-    from cosmos_framework.utils.checkpoint_db import CheckpointDirHf
+    from cosmos_framework.utils.checkpoint_db import CheckpointDirHf, CheckpointHf
 
-_EDGE_MODEL_NAME = "nvidia/Cosmos3-Edge-Reasoner"
+_EDGE_MODEL_NAME = "nvidia/Cosmos3-Edge"
 
 # HF-standard processor/tokenizer files shipped at the snapshot root. The exported
 # config.json is deliberately absent (it must never be overwritten by bundling).
@@ -246,6 +246,27 @@ PROCESSOR_HF_INCLUDE = ("*.json", "*.jinja", "merges.txt", "vocab.json")
 # ('load_language_model' resolves the root model.safetensors.index.json,
 # whose weight_map points into 'transformer/*.safetensors').
 EDGE_VIT_BUNDLE_HF_INCLUDE = ("vision_encoder/*", *PROCESSOR_HF_INCLUDE)
+
+
+def resolve_backbone_download(configured_uri: str) -> CheckpointHf | None:
+    """Resolve HF directories, preserving registered revisions and legacy URI support."""
+    from cosmos_framework.utils.checkpoint_db import CheckpointConfig, CheckpointDirHf, sanitize_uri
+
+    if configured_uri.startswith("hf://"):
+        repository = configured_uri.removeprefix("hf://").rstrip("/")
+        if not _HF_REPO_ID_RE.fullmatch(repository):
+            return None
+        registry_uri = (
+            "s3://bucket/Cosmos3-Edge"
+            if repository == _EDGE_MODEL_NAME
+            else f"{_TOKENIZER_REGISTRY_URI_PREFIX}/{repository}"
+        )
+        checkpoint = CheckpointConfig.maybe_from_uri(sanitize_uri(registry_uri))
+        if checkpoint is not None and checkpoint.hf.repository == repository:
+            return checkpoint.hf
+        return CheckpointDirHf(repository=repository, revision="main")
+    checkpoint = CheckpointConfig.maybe_from_uri(sanitize_uri(configured_uri))
+    return checkpoint.hf if checkpoint is not None else None
 
 
 def processor_source_from_tokenizer_node(tokenizer_node: Any) -> dict[str, Any] | None:

@@ -392,7 +392,7 @@ class GradClip(Callback):
 
         if not isinstance(model, list):
             raw_model = getattr(getattr(model, "model", None), "model", model)
-            maybe_dump_post_clip(raw_model, global_norm, self.clip_norm, iteration, tag="i4")
+            maybe_dump_post_clip(raw_model, global_norm, self.clip_norm, iteration, tag="native")
 
         # 7. Record diagnostic stats: pre-clip per-mesh sub-norms plus the
         #    actual global rescale norm.

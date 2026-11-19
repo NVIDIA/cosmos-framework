@@ -75,10 +75,25 @@ def select_transfer_geometry(
     target_hw = (target_h, target_w)
     ratio = _scale_ratio(source_hw, target_hw)
     if ratio > 1.0 + _MAX_DISTORTION:
+        resize = (
+            f"{source_hw[1]}x{source_hw[0]} -> {target_hw[1]}x{target_hw[0]} causes {ratio - 1:.2%} "
+            "aspect distortion, exceeding 3%"
+        )
+        if aspect_ratio is not None:
+            # A forced bucket is the usual cause: direct_resize stretches the full frame and never crops.
+            try:
+                closest = select_transfer_geometry(source_hw, resolution=resolution).aspect_ratio
+                advice = f"Omit aspect_ratio: the closest trained bucket for this source is {closest!r}."
+            except ValueError:
+                advice = "No trained bucket is within 3% of this source either; skip this sample."
+            raise ValueError(
+                f"Unsupported Transfer sample: aspect_ratio={aspect_ratio!r} was requested, but "
+                f"transfer_resize_mode='direct_resize' stretches the full frame without cropping, so {resize}. "
+                + advice
+            )
         raise ValueError(
-            f"Unsupported Transfer sample: {source_hw[1]}x{source_hw[0]} -> "
-            f"{target_hw[1]}x{target_hw[0]} causes {ratio - 1:.2%} aspect distortion, exceeding 3%. "
-            "Choose a compatible source aspect ratio or skip this sample."
+            f"Unsupported Transfer sample: {resize}. No trained aspect-ratio bucket is within 3% of the source; "
+            "skip this sample."
         )
     return TransferGeometry(source_hw, target_hw, selected, ratio - 1.0)
 

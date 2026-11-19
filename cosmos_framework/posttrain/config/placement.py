@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Shared config-facing GPU placement vocabulary (DESIGN §4.0)."""
+"""Shared config-facing GPU placement vocabulary."""
 
 from __future__ import annotations
 

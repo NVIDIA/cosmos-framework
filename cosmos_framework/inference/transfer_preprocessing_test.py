@@ -56,6 +56,32 @@ def test_exact_three_percent_boundary_and_explicit_override() -> None:
         select_transfer_geometry((1080, 1920), resolution="480", aspect_ratio="4,3")
 
 
+def test_forced_aspect_ratio_error_names_the_field_and_the_bucket_that_fits() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        select_transfer_geometry((720, 1280), resolution="720", aspect_ratio="3,4")
+    message = str(excinfo.value)
+    assert "aspect_ratio='3,4' was requested" in message
+    assert "without cropping" in message
+    assert "Omit aspect_ratio: the closest trained bucket for this source is '16,9'." in message
+
+
+def test_forced_aspect_ratio_on_a_source_no_bucket_fits_does_not_suggest_omitting_it() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        select_transfer_geometry((1080, 2560), resolution="480", aspect_ratio="16,9")
+    message = str(excinfo.value)
+    assert "aspect_ratio='16,9' was requested" in message
+    assert "Omit aspect_ratio" not in message
+    assert "No trained bucket is within 3% of this source either" in message
+
+
+def test_auto_bucket_error_says_no_bucket_fits() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        select_transfer_geometry((1080, 2560), resolution="480")
+    message = str(excinfo.value)
+    assert "No trained aspect-ratio bucket is within 3%" in message
+    assert "aspect_ratio=" not in message
+
+
 @pytest.mark.parametrize("source_hw", [(1080, 2560), (720, 1080), (0, 1920)])
 def test_unsupported_source_is_rejected_without_extra_buckets(source_hw: tuple[int, int]) -> None:
     # The global size table also has a 2:3 robotics bucket, but this teacher was

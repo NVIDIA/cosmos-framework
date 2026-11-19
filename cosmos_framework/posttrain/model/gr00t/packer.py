@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """GR00T-N1.7 batch assembly: what a `Transition` carries and how Isaac's own collator rebuilds model inputs from it.
 
-Free functions over `Trajectory` (the batch-assembly seam, DESIGN.md v3; `data/packer/preference.py` is the other
+Free functions over `Trajectory` (the batch-assembly seam; `data/packer/preference.py` is the other
 instance): the `DataPacker` contract is token-shaped
 (rollout prompt ids, `policy_collate_fn(processed, max_len)`) and a VLA does not fit it without distortion.
 

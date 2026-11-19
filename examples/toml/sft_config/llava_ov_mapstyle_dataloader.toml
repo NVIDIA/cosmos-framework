@@ -26,7 +26,7 @@
 #       -m cosmos_framework.scripts.train \
 #       --sft-toml=examples/toml/sft_config/llava_ov_mapstyle_dataloader.toml -- \
 #       data_setting.max_tokens=16000 \
-#       checkpoint.load_path=/tmp/imaginaire4-output/cosmos_oss_alignment/vlm_llava_ov_demo/pre_exp012_llava_ov_mapstyle_dataloader/checkpoints/iter_000000100 \
+#       checkpoint.load_path=/tmp/cosmos-framework-output/cosmos_oss_alignment/vlm_llava_ov_demo/pre_exp012_llava_ov_mapstyle_dataloader/checkpoints/iter_000000100 \
 #       checkpoint.load_training_state=true
 #
 # Per-task remap (see _PATH_REMAPS["vlm"]):

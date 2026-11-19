@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Actor-side dispatch adaptation in `_Host.invoke` (Task A5, DESIGN §2.2/§2.3/§2.4).
+"""Actor-side dispatch adaptation in `_Host.invoke` (Task A5).
 
 `_resolve_dispatched` (workers/ray.py, module-level) is the piece that actually EXECUTES a
-`Dispatched` descriptor (built driver-side by `GridBackend._align_one`, Task A4): resolve its
+`Dispatched` descriptor (built driver-side by `GridBackend._align_one`): resolve its
 own producer refs, materialize bulk with `readers` threaded through for refcounted pop, then
 apply the reduce/split/one adaptation so the body signature never sees a list/shard.
 
@@ -193,7 +193,7 @@ def test_readers_threaded_store_pops_only_after_the_4th_consumer_fetch():
     """A single producer unit fed to 4 consumer cells (readers=4, e.g. a rank-mirror or
     Mirror fan-out edge): each simulated consumer resolves the SAME Dispatched (materialize
     True) — the refcounted `BulkStore` entry must survive the first 3 fetches and pop only
-    on the 4th (DESIGN §2.4), proving `readers` actually reaches `BulkStore.fetch` through
+    on the 4th, proving `readers` actually reaches `BulkStore.fetch` through
     `materialize_payload` -> transport.fetch."""
     store = BulkStore()
     action = _Blob(2000)  # above threshold=0 -> externalized to a BulkRef
@@ -228,9 +228,9 @@ def test_materialize_false_leaves_bulkref_unresolved():
 
 def test_split_on_metadata_false_with_bulk_is_still_post_materialize_byte_identical():
     """Guards the new on_metadata branch's gate: with `on_metadata=False` (the dataclass
-    default, and the only value that existed before Task A6), a split payload carrying real
+    default, and the only value that existed before the fast path), a split payload carrying real
     BulkRefs still takes the OLD path — materialize the whole producer payload first, THEN
-    apply the split fn to already-resolved values, exactly as Task A5 shipped it. Every
+    apply the split fn to already-resolved values, exactly as the original path did. Every
     BulkRef in this payload is fetched -- the OLD path materializes the WHOLE producer payload
     (all 4 samples) before splitting, so with readers=1 all 4 entries pop, not just the 2 the
     split fn eventually keeps. That "wasted" fetch of the dropped half is exactly the traffic
@@ -249,7 +249,7 @@ def test_split_on_metadata_false_with_bulk_is_still_post_materialize_byte_identi
 
 
 def test_on_metadata_split_fetches_only_kept_refs_and_releases_the_rest():
-    """DESIGN §2.3 opt-in fast path + §2.4 release protocol (Task A6): a list-of-samples
+    """the contract opt-in fast path + §2.4 release protocol (Task A6): a list-of-samples
     payload (each sample its own Trajectory carrying its own BulkRef `action`) is split on the
     PACKED metadata skeleton BEFORE materialization. Two simulated replicas (n=2) each keep a
     contiguous half and, per grid.py's split readers formula (readers = Kc·n, Kc=1 here),
@@ -316,7 +316,7 @@ def test_on_metadata_split_without_materialize_falls_through_unresolved():
     assert len(store) == 4  # nothing fetched, nothing released -- fully untouched
 
 
-# ── ingress selection (Task 8, DESIGN §3.4/§9.5): select on metadata, materialize the kept share ──
+# ── ingress selection (Task 8): select on metadata, materialize the kept share ──
 
 
 class _CountingMover:
@@ -347,16 +347,16 @@ def _fake_bulk_plane(n_items: int) -> tuple[BulkStore, _CountingMover]:
 
 def _dispatched(items: list, *, select_kw: dict, readers: int = 1) -> Dispatched:
     """A `Dispatched` wrapping the full packed `items` skeleton as a single `op="one"` producer
-    unit, carrying `select_chunk` (Task 6) parameterised by `select_kw` — the shape
+    unit, carrying `select_chunk` parameterised by `select_kw` — the shape
     `GridBackend._dispatch_from_spec` builds for the `("trainer", "train", "batch")` edge once a
-    call passes its control kwargs (Task 7), minus the driver-side plumbing this test bypasses."""
+    call passes its control kwargs, minus the driver-side plumbing this test bypasses."""
     return Dispatched(
         refs=[items], op="one", fn=None, index=0, n=1, readers=readers, select=_SELECT_CHUNK_REF, select_kw=select_kw
     )
 
 
 def test_unselected_bulk_is_never_fetched():
-    """The whole point (§3.4): bulk outside this rank's mini/micro/dp chunk must never move.
+    """The whole point: bulk outside this rank's mini/micro/dp chunk must never move.
     64 items -> micro (n_micro=4) keeps 16 -> dp (dp_world=2) keeps 8: only those 8 BulkRefs may
     ever reach `transport.fetch`."""
     store, transport = _fake_bulk_plane(n_items=64)
@@ -386,7 +386,7 @@ def test_unselected_bulk_is_not_released():
 
 @pytest.mark.parametrize("k_c,dp_world,expected_readers", [(4, 4, 1), (8, 4, 2), (2, 2, 1)])
 def test_reader_refcount_pops_each_entry_exactly_once(k_c, dp_world, expected_readers):
-    """readers = K_c / dp_world (§9.5). The pure-DP case (4, 4, 1) and (2, 2, 1) — where
+    """readers = K_c / dp_world. The pure-DP case (4, 4, 1) and (2, 2, 1) — where
     K_c == dp_world — PASSES even with the WRONG formula (readers=1 either way); (8, 4, 2) is the
     one that actually matters: with TP inside the replica (K_c=8 ranks sharing dp_world=4 DP
     groups, 2 TP-mirror ranks per group), each of the dp_world groups' kept items must be
@@ -444,7 +444,7 @@ def test_invoke_resolves_dispatched_reduce_arg_end_to_end():
 @pytest.mark.CPU
 def test_invoke_non_dispatched_arg_unaffected():
     """A plain (non-Dispatched) arg through `_Host.invoke` is completely unaffected by the
-    Dispatched-recognition branch — byte-identical to before Task A5."""
+    Dispatched-recognition branch — byte-identical to before that branch existed."""
     ray.init(ignore_reinit_error=True, num_cpus=2, include_dashboard=False, log_to_driver=False, _temp_dir="/tmp/rcray")
     try:
         host = _Host.remote()
@@ -487,7 +487,7 @@ def test_invoke_materializes_dispatched_and_refcount_pops_at_zero():
     to Dispatched — the existing egress path) externalizes into the actor's OWN `BulkStore`.
     That packed skeleton becomes `Dispatched(refs=[...], readers=2)` and is carried through TWO
     separate `invoke` calls simulating two consumer cells reading the same producer unit — the
-    refcounted entry must survive the first and pop only on the second (DESIGN §2.4), proven via
+    refcounted entry must survive the first and pop only on the second, proven via
     the actor-introspection `run` test seam (`len(actor._store)`), not the helper-level bypass."""
     ray.init(ignore_reinit_error=True, num_cpus=2, include_dashboard=False, log_to_driver=False, _temp_dir="/tmp/rcray")
     try:
@@ -534,7 +534,7 @@ def _on_metadata_split_invoke_setup():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_invoke_on_metadata_split_pulls_only_kept_bulk_via_the_release_seam():
-    """Closes the loop for Task A6's release-protocol seam (`_Host.invoke`'s `_release_dropped`
+    """Closes the loop for the release-protocol seam (`_Host.invoke`'s `_release_dropped`
     closure over `self._store`/`self._transport`) with a real local `_Host` actor -- mirrors
     A5's `test_invoke_materializes_dispatched_and_refcount_pops_at_zero` pattern.
 
@@ -621,7 +621,7 @@ def test_invoke_cross_actor_release_failure_surfaces_on_the_next_sweep():
     """Coverage gap: `_release_dropped`'s cross-actor branch fires `release_bulk.remote`
     and discarded the returned ObjectRef -- a remote-side failure (double release / accounting
     drift) would resolve into a Ray object nobody ever inspects, so it failed SILENTLY, unlike
-    the local branch which raises inline (DESIGN §2.4's KeyError posture). Fix: stash the
+    the local branch which raises inline. Fix: stash the
     ObjectRef in `self._pending_releases`; the top of every `_release_dropped` call does a
     bounded, non-blocking sweep (`ray.wait(timeout=0)`) and `ray.get`s anything that finished,
     raising `RuntimeError` on failure. Finding-3: that sweep is hoisted to the TOP of every
@@ -679,7 +679,7 @@ def test_invoke_cross_actor_release_failure_surfaces_on_the_next_sweep():
         ray.shutdown()
 
 
-# ── Task 9: `_Host.invoke` resolves the actor's REAL dp coordinate, not the (0, 1) pin ──────────
+# ── `_Host.invoke` resolves the actor's REAL dp coordinate, not the (0, 1) pin ─────────────────
 
 
 @pytest.mark.L0
@@ -688,7 +688,7 @@ def test_invoke_threads_the_actors_real_dp_coordinate_into_select_chunk():
     """`dp_group_sharded` is deleted; `select_chunk` is now the sole dp-axis owner, and it must see
     the ACTOR's real `(dp_rank, dp_world)` from `config/build.py::_dp_coords(self._pdims)` — not
     the `(0, 1)` pin `_Host.invoke` used while `dp_group_sharded` was still the live owner on this
-    path (Task 8). A pdims reporting `dp_rank=1, dp_world=2` must make this rank keep only its HALF
+    path. A pdims reporting `dp_rank=1, dp_world=2` must make this rank keep only its HALF
     of a select-carrying batch; the (0, 1) pin would have handed it all 4.
 
     `set_mesh` is bypassed (it calls `pdims.build_device_mesh`, which needs a live process group
@@ -740,7 +740,7 @@ def _stamped_group(group_id: str, spread: float) -> list[Trajectory]:
 
 
 def test_buffer_drain_releases_dropped_bulk_without_a_fetch_under_tp2() -> None:
-    """DESIGN §5: dropped bulk never moves. The buffer's `drain` is a lease-releasing egress: the host
+    """the contract: dropped bulk never moves. The buffer's `drain` is a lease-releasing egress: the host
     releases each drained BulkRef at its store instead of a bulk consumer materializing it. The kept
     group is pulled once per TP rank (readers=2) as usual; the dropped group is never fetched at all."""
     from cosmos_framework.posttrain.control.buffer import ExperienceBuffer, MetadataGate

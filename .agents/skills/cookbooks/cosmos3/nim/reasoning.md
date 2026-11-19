@@ -353,8 +353,8 @@ Action tensor and must not be sent directly to a robot. Refer to
 [Action Domains and Representations](action.md#domains-and-representations).
 
 The catalog reuses the exact user prompts from the
-[vLLM Reasoner notebook](../reasoner/run_with_vllm.ipynb). Answers in the
-[Reasoner Prompt Guide](../reasoner/reasoner_prompt_guide.md) come from another
+[vLLM Reasoner notebook](../../../cosmos3-inference-reasoning/references/vllm.md). Answers in the
+[Reasoner Prompt Guide](../../../cosmos3-inference-reasoning/references/prompt-guide.md) come from another
 run and are not golden NIM output.
 
 ## Errors

@@ -8,6 +8,7 @@ import random
 import socket
 import subprocess
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Sequence, cast
@@ -45,7 +46,7 @@ def _get_environment_info() -> dict[str, Any]:
     except Exception:
         commit_sha = None
     return {
-        "cosmos3_version": importlib.metadata.version("cosmos3"),
+        "cosmos3_version": importlib.metadata.version("cosmos-framework"),
         "commit_sha": commit_sha,
     }
 
@@ -70,6 +71,24 @@ class OmniModelDeploymentArgs(pydantic.BaseModel):
 class OmniRouterDeploymentArgs(pydantic.BaseModel):
     app: OmniAppArgs
     models: dict[str, OmniModelDeploymentArgs] = pydantic.Field(min_length=1)
+
+
+# Debug-replay inputs that name files on the server. They are for the CLI only: ``pickle_file`` is unpickled,
+# so it must be a file the operator created.
+_CLI_ONLY_SAMPLE_FIELDS = ("pickle_file", "tensors_file")
+
+
+class OmniServeSampleOverrides(OmniSampleOverrides):
+    """Sample overrides accepted by ``POST /generate``."""
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def _reject_cli_only_fields(cls, data: Any) -> Any:
+        if isinstance(data, Mapping):
+            fields = [name for name in _CLI_ONLY_SAMPLE_FIELDS if data.get(name) is not None]
+            if fields:
+                raise ValueError(f"{', '.join(fields)} cannot be set in a server request; use the inference CLI")
+        return data
 
 
 @ray.remote(num_gpus=1)
@@ -195,11 +214,10 @@ class OmniRouterDeployment:
         return {
             "environment": _get_environment_info(),
             "models": list(self.models.keys()),
-            "output_dir": str(self.output_dir),
         }
 
     @fastapi_app.post("/generate")
-    async def generate(self, sample_args: OmniSampleOverrides) -> SampleOutputs:
+    async def generate(self, sample_args: OmniServeSampleOverrides) -> SampleOutputs:
         if sample_args.model:
             if sample_args.model not in self.models:
                 raise fastapi.HTTPException(

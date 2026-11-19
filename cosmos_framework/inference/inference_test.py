@@ -1175,3 +1175,39 @@ def test_parallelism_config_sizes_the_vae_sharing_group_to_one_replica(
     assert config.context_parallel_shard_degree == cp_size
     assert config.cfg_parallel_shard_degree == cfgp_size
     assert config.vae_load_balance_group_size == expected_group
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    ("fixed_step", "sampler", "warns"),
+    [(True, "edm", True), (True, "unipc", False), (False, "edm", False), (False, "unipc", False)],
+)
+def test_loading_warns_when_a_fixed_step_checkpoint_ignores_the_sampler(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fixed_step: bool, sampler: str, warns: bool
+) -> None:
+    from cosmos_framework.inference import inference
+    from cosmos_framework.inference.args import DEFAULT_CHECKPOINT_NAME, OmniSetupOverrides
+    from cosmos_framework.inference.common.args import ConfigFileType
+
+    setup_args = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME, output_dir=tmp_path / "outputs", guardrails=False, sampler=sampler
+    ).build_setup(world_size=1, local_world_size=1, device_memory_bytes=80 * 1024**3)
+    setup_args.config_file_type = ConfigFileType.MODULE
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            rectified_flow_inference_config=SimpleNamespace(scheduler_type=sampler),
+            fixed_step_sampler_config=SimpleNamespace(t_list=[1.0]) if fixed_step else None,
+        ),
+        tokenizer_vision_gen=None,
+    )
+    warnings: list[str] = []
+    monkeypatch.setattr(inference, "_download_on_rank0", lambda _download: tmp_path)
+    monkeypatch.setattr(
+        inference.Cosmos3OmniModel, "from_pretrained_dcp", Mock(return_value=SimpleNamespace(model=model))
+    )
+    monkeypatch.setattr(inference.log, "warning", lambda message, *_args, **_kwargs: warnings.append(message))
+
+    inference.OmniInference._create(setup_args, guardrails=None, _timer=None)
+
+    assert any(f"--sampler {sampler} is ignored" in w for w in warnings) is warns

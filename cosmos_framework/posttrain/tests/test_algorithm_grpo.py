@@ -165,7 +165,7 @@ def test_legacy_objective_uses_configured_policy_temperature() -> None:
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_objective_requires_ids_or_packer():
-    """Shaping preference (spec 2026-07-28 §10): stored `prompt_ids` win; the packer is the FALLBACK.
+    """Shaping preference: stored `prompt_ids` win; the packer is the FALLBACK.
 
     So the packer is optional on the objective — a batch that carries ids needs none — but a
     trajectory with NEITHER source is unshapeable and must fail loud rather than guess."""

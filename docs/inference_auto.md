@@ -8,36 +8,36 @@ conditioning image for every camera.
 The released model is optimized for the reference camera rig. You can try a
 custom rig, but expect reduced quality as camera geometry diverges. If reference
 viewpoints suit your task, use the provided
-[WSM retargeting tool](../.agents/skills/cookbooks/cosmos3/simulation/auto/wsm/skills/scenario-to-rds-hq/references/hyperion-retargeting.md)
+[WSM retargeting tool](../.agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/skills/scenario-to-rds-hq/references/hyperion-retargeting.md)
 before rendering. To keep your own viewpoints, follow the
-[custom-rig mapping and post-training path](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-preparation.md#choose-reference-rig-or-custom-rig-generation).
+[custom-rig mapping and post-training path](../.agents/skills/cosmos3-inference-simulation-auto/references/input-preparation.md#choose-reference-rig-or-custom-rig-generation).
 Retargeting controls does not transform recorded RGB; keep conditioning and
 training images aligned with the chosen camera geometry.
 
-For your own data, follow the [Auto inference skill](../.agents/skills/cosmos3-nano-transfer-auto/inference/SKILL.md):
-use [Camera Rig Explorer](../.agents/skills/cookbooks/cosmos3/simulation/auto/wsm/docs/camera-rig/guide.md) to match cameras,
-prepare [training-aligned per-view captions](../.agents/skills/cosmos3-nano-transfer-auto/shared/caption-policy.md#keep-training-and-inference-captions-aligned),
+For your own data, follow the [Auto inference skill](../.agents/skills/cosmos3-inference-simulation-auto/SKILL.md#transfer-auto):
+use [Camera Rig Explorer](../.agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/docs/camera-rig/guide.md) to match cameras,
+prepare [training-aligned per-view captions](../.agents/skills/cosmos3-inference-simulation-auto/references/caption-policy.md#keep-training-and-inference-captions-aligned),
 then check synchronization before generation. The
-[sampling guide](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#sampling)
+[sampling guide](../.agents/skills/cosmos3-inference-simulation-auto/references/input-and-execution.md#sampling)
 explains guidance, shift and negative prompts, with recommended starting values
 and a one-change-at-a-time tuning workflow.
 
 Both **480p (832×480) and 720p (1280×720)** are supported. Choose
-`aspect_ratio: "16,9"` to match the training geometry. See [resolution and aspect ratio](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#resolution-and-aspect-ratio).
+`aspect_ratio: "16,9"` to match the training geometry. See [resolution and aspect ratio](../.agents/skills/cosmos3-inference-simulation-auto/references/input-and-execution.md#resolution-and-aspect-ratio).
 The training window is about **13.3 seconds at 30 FPS**. Longer RGB videos use
-chunkwise continuation; see [duration and joint-generation limits](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#generation-length-and-long-rollouts)
+chunkwise continuation; see [duration and joint-generation limits](../.agents/skills/cosmos3-inference-simulation-auto/references/input-and-execution.md#generation-length-and-long-rollouts)
 before changing a 10-second example into a 20- or 30-second request.
 
 For 10-FPS or other lower-rate recordings, read
-[source timing versus model FPS versus playback FPS](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#source-timing-model-fps-and-playback-fps).
+[source timing versus model FPS versus playback FPS](../.agents/skills/cosmos3-inference-simulation-auto/references/input-and-execution.md#source-timing-model-fps-and-playback-fps).
 The reference camera rate is 30 FPS. `--fps` affects model conditioning and does
 not resample controls. Match it to the source sampling rate.
 
 Start with the [shared daytime example](#download-the-shared-example) below.
-The [native Framework notebook](../.agents/skills/cookbooks/cosmos3/simulation/auto/run_auto_with_cosmos_framework.ipynb)
+The [native Framework notebook](../.agents/skills/cosmos3-inference-simulation-auto/references/transfer-auto-cosmos-framework.md)
 uses the same published sample and sampling settings, with timestamped-caption
 selection. To generate WSM controls from a scene, use the independently installable
-[WSM renderer](../.agents/skills/cookbooks/cosmos3/simulation/auto/wsm/README.md).
+[WSM renderer](../.agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/README.md).
 
 ## Environment and checkpoint
 
@@ -120,7 +120,7 @@ names, not positional `c0`, `c1`, etc.
 From the Framework repository root, after the downloads above:
 
 ```bash
-AUTO_NEGATIVE_PROMPT="$(cat .agents/skills/cosmos3-nano-transfer-auto/inference/assets/negative-prompt.txt)"
+AUTO_NEGATIVE_PROMPT="$(cat .agents/skills/cosmos3-inference-simulation-auto/assets/negative-prompt.txt)"
 torchrun --standalone --nproc-per-node=4 \
   -m cosmos_framework.scripts.inference \
   -i "$AUTO_SAMPLE_ROOT/input-transfer-auto.jsonl" \
@@ -151,7 +151,7 @@ For text-to-video, use `model_mode: "text2video"` without `vision_path` on any
 camera and without initial RGB conditioning; keep the WSM controls and captions.
 
 Models with rig embeddings require the supported
-[physical camera identities](../.agents/skills/cosmos3-nano-transfer-auto/post-training/references/data-contract.md#camera-identities);
+[physical camera identities](../.agents/skills/cosmos3-inference-simulation-auto/references/camera-identities.md);
 `CAMERA_VIEW_MAPPING` supplies their learned IDs. Subsets and reordered views
 retain those IDs. Models without rig embeddings keep the existing camera-key behavior.
 For per-camera text models, `negative_prompt` alone is ignored by the per-view

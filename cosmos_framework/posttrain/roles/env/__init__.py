@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""roles.env — Env / Source variants (DESIGN §1.3). Base in `base.py`; concrete
+"""roles.env — Env / Source variants. Base in `base.py`; concrete
 sources (dataset, sim, world-model) in sibling modules.
 
 **Every re-export below is LAZY, and that is load-bearing rather than tidy.** This barrel

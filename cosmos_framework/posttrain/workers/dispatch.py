@@ -188,7 +188,7 @@ def route_sharded(P: int, R_c: int) -> tuple[str, int]:
             f"Sharded: producer units P={P} and consumer replicas R_c={R_c} must both be >= 1 — a "
             f"Sharded edge needs at least one producer unit and one consumer replica (P==0 routes an "
             f"empty batch through reduce; R_c==0 divides by zero). If P looks like 0, a producer WG "
-            f"may be mis-declared; declare SPMD producers at ranks=1 (spec 2026-07-22 §2.2)"
+            f"may be mis-declared; declare SPMD producers at ranks=1"
         )
 
     if P == R_c:
@@ -207,12 +207,12 @@ def route_sharded(P: int, R_c: int) -> tuple[str, int]:
         f"Sharded: producer units P={P} and consumer replicas R_c={R_c} are not evenly divisible "
         f"— declare a mesh with matching counts, or (P<R_c) declare split= / (P>R_c) declare reduce=. "
         f"If the producer is a multi-rank SPMD helper, its mirrored rank lanes inflate P — declare it "
-        f"at ranks=1 so its output counts as one unit per replica (spec 2026-07-22 §2.2)"
+        f"at ranks=1 so its output counts as one unit per replica"
     )
 
 
 def readers_for(Kc: int, n: int, op: str, *, select: bool, dp_world: int | None = None) -> int:
-    """How many consumer ranks will each independently pull a given kept ref (spec §9.5).
+    """How many consumer ranks will each independently pull a given kept ref.
 
     This is the producer's `BulkStore` refcount: the entry pops only once every reader has pulled,
     so too low faults a later puller (`KeyError`) and too high leaks the entry.

@@ -120,6 +120,6 @@ modes are documented in [`docs/reference/checkpoint.md`](reference/checkpoint.md
    "single process" / "shared model" / "sync" into any signature.
 2. **rollout receives weights *through* the weight-transfer edge** (no-op today); it never
    reaches into `policy.model`. Keeps the seam for real resharding + a separate inference
-   engine (§8.2 #4).
+   engine.
 3. **Control is always imperative** — a plain `train()` loop; topology is explicit wiring
    (WGs + groups), never a graph DSL.

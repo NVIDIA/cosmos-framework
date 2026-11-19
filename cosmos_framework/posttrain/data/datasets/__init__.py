@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """data.datasets — concrete dataset implementations (storage/decode/snap/shuffle/
-pack). The data layer (DESIGN §1.3): pipeline-agnostic sample producers, consumed by
+pack). The data layer: pipeline-agnostic sample producers, consumed by
 the `roles/env/` source nodes. No `Trajectory`/role/placement semantics here."""
 
 from cosmos_framework.posttrain.data.datasets.dpo_preference import DPOPreferenceDataset

@@ -204,6 +204,8 @@ def two_way_attention(
     packed_key_states: SequencePack,
     packed_value_states: SequencePack,
     packed_key_states_normalized: SequencePack | None = None,
+    *,
+    und_only: bool = False,
 ):
     """
     Performs two-way attention with causal and full attention.
@@ -318,6 +320,9 @@ def two_way_attention(
 
     # [1,N_und,heads,head_dim] -> [N_und,heads,head_dim] -> [N_und,heads*head_dim]
     causal_out = causal_res.squeeze(0).flatten(-2, -1)  # type: ignore  # [N_und,heads*head_dim]
+
+    if und_only:
+        return from_mode_splits(causal_out, causal_out.new_empty((0, causal_out.shape[-1])), packed_query_states)
 
     full_q, full_q_offsets = get_full_only_seq(packed_query_states)
     max_full_len = packed_query_states["max_full_len"]

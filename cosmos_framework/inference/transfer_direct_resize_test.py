@@ -142,10 +142,10 @@ def test_direct_stage1_transfer_enables_framewise_ar(
         ),
         ({"teacher_forcing_frames_per_chunk": 2}, {}, "one latent frame"),
         ({}, {"autoregressive": False}, "Stage 1 teacher_forcing"),
-        ({}, {"num_first_chunk_conditional_frames": 1}, "exactly one control hint"),
-        ({}, {"share_vision_temporal_positions": False}, "share_vision_temporal_positions"),
-        ({}, {"control_guidance": 2.0}, "control_guidance=1.0"),
-        ({}, {"edge": {}}, "exactly one control hint"),
+        ({}, {"num_first_chunk_conditional_frames": 1}, r"num_first_chunk_conditional_frames=1 \(must be 0\)"),
+        ({}, {"share_vision_temporal_positions": False}, r"share_vision_temporal_positions=false \(must be true"),
+        ({}, {"control_guidance": 2.0}, r"control_guidance=2.0 \(must be 1.0"),
+        ({}, {"edge": {}}, r"2 control hints .* \(must be exactly 1\)"),
     ],
 )
 def test_direct_causal_transfer_rejects_unsupported_contract(
@@ -170,6 +170,34 @@ def test_direct_causal_transfer_rejects_unsupported_contract(
     }
     with pytest.raises(ValueError, match=message):
         OmniSampleOverrides(**values).build_sample(model_config=config)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_direct_causal_transfer_error_names_only_the_broken_requirements(tmp_path: Path) -> None:
+    config = _fake_vfm_model_config()
+    config.video_temporal_causal = True
+    config.causal_training_strategy = "teacher_forcing"
+    config.teacher_forcing_frames_per_chunk = 1
+    control_path = tmp_path / "depth.mp4"
+    control_path.touch()
+    sample = OmniSampleOverrides(
+        name="two_culprits",
+        output_dir=tmp_path / "output",
+        model_mode=ModelMode.VIDEO2VIDEO,
+        depth={"control_path": str(control_path)},
+        transfer_resize_mode="direct_resize",
+        control_guidance=1.5,
+        num_first_chunk_conditional_frames=1,
+    )
+    with pytest.raises(ValueError) as excinfo:
+        sample.build_sample(model_config=config)
+
+    message = str(excinfo.value)
+    assert "control_guidance=1.5" in message
+    assert "num_first_chunk_conditional_frames=1" in message
+    assert "control hints" not in message
+    assert "share_vision_temporal_positions" not in message
 
 
 @pytest.mark.L0
