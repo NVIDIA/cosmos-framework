@@ -4,7 +4,7 @@ SPDX-License-Identifier: OpenMDW-1.1 -->
 # Deployment
 
 Use this page to authenticate to NVIDIA NGC, choose a model, launch Generator or
-Reasoner, and verify the selected service. The commands pin the current 2.2.0
+Reasoner, and verify the selected service. The commands target the 2.2.0
 release image. Use the [Support Matrix](support-matrix.md) to choose a
 compatible configuration.
 
@@ -56,9 +56,9 @@ The default is `latency`.
 
 Set `NIM_MODEL_TYPE=reasoner` and choose `NIM_MODEL_VARIANT=edge`, `nano`, or
 `super`. Reasoner rejects `NIM_PERF_PROFILE` at startup. DFlash speculative
-decoding is on by default for Nano and Super. Set `NIM_USE_DFLASH=0` to
+decoding is on by default for Nano and Super. Set `NIM_SPECULATIVE_METHOD=none` to
 disable it. Edge has no DFlash draft: its profiles disable DFlash and reject
-`NIM_USE_DFLASH=1` (refer to [Configuration](configuration.md#speculative-decoding)).
+`NIM_SPECULATIVE_METHOD=dflash` (refer to [Configuration](configuration.md#speculative-decoding)).
 
 ### Precision Selection
 
@@ -124,21 +124,12 @@ Do not replace the versioned tag with `latest` or another unvalidated image.
 
 ### Set the Reasoner Memory Share on Unified-Memory Systems
 
-On NVIDIA DGX Spark/GB10 and Jetson AGX Thor, the NIM gives the model 70% of the
-unified host/device memory pool. It applies that share to profile floors and
-uses it as the Reasoner `NIM_GPU_MEMORY_UTILIZATION` default. No variable is
-required. Lower the share only when host measurements show that media
-processing or other host workloads need more memory, for example:
-
-```bash
-export NIM_GPU_MEMORY_UTILIZATION=0.60
-```
-
-If you set a value, pass `-e NIM_GPU_MEMORY_UTILIZATION` in every Reasoner
-launch command on that system. Profile selection and preflight always use the
-70% share, so the value does not change the preflight result. Do not set it
-for Generator. Refer to
-[Reasoner Context and Scheduling](configuration.md#context-and-scheduling).
+On NVIDIA DGX Spark/GB10 and Jetson AGX Thor, the NIM uses 70% of the
+shared pool for profile selection. Reasoner reserves memory for video decoders,
+CUDA contexts, and headroom before assigning the remaining pool to vLLM.
+Normally leave `NIM_GPU_MEMORY_UTILIZATION` unset. If measurements require an
+override, pass it in every Reasoner launch. It does not change profile preflight.
+Refer to [Context and Scheduling](configuration.md#context-and-scheduling).
 
 ## Run the Pre-Download Profile Preflight
 
@@ -252,9 +243,8 @@ docker rm -f cosmos3-generator
 
 ### DGX Spark and Jetson AGX Thor
 
-Use Nano. The NIM applies the unified-memory default. Add
-`-e NIM_GPU_MEMORY_UTILIZATION="$NIM_GPU_MEMORY_UTILIZATION"` only if you
-exported a lower measured value:
+Use Nano and leave the memory allocation automatic. If you need an explicit
+override, add `-e NIM_GPU_MEMORY_UTILIZATION` to the launch:
 
 ```bash
 docker run -d --name cosmos3-reasoner \
@@ -274,7 +264,7 @@ docker run -d --name cosmos3-reasoner \
 ### Discrete GPU Example
 
 This example launches Super FP8 Reasoner. It needs compute capability 8.9+,
-67 GiB of VRAM usable after the 4-GiB Reasoner reserve, and 43 GiB of system
+67 GiB of VRAM usable after the Reasoner runtime reserves, and 43 GiB of system
 memory (refer to
 [Reasoner Profiles](support-matrix.md#reasoner-profiles)):
 
@@ -314,12 +304,8 @@ For Edge Reasoner, replace the model selector lines in the command in
 
 The Responses API stays enabled by default (`NIM_DISABLE_RESPONSES_ROUTE=false`).
 
-> **Known issue:** With `NIM_ENABLE_STREAMING=true`, Edge Reasoner fails at
-> startup with the default `NIM_STREAMING_SPEC_METHOD=dflash`, because Edge
-> does not support DFlash. To stream with Edge, set both
-> `NIM_ENABLE_STREAMING=true` and `NIM_STREAMING_SPEC_METHOD=none`, which turns
-> off speculative decoding for streaming (refer to
-> [Advanced Streaming Controls](configuration.md#advanced-streaming-controls)).
+For Edge streaming, add `NIM_ENABLE_STREAMING=true`. Edge defaults to
+`NIM_SPECULATIVE_METHOD=none`.
 
 For Edge-DROID, which is
 [experimental](support-matrix.md#choose-a-model), replace the model selector

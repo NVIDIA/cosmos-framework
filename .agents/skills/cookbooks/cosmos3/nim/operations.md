@@ -253,7 +253,7 @@ Failures](transfer.md#validation-and-common-failures).
 | HTTP 422 media error | Media content/order/count/preprocessing failed | Put media before text, use data URLs, and check operator media limits |
 | Chat Completions route 404 | Client reached Generator or the selected image lacks the route | Confirm Reasoner through `/v1/metadata` and inspect live OpenAPI |
 | Responses route 404 | Route disabled, absent, or requested from Generator | Confirm Reasoner metadata, then use Chat Completions and inspect live OpenAPI/operator setting |
-| Host OOM or near-zero `MemAvailable` on unified memory | The Reasoner memory share is too large for the shared host/device pool and the host workload | Remove any explicit `NIM_GPU_MEMORY_UTILIZATION` above the `0.70` default, or lower it from host measurements, then restart |
+| Host OOM or near-zero `MemAvailable` on unified memory | The Reasoner memory share is too large for the shared host/device pool and the host workload | Use automatic memory sizing or lower an explicit `NIM_GPU_MEMORY_UTILIZATION` from host measurements, then restart |
 | Structured output is prose or invalid JSON | The request did not enforce a JSON schema | Send a JSON schema in `response_format` (Chat Completions) or `text.format` (Responses). With the catalog, add `--guided-output`. Refer to [Structured Output](reasoning.md#structured-output) |
 | KV-cache/context OOM | Context, media tokens, batching, or concurrency is too large | Reduce media FPS and concurrency; the default unchunked multimodal path enforces a 16,384 batched-token minimum (24,300 on Edge), so enable multimodal chunking with `NIM_DISABLE_CHUNKED_MM_INPUT=0` only after validation before lowering that budget |
 

@@ -22,7 +22,7 @@ but the Dynamo operator is still required.
 
 Replace values in `<angle-brackets>` with your own values before applying.
 The workers and [`model-download.yaml`](model-download.yaml) use the same NIM
-image, `nvcr.io/nim/nvidia/cosmos3:2.1.0`. The regular frontend stays pinned
+image, `nvcr.io/nim/nvidia/cosmos3:2.2.0`. The regular frontend stays pinned
 to `nvcr.io/nvidia/ai-dynamo/dynamo-frontend-nightly:20260906-c70f1c7`.
 The tested NIM image bundled `ai-dynamo==1.5.0.dev20260902`, with the operator's
 canonical `runtimeVersionOverride: "1.5.0"`. Verify compatibility among the
@@ -75,11 +75,8 @@ selection. For unified-memory hosts, follow the
 in the Job and workers before starting either. Do not assume these
 discrete-GPU pod settings apply unchanged.
 
-To match the tested configuration, workers set `NIM_ENABLE_WARMUP=0` and disable
-text, video, and SigLIP guardrails explicitly. Review those policy choices
-before use. To enable the checks, remove those guardrail overrides or set them
-to `1`. Disabled warmup means Ready does not establish representative inference
-has completed. Do not copy a cold-start duration as an expected startup time.
+The Reasoner has no NIM-provided Generator guardrails. Verify representative
+requests after readiness before accepting traffic.
 
 ## Prepare the Namespace and Cache
 

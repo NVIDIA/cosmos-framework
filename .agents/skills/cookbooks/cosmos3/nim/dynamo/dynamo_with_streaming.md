@@ -28,7 +28,7 @@ the adapter and session requests below on your deployment.
 ## Set the NIM Image
 
 [`reasoner_with_streaming.yaml`](reasoner_with_streaming.yaml) uses
-`nvcr.io/nim/nvidia/cosmos3:2.1.0` for both the frontend and the workers. If you change it,
+`nvcr.io/nim/nvidia/cosmos3:2.2.0` for both the frontend and the workers. If you change it,
 change both occurrences and the download Job together. The image must include
 `/opt/nim/streaming/dynamo/`.
 
@@ -60,10 +60,9 @@ one in the following ways:
   the regular pinned Dynamo image
 - Changes the frontend module
 - Enables `NIM_ENABLE_STREAMING`
-- Disables asynchronous scheduling
 - Adds the shared streaming endpoint to the frontend and workers
 
-The YAML sets synchronous scheduling explicitly and uses the same
+Streaming forces synchronous scheduling. The YAML uses the same
 `NIM_DYNAMO_STREAMING_ENDPOINT` on frontend and workers. Keep that value
 identical. Use a distinct endpoint for each separate model pool.
 
@@ -77,17 +76,14 @@ Edge supports the same REST session API in BF16 and FP8. In both
   value: edge
 - name: NIM_PRECISION
   value: fp8  # or bf16
-- name: NIM_USE_DFLASH
-  value: '0'
-- name: NIM_STREAMING_SPEC_METHOD
+- name: NIM_SPECULATIVE_METHOD
   value: none
 ```
 
 Replace the existing variant and precision entries rather than adding
 duplicates. Keep the image, cache, and GPU selectors aligned between the Job and
-workers. Edge does not support DFlash in this version. Set the streaming method
-explicitly to `none`, because streaming defaults to DFlash and Edge has no
-draft. The shared frontend needs no model-specific change. The client discovers
+workers. Edge does not support DFlash and defaults to `none`. The shared
+frontend needs no model-specific change. The client discovers
 the Edge model from `/v1/streaming/config`. Use a separate streaming endpoint if
 running Edge alongside a Nano or Super pool.
 

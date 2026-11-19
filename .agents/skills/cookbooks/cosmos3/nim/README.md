@@ -108,6 +108,9 @@ require `NIM_MODEL_VARIANT=multiview`. Examples save outputs under the ignored
 Validate the selected configuration with representative requests before
 production use.
 
+For Reasoner tuning, refer to [Speculative Decoding](configuration.md#speculative-decoding)
+and [Video Decode Concurrency](configuration.md#video-decode-concurrency).
+
 ## AI-Assisted Usage
 
 Open this directory in a compatible coding assistant to get guided help with

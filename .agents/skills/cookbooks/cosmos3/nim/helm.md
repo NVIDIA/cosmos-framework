@@ -146,9 +146,8 @@ env:
     value: nano
 ```
 
-On NVIDIA DGX Spark/GB10 or Jetson AGX Thor nodes, the NIM defaults
-`NIM_GPU_MEMORY_UTILIZATION` to `0.70`. Set a lower value only from host
-measurements. Refer to
+On NVIDIA DGX Spark/GB10 or Jetson AGX Thor nodes, leave
+`NIM_GPU_MEMORY_UTILIZATION` unset for automatic memory sizing. Refer to
 [Set the Reasoner Memory Share](deployment.md#set-the-reasoner-memory-share-on-unified-memory-systems).
 
 ### OpenTelemetry

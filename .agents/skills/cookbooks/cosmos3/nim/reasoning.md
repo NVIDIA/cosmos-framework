@@ -107,7 +107,7 @@ uv run python examples/reasoner.py --case all
 
 The catalog was validated on Super BF16 (hardware floor in the
 [Support Matrix](support-matrix.md#reasoner-profiles)) with
-`NIM_USE_DFLASH=0` and `NIM_VIDEO_PRUNING_RATE=0`. Unless a case records an
+`NIM_SPECULATIVE_METHOD=none` and `NIM_VIDEO_PRUNING_RATE=0`. Unless a case records an
 override, it explicitly sends `temperature=0.7`, `top_p=0.8`, `top_k=20`,
 `presence_penalty=0`, and `repetition_penalty=1`. Cases also send `seed=0`
 where the vLLM notebook sets it. The runner only warns on another variant, so
@@ -231,8 +231,8 @@ and `top_logprobs` is omitted, one is requested. Some prompts ask for literal
 ## Reasoner DFlash
 
 Nano and Super Reasoner use their bundled DFlash drafts by default. Set
-`NIM_USE_DFLASH=0` to run target-only. Edge has no DFlash and rejects
-`NIM_USE_DFLASH=1`. Requests do not change. Refer to
+`NIM_SPECULATIVE_METHOD=none` to run target-only. Edge has no DFlash and rejects
+`NIM_SPECULATIVE_METHOD=dflash`. Requests do not change. Refer to
 [Speculative Decoding](configuration.md#speculative-decoding) and
 [Reasoner Checkpoint](bring-your-own-checkpoint.md#reasoner-checkpoint).
 

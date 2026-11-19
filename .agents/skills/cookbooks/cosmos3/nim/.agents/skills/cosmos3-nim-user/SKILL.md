@@ -55,10 +55,9 @@ rules while doing so:
   DGX Spark.
 - **Reasoner on DGX Spark or Jetson AGX Thor**
   ([memory share](../../../deployment.md#set-the-reasoner-memory-share-on-unified-memory-systems)):
-  the NIM counts 70% of the shared pool toward profile floors and defaults
-  `NIM_GPU_MEMORY_UTILIZATION` to `0.70`. Suggest a lower value only from host
-  measurements, then include it in every Reasoner launch command. Preflight
-  ignores it and always uses the 70% share.
+  the NIM counts 70% of the shared pool toward profile floors and subtracts
+  runtime reserves before sizing vLLM. Leave `NIM_GPU_MEMORY_UTILIZATION` unset
+  unless measurements require an override. Preflight ignores this override.
 - **NGC login** ([authenticate](../../../deployment.md#authenticate-to-ngc)):
   mention that Docker stores the login unless a credential helper is configured
   (the helper is optional) and that `--password-stdin` protects only shell
@@ -105,6 +104,9 @@ tested-GPU inventory is the validation scope, not an allowlist.
 Never clear page cache, delete model cache, stop unidentified processes, or
 reboot automatically. Page-cache reclamation is an approved host-wide
 diagnostic only, with explicit operator confirmation and before/after evidence.
+
+For Reasoner tuning, follow [Speculative Decoding](../../../configuration.md#speculative-decoding)
+and [Video Decode Concurrency](../../../configuration.md#video-decode-concurrency).
 
 ## 4. Route the task
 

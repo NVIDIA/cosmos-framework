@@ -105,8 +105,8 @@ automatically, so it does not download profile artifacts. With `NIM_MODEL_PATH`,
 profile's DFlash draft, which Nano and Super Reasoner enable by default. Mount a
 matching Nano or Super draft through
 `NIM_DFLASH_MODEL_PATH` (absolute local path, no `hf://`), or set
-`NIM_USE_DFLASH=0` to run target-only. Edge has no DFlash. It defaults to
-`NIM_USE_DFLASH=0` and rejects `1`. The draft needs only:
+`NIM_SPECULATIVE_METHOD=none` to run target-only. Edge has no DFlash. It defaults to
+`NIM_SPECULATIVE_METHOD=none` and rejects `dflash`. The draft needs only:
 
 ```text
 /byoc/cosmos3-dflash/
@@ -118,7 +118,7 @@ Add these options to the Reasoner `docker run` command, with
 `DFLASH_CHECKPOINT` set to the host draft directory:
 
 ```text
--e NIM_USE_DFLASH=1 \
+-e NIM_SPECULATIVE_METHOD=dflash \
 -e NIM_DFLASH_MODEL_PATH=/byoc/cosmos3-dflash \
 -v "$DFLASH_CHECKPOINT:/byoc/cosmos3-dflash:ro"
 ```
@@ -170,7 +170,7 @@ validation baseline.
 | Hugging Face source rejected offline | `hf://` requires download but downloads are disabled | Use an absolute pre-downloaded local path |
 | Hugging Face authorization fails | Token, repository ID, revision, network, or cache is invalid | Check `HF_TOKEN`, the URI, connectivity, and a writable cache without logging the token |
 | DFlash path is rejected | The draft path is relative, uses `hf://`, is not mounted, or lacks one of its two required files | Use an absolute local mount containing `config.json` and `model.safetensors` |
-| DFlash configuration is rejected | DFlash is disabled, DFlash is enabled on Edge (including through `NIM_OPTIMIZATION_PRESET=TPOT`), the draft does not match the Nano/Super target, or `NIM_DFLASH_CONFIG` sets reserved `method`/`model` keys | For Edge, leave `NIM_USE_DFLASH` unset or `0`; otherwise use the selected Reasoner's matching draft, keep DFlash enabled, and remove reserved keys; refer to [Speculative Decoding](configuration.md#speculative-decoding) |
+| DFlash configuration is rejected | DFlash is disabled, DFlash is enabled on Edge (including through `NIM_OPTIMIZATION_PRESET=TPOT`), the draft does not match the Nano/Super target, or `NIM_SPECULATIVE_CONFIG` sets reserved `method`/`model` keys | For Edge, leave `NIM_SPECULATIVE_METHOD` unset or `none`; otherwise use the selected Reasoner's matching draft, keep DFlash enabled, and remove reserved keys; refer to [Speculative Decoding](configuration.md#speculative-decoding) |
 | Metadata shows `default` | Override was omitted, rejected, or applied to another container | Inspect launch environment, mounts, startup logs, and `/v1/metadata` |
 
 For broader startup, cache, GPU, and readiness diagnosis, refer to
