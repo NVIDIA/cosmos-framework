@@ -494,6 +494,36 @@ their duration and durable capacity; if correctness, finite loss, or storage
 checks fail, stop the affected attempt and preserve it. Do not change the target,
 margin, seed list, or one arm's horizon in response to quality outcomes.
 
+## Memory evidence under the v11 observer (2026-11-19)
+
+**This section is separate memory evidence, not a relabel of the expert-LR 0.1x 512-update study.**
+The study packets sample host memory with the v10 measurement overlay. Its completed arms 38726469
+(NF4) and 38726470 (BF16) have complete native allocator and GPU evidence, but report
+`host_pss_complete = false` (`incomplete_host_pss`): a teardown sample of an exiting multi-GiB
+process was unreadable. **The study's own memory guard (complete host PSS in both arms of every seed)
+is therefore unmet as written**, and it stays unmet; its rule and arms are unchanged.
+
+Packet `alpamayo-memory-v11-06a2b84-v1` (protocol `8bbd2be7…`, locked before any outcome) reran the
+matched pair with the staged source's v11 observer (`proc-identity-state-read-attempts-v11`: 12 s
+confirmed-exit wait, 13.5 s large-teardown collection window). Recipe: study v3 `native_options(mode, 17)`
+(expert-LR 0.1x, full activation recompute, 512-update schedule) unchanged except `pause_after_step=24`,
+`save_every=12` (checkpoints at 12 and 24), 2-row evaluations at updates 0 and 24, and job identity;
+cohort JSONLs staged byte-identically on node-local disk; model snapshot pre-read until ctimes were
+stable. One concurrent single-A100 job per arm on native `06a2b84`. Rule: complete host PSS and valid
+GPU evidence in every sample, allocator records present, and BF16-minus-NF4 at least 6 GiB on both the
+sampled owned-device-process peak and the native allocator peak.
+
+| Arm (job) | Samples (all host-PSS complete) | Owned-process GPU peak | Allocator peak allocated / reserved | Host PSS peak |
+| --- | ---: | ---: | ---: | ---: |
+| NF4 LoRA (38759905) | 752 | 67.104 GiB | 64.664 / 65.971 GiB | 43.055 GiB |
+| BF16 LoRA (38759906) | 793 | 76.240 GiB | 74.009 / 75.107 GiB | 42.934 GiB |
+| **Saving** | | **9.137 GiB** | **9.345 GiB** allocated | NF4 +0.121 GiB |
+
+**The memory rule passes** with complete evidence (comparison SHA-256 `a3c319f7…`). The allocator peaks
+reproduce the expert-LR screen (64.664/74.009 GiB) exactly. Sampled peaks are lower bounds; one seed,
+24 updates with two checkpoint writes and portable export, no full evaluation. The BF16 arm's 76.2 GiB
+owned-process peak leaves little headroom on an 80 GB A100.
+
 ## Completed native engineering checks
 
 The [completed ten-update engineering run](evidence/native_qlora_family_engineering_4cba88f.json)
