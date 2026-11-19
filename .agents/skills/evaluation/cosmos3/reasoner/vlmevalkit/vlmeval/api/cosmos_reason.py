@@ -297,6 +297,10 @@ class CosmosReason(BaseAPI):
         self.response_format = kwargs.pop('response_format', None)
         # Generic payload passthrough for vLLM-specific fields (e.g. structured_outputs).
         self.extra_body = kwargs.pop('extra_body', None)
+        # Opt-in; never forward evidence configuration to BaseAPI or the endpoint.
+        self.execution_evidence_dir = kwargs.pop('execution_evidence_dir', None)
+        self.execution_processor_profile = kwargs.pop('execution_processor_profile', None)
+        self._last_execution_record = None
         # Default Qwen3 / Reason2 setup.
         self.image_patch_size = kwargs.pop('image_patch_size', None)
         self.key = key
@@ -533,13 +537,35 @@ class CosmosReason(BaseAPI):
             input_msgs.append(dict(role='user', content=output[0]))
         return input_msgs, video_kwargs
 
+    def _record_execution(self, payload, raw, media=None):
+        if self.execution_evidence_dir is None:
+            return
+        from pathlib import Path
+        import tempfile
+        from vlmeval.execution_evidence import build_execution_record
+
+        record = build_execution_record(payload, raw, media=media,
+                                        processor_profile=self.execution_processor_profile,
+                                        requested_model_revision=os.environ.get("COSMOS_MODEL_REVISION", "unknown"))
+        directory = Path(self.execution_evidence_dir)
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # O_EXCL + mode 0600 from mkstemp, unique across processes/threads/retries.
+        fd, path = tempfile.mkstemp(prefix='response-', suffix='.json', dir=directory)
+        with os.fdopen(fd, 'w') as output:
+            json.dump(record, output, allow_nan=False)
+            output.write('\n')
+        self._last_execution_record = record
+
     def generate_inner(self, inputs, **kwargs) -> str:
         self._last_error_type = None  # reset per-sample; prevents leaking across samples
+        self._last_execution_record = None
+        execution_media = {}
         try:
             input_msgs, video_kwargs = self.prepare_inputs(inputs)
         except Exception as e:
             # Non-fail_msg sentinel skips BaseAPI retry (it retries only when fail_msg in answer).
             logger.warning(f'Video preparation failed (skipping): {type(e).__name__}: {e}')
+            self._record_execution({'model': self.model}, {})
             return 0, 'VIDEO_LOAD_FAILED', None
         kwargs.pop('dataset', None)
         temperature = kwargs.pop('temperature', self.temperature)
@@ -584,6 +610,22 @@ class CosmosReason(BaseAPI):
                     'mm_processor_kwargs': video_kwargs
                 })
 
+        if self.execution_evidence_dir is not None:
+            payload['return_token_ids'] = True
+            # Input geometry is local request evidence, not effective server geometry.
+            messages = inputs if 'role' not in inputs[0] else [
+                item for message in inputs for item in message['content']]
+            images = [item for item in messages if item.get('type') == 'image']
+            if images and self.img_size == -1:
+                from PIL import Image
+                dimensions = []
+                for image in images:
+                    with Image.open(image['value']) as source:
+                        dimensions.append({'width': source.width, 'height': source.height})
+                execution_media['image_dimensions'] = dimensions
+            if self.nframes is not None:
+                execution_media['nframes'] = self.nframes
+
         THINKING_RETRY = 1
         for i in range(THINKING_RETRY):
             payload['seed'] += i
@@ -603,21 +645,32 @@ class CosmosReason(BaseAPI):
                 logger.error(f'⚠️  ENDPOINT TIMEOUT: {self.api_base}')
                 logger.error(f'⚠️  The endpoint took longer than {self.timeout}s to respond. It may be down or overloaded.')
                 self._last_error_type = "timeout"
+                self._record_execution(payload, {}, execution_media)
                 return 408, self.fail_msg, None
             except requests.exceptions.ConnectionError as e:
                 logger.error(f'⚠️  ENDPOINT DOWN: {self.api_base}')
                 logger.error(f'⚠️  Cannot connect to the endpoint. Please check if the service is running.')
                 logger.error(f'⚠️  Error: {str(e)}')
                 self._last_error_type = "http_error"
+                self._record_execution(payload, {}, execution_media)
                 return 503, self.fail_msg, None
             except Exception as e:
                 logger.error(f'⚠️  REQUEST FAILED: {type(e).__name__}: {str(e)}')
                 self._last_error_type = "http_error"
+                self._record_execution(payload, {}, execution_media)
                 return 500, self.fail_msg, None
 
 
             ret_code = response.status_code
             ret_code = 0 if (200 <= int(ret_code) < 300) else ret_code
+            if self.execution_evidence_dir is not None:
+                try:
+                    evidence_raw = response.json()
+                except ValueError:
+                    evidence_raw = {}
+                if ret_code != 0:
+                    evidence_raw = {}
+                self._record_execution(payload, evidence_raw, execution_media)
 
             # Check for common error status codes
             if ret_code == 401:
