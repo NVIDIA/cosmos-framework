@@ -11,6 +11,9 @@ on:
       - 'examples/automl/**'
       - '.github/workflows/automl-helpers.yml'
       - '.pytest.toml'
+      - '.agents/skills/**'
+      - '.claude/skills/**'
+      - 'AGENTS.md'
 permissions:
   contents: read
 jobs:
@@ -22,8 +25,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - run: python -m pip install pytest jsonschema
+      - run: python -m pip install -r tools/cosmos_workflows/requirements-test.txt
       - name: Test execution helpers without GPU dependencies or scheduler access
         run: >-
           python -m pytest -o addopts= --confcutdir=tools/cosmos_workflows
           -o 'python_files=test_*.py *_test.py' tools/cosmos_workflows
+      - name: Check that version pins in docs and skills match versions.yaml
+        run: python tools/cosmos_workflows/scripts/stamp_versions.py --check --strict-strays

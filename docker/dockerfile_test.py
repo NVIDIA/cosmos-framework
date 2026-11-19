@@ -59,3 +59,10 @@ def test_complete_clean_provenance_is_verified(source_provenance, monkeypatch):
         monkeypatch.setenv(key, "supplied")
     monkeypatch.setenv("SOURCE_DIRTY", "0")
     assert source_provenance()["verified"] is True
+
+
+def test_quantization_overlay_preserves_base_cuda_environment() -> None:
+    dockerfile = (Path(__file__).parent / "quantize.Dockerfile").read_text()
+    assert "uv pip install --no-deps --target /opt/quantize_deps" in dockerfile
+    assert "_load_quantization_dependencies()" in dockerfile
+    assert "ENV PYTHONPATH" not in dockerfile

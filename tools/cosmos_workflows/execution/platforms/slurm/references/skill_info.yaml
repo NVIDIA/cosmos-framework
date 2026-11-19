@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+type: platform
+required_credentials:
+- name: SLURM_USER
+  source: env_var
+- name: SLURM_HOSTNAME
+  source: env_var
+- name: SLURM_PARTITION
+  source: env_var
+credential_groups:
+- name: ssh_identity
+  require_one_of:
+  - SSH_KEY_PATH
+  - SSH_AUTH_SOCK
+  preferred: SSH_KEY_PATH
+optional_credentials:
+- name: SLURM_BASE_RESULTS_DIR
+  source: env_var
+  only_when: required for tracked launches; no site default exists
+- name: SLURM_ACCOUNT
+  source: env_var
+  only_when: the cluster site requires #SBATCH --account
+- name: SLURM_CONTAINER_MOUNTS
+  source: env_var
+  only_when: required explicit host-to-container path mapping
+- name: NGC_API_KEY
+  source: env_var
+  only_when: private nvcr.io image pulls require NGC auth
+- name: HF_TOKEN
+  source: env_var
+  only_when: selected model requires HuggingFace access
+resource_defaults:
+  num_nodes: 1
+  num_gpus: 4
+  max_num_gpus_per_node: 8
+  cpus_per_task: 16
+  time_hours: 4
+  timeout_hours: 3.8
+  container_mounts: runtime-supplied
+  use_sqsh: true
+  sqsh_conversion_partition: null  # select an available site CPU partition
+  sqsh_conversion_timeout_minutes: 120
+  sqsh_conversion_cpus_per_task: 4
+  sqsh_conversion_memory_mb: 7200
+cloud_storage:
+  protocol: lustre
+  uri_format: lustre:///{absolute_path}
+  metadata_key: slurm
