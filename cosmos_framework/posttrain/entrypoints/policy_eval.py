@@ -6,7 +6,7 @@ In a RoboLab simulator environment, with the DROID policy server running:
 
     python -m cosmos_framework.posttrain.entrypoints.policy_eval robolab \
         --task BananaInBowlTask --metadata /path/to/robolab/tasks/_metadata/task_metadata.json \
-        --droid-server localhost --seed 0 --output runs/droid-smoke
+        --droid-server localhost --instruction-type specific --seed 0 --output runs/droid-smoke
 
 """
 
@@ -89,6 +89,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("suite", choices=("robolab",))
     parser.add_argument("--task", nargs="+", required=True)
+    parser.add_argument("--instruction-type", default="default", help="RoboLab task instruction variant")
     parser.add_argument("--metadata", type=Path, required=True, help="RoboLab task_metadata.json")
     parser.add_argument("--output", type=Path, required=True, help="new directory for this run")
     parser.add_argument("--seed", type=int, required=True)
@@ -113,7 +114,9 @@ def main(argv=None):
         action_horizon=args.action_horizon or 32,
     )
     emb = get_embodiment_map("droid")
-    sim_args = dict(n_lanes=args.num_envs, output_dir=str(args.output / "native"))
+    sim_args = dict(
+        n_lanes=args.num_envs, output_dir=str(args.output / "native"), instruction_type=args.instruction_type
+    )
     if args.policy_factory:
         module, sep, name = args.policy_factory.partition(":")
         if not sep or not module or not name:

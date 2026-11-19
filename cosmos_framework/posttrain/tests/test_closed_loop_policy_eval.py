@@ -4,6 +4,7 @@
 import json
 import sys
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -15,6 +16,32 @@ from cosmos_framework.posttrain.embodied.sims.robolab.interface import get_embod
 from cosmos_framework.posttrain.embodied.sims.robolab.runtime import RoboLabSimulator
 from cosmos_framework.posttrain.entrypoints import policy_eval
 from cosmos_framework.posttrain.tests.test_embodied_robolab import CountingEnvironment, session, unit
+
+
+@pytest.mark.parametrize(("flags", "expected"), [([], "default"), (["--instruction-type", "specific"], "specific")])
+def test_cli_passes_instruction_variant_to_simulator(tmp_path, monkeypatch, flags, expected):
+    metadata = tmp_path / "tasks.json"
+    metadata.write_text(json.dumps([{"task_name": "demo", "episode_s": 1}]))
+    build_sim = Mock()
+    monkeypatch.setattr(policy_eval, "build_sim", build_sim)
+    monkeypatch.setattr(policy_eval, "evaluate", lambda *args: {})
+    policy_eval.main(
+        [
+            "robolab",
+            "--task",
+            "demo",
+            "--metadata",
+            str(metadata),
+            "--output",
+            str(tmp_path / "run"),
+            "--seed",
+            "0",
+            "--policy-factory",
+            "builtins:object",
+            *flags,
+        ]
+    )
+    assert build_sim.call_args.kwargs["instruction_type"] == expected
 
 
 def test_robolab_reports_real_episode_keys_and_native_outcomes(tmp_path, monkeypatch):
