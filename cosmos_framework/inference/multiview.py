@@ -38,7 +38,7 @@ from cosmos_framework.data.generator.multiview.caption_format import (
 )
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.inference.args import ConditionVisionMode, OmniSampleArgs
-from cosmos_framework.inference.common.args import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from cosmos_framework.inference.common.args import IMAGE_EXTENSIONS, MAX_SEED, VIDEO_EXTENSIONS
 from cosmos_framework.inference.common.multiview_captions import exported_caption_task
 from cosmos_framework.inference.vision import load_conditioning_image_pixels, load_conditioning_video
 from cosmos_framework.model.generator.mot.replica_partition import ReplicaPartitioner, WorkUnit
@@ -624,7 +624,8 @@ def generate_multiview_caption_chunks(
                 "prompt": chunk.prompt,
                 "num_frames": chunk_frame_count,
                 "condition_frame_indexes_vision": condition_frame_indexes,
-                "seed": base_seed + chunk.index,
+                # Wrap so a seed near the top of the accepted range stays valid for later chunks.
+                "seed": (base_seed + chunk.index) % (MAX_SEED + 1),
             },
         )
         chunk_data_batch = get_multiview_sample_data(
