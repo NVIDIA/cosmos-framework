@@ -15,19 +15,23 @@ Image: `nvcr.io/nim/nvidia/cosmos3:2.2.0`.
   [Multiview](multiview.md).
 
 - **Reasoner speculation.** `NIM_SPECULATIVE_METHOD` selects `dflash`, `ngram`,
-  or `none` for ordinary and streaming requests. `NIM_SPECULATIVE_CONFIG`
-  controls advanced settings, and `NIM_KV_CACHE_DTYPE` selects KV-cache precision.
+  or `none` for ordinary and streaming requests; DFlash is the default for Edge,
+  Nano, and Super. `NIM_SPECULATIVE_CONFIG` controls advanced settings, and
+  `NIM_KV_CACHE_DTYPE` selects KV-cache precision.
   Refer to [Speculative Decoding](configuration.md#speculative-decoding).
 - **Video decode concurrency.** `NIM_VIDEO_DECODE_PROCESSES` defaults to `1`;
   the `TTFT` preset uses `2`. Higher concurrency can reduce time to first token
   while increasing inter-token latency and decoder memory use. Refer to
   [Video Decode Concurrency](configuration.md#video-decode-concurrency).
 - **Reasoner memory sizing.** Automatic allocation reserves memory for video
-  decoding, CUDA contexts, and headroom, with a maximum vLLM share of 91%.
+  decoding, CUDA contexts, and a 1-GiB `NIM_GPU_MEMORY_HEADROOM_GIB`, with a
+  maximum vLLM share of 91%.
   Refer to [Context and Scheduling](configuration.md#context-and-scheduling).
-- **Dynamo controls.** Use a backend name for `NIM_DISCOVERY_BACKEND` and
-  `NIM_ASYNC_SCHEDULING` for engine scheduling. Streaming disables asynchronous
-  scheduling. Refer to [Dynamo Configuration](configuration.md#dynamo-configuration).
+- **Dynamo controls.** Use a backend name, such as `kubernetes`, for
+  `NIM_DISCOVERY_BACKEND`; JSON objects are rejected. Use `NIM_ASYNC_SCHEDULING`
+  for engine scheduling and `NIM_DYNAMO_ARGS` for other Dynamo settings.
+  Streaming disables asynchronous scheduling. Refer to
+  [Dynamo Configuration](configuration.md#dynamo-configuration).
 
 ## 2.1.0
 

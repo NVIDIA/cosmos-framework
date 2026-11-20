@@ -230,9 +230,8 @@ and `top_logprobs` is omitted, one is requested. Some prompts ask for literal
 
 ## Reasoner DFlash
 
-Nano and Super Reasoner use their bundled DFlash drafts by default. Set
-`NIM_SPECULATIVE_METHOD=none` to run target-only. Edge has no DFlash and rejects
-`NIM_SPECULATIVE_METHOD=dflash`. Requests do not change. Refer to
+Edge, Nano, and Super Reasoner use their bundled DFlash drafts by default. Set
+`NIM_SPECULATIVE_METHOD=none` to run target-only. Requests do not change. Refer to
 [Speculative Decoding](configuration.md#speculative-decoding) and
 [Reasoner Checkpoint](bring-your-own-checkpoint.md#reasoner-checkpoint).
 

@@ -56,9 +56,9 @@ The default is `latency`.
 
 Set `NIM_MODEL_TYPE=reasoner` and choose `NIM_MODEL_VARIANT=edge`, `nano`, or
 `super`. Reasoner rejects `NIM_PERF_PROFILE` at startup. DFlash speculative
-decoding is on by default for Nano and Super. Set `NIM_SPECULATIVE_METHOD=none` to
-disable it. Edge has no DFlash draft: its profiles disable DFlash and reject
-`NIM_SPECULATIVE_METHOD=dflash` (refer to [Configuration](configuration.md#speculative-decoding)).
+decoding is on by default for Edge, Nano, and Super. Set
+`NIM_SPECULATIVE_METHOD=none` to disable it (refer to
+[Configuration](configuration.md#speculative-decoding)).
 
 ### Precision Selection
 

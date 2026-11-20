@@ -35,8 +35,8 @@ Standalone NIM mode retains its readiness, runtime metadata, and selected-profil
 checks.
 
 Streaming uses the shared `NIM_SPECULATIVE_METHOD` and
-`NIM_SPECULATIVE_CONFIG` controls. Nano and Super default to DFlash; Edge
-defaults to no speculation. Refer to
+`NIM_SPECULATIVE_CONFIG` controls. Edge, Nano, and Super default to DFlash.
+Refer to
 [Speculative Decoding](configuration.md#speculative-decoding).
 
 ## Example Client
