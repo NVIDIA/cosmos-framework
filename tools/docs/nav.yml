@@ -56,6 +56,7 @@ nav:
               - DROID forward dynamics: action_fd_droid_posttrain.md
               - LIBERO-10 policy: action_policy_libero_posttrain.md
           - Transfer-Auto: training_transfer_auto.md
+          - Multi-control transfer LoRA: transfer_multicontrol_lora_nano.md
       # A multi-stage chain lives in the section of its final (distilled) model.
       - Distillation:
           - Sim-Auto: training_sim_auto.md

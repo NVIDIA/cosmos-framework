@@ -12,16 +12,17 @@ For the Sim-Bimanual Stage 0–3 recipes, [check the local training bundle](../d
 
 ## Recipe → launch shell
 
-| Recipe                                       | Launch shell                          |
-| -------------------------------------------- | ------------------------------------- |
-| Vision SFT (Cosmos3-Nano)                    | `launch_sft_vision_nano.sh`           |
-| Vision SFT LoRA (Cosmos3-Super)              | `launch_sft_vision_super.sh`          |
-| Vision SFT (Cosmos3-Edge)                    | `launch_sft_vision_edge.sh`           |
-| Reasoner Alignment SFT                       | `launch_sft_llava_ov.sh`              |
-| Reasoner Alignment SFT (Cosmos3-Nano)        | `launch_sft_videophy2_nano.sh`        |
-| Reasoner Alignment SFT (Cosmos3-Super)       | `launch_sft_videophy2_super.sh`       |
-| Reasoner Alignment SFT (Cosmos3-Edge)        | `launch_sft_videophy2_edge.sh`        |
-| Video-conversation SFT (Cosmos3-Nano)        | `launch_sft_video.sh`                 |
+| Recipe                                     | Launch shell                                    |
+| ------------------------------------------ | ----------------------------------------------- |
+| Vision SFT (Cosmos3-Nano)                  | `launch_sft_vision_nano.sh`                     |
+| Vision SFT LoRA (Cosmos3-Super)            | `launch_sft_vision_super.sh`                    |
+| Vision SFT (Cosmos3-Edge)                  | `launch_sft_vision_edge.sh`                     |
+| Multi-control transfer LoRA (Cosmos3-Nano) | `launch_sft_transfer_multicontrol_lora_nano.sh` |
+| Reasoner Alignment SFT                     | `launch_sft_llava_ov.sh`                        |
+| Reasoner Alignment SFT (Cosmos3-Nano)      | `launch_sft_videophy2_nano.sh`                  |
+| Reasoner Alignment SFT (Cosmos3-Super)     | `launch_sft_videophy2_super.sh`                 |
+| Reasoner Alignment SFT (Cosmos3-Edge)      | `launch_sft_videophy2_edge.sh`                  |
+| Video-conversation SFT (Cosmos3-Nano)      | `launch_sft_video.sh`                           |
 
 ## Video SFT recipes
 
