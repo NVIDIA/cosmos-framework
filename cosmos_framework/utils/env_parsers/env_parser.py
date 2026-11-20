@@ -26,7 +26,9 @@ so evaluation of params should throw error to make sure actual env var is correc
 class EnvParser:
     def __init__(self, b64_str=None):
         if b64_str:
-            log.critical(f"b64_str recieved: {b64_str}")
+            # Do not log the payload itself: it base64-decodes to the full
+            # parser state, which for credential parsers includes secrets.
+            log.debug(f"reconstructing {type(self).__name__} from a b64 payload ({len(b64_str)} chars)")
             self.from_b64(b64_str)
         else:
             self.from_env()
@@ -54,7 +56,8 @@ class EnvParser:
         json_str_bytes = json_str.encode()
         b64_str = base64.b64encode(json_str_bytes).decode()
 
-        print(b64_str)
+        # The b64 payload is reversible; printing it leaks the same secrets
+        # as printing the JSON. Callers that need it have the return value.
         return b64_str
 
     def from_b64(self, b64_str):
@@ -83,13 +86,17 @@ class EnvParser:
             log.debug(f"{key}: {value.__get__(self)}")
 
     def to_json(self, file_name=None):
+        # Use the subclass's validators (get_val_dict is polymorphic over
+        # cls.__dict__); iterating the base EnvParser.__dict__ finds no
+        # validators, so every real parser serialized to "{}".
         dict = {
             key.upper(): value.__get__(self)
-            for key, value in EnvParser.__dict__.items()
-            if isinstance(value, Validator)
+            for key, value in self.get_val_dict().items()
         }
+        # Return (and optionally write) without echoing: subclass validators
+        # can hold credentials, and an unconditional print would send them to
+        # stdout on every serialization.
         json_str = json.dumps(dict, indent=4)
-        print(json_str)
 
         if file_name:
             with open(file_name, "w") as f:
