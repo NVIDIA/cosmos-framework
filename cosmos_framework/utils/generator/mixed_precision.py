@@ -163,8 +163,8 @@ class MixedPrecisionRuntime:
     def set_step(self, step_index: int, num_steps: int) -> None:
         """Select one precision at the sampler-step boundary and record the trace."""
         self._generation_high_precision = use_w8a16_step(
-            self.config.mixed_precision_first_steps,
-            self.config.mixed_precision_last_steps,
+            self.config.mixed_precision_first_steps or 0,
+            self.config.mixed_precision_last_steps or 0,
             step_index,
             num_steps,
         )

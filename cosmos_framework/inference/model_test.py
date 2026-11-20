@@ -30,6 +30,7 @@ from cosmos_framework.inference.model import (
     _DiffusersLoadPlanner,
     _is_diffusers_checkpoint,
     _normalize_diffusers_target_key,
+    _resolve_mixed_precision_config,
 )
 
 
@@ -160,7 +161,7 @@ class LightweightDcpModel(Cosmos3OmniModel):
     model: Any
 
     def __init__(self, config: Cosmos3OmniConfig, *args: object, **kwargs: object) -> None:
-        object.__setattr__(self, "model", SimpleNamespace(net=object()))
+        object.__setattr__(self, "model", SimpleNamespace(net=object(), config=SimpleNamespace()))
 
 
 def test_from_pretrained_dcp_matches_i4_cudnn_runtime(tmp_path: Path) -> None:
@@ -372,3 +373,93 @@ def test_bundled_lidar_vae_is_resolved_before_model_construction(
         }
     else:
         assert captured["lidar_tokenizer"] == original
+
+
+@pytest.mark.parametrize(
+    "first,last,expected",
+    [(None, None, (3, 3)), (1, None, (1, 3)), (None, 0, (3, 0)), (0, 0, (0, 0))],
+)
+def test_checkpoint_mixed_precision_overrides(tmp_path, first, last, expected):
+    (tmp_path / "hf_quant_config.json").write_text(json.dumps({"quant_method": "modelopt", "quant_algo": "FP8"}))
+    transformer = tmp_path / "transformer"
+    transformer.mkdir()
+    (transformer / "config.json").write_text(
+        json.dumps(
+            {
+                "quantization_config": {
+                    "runtime": {
+                        "diffusion_step_policy": {
+                            "schema_version": 1,
+                            "type": "first_last_n",
+                            "first_steps": {"count": 3, "mode": "a16"},
+                            "last_steps": {"count": 3, "mode": "a16"},
+                        }
+                    }
+                }
+            }
+        )
+    )
+    original = QuantizationConfig(mixed_precision_first_steps=first, mixed_precision_last_steps=last)
+    resolved = _resolve_mixed_precision_config(tmp_path, original)
+    assert (resolved.mixed_precision_first_steps, resolved.mixed_precision_last_steps) == expected
+    assert (original.mixed_precision_first_steps, original.mixed_precision_last_steps) == (first, last)
+
+
+@pytest.mark.parametrize("modelopt", [False, True])
+def test_missing_checkpoint_mixed_precision_policy(tmp_path, modelopt):
+    if modelopt:
+        (tmp_path / "hf_quant_config.json").write_text(json.dumps({"quant_method": "modelopt", "quant_algo": "FP8"}))
+    resolved = _resolve_mixed_precision_config(tmp_path, QuantizationConfig())
+    assert resolved.mixed_precision_first_steps == resolved.mixed_precision_last_steps == 0
+
+
+@pytest.mark.parametrize("count", [-1, None, True, "3"])
+def test_invalid_checkpoint_mixed_precision_count(tmp_path, count):
+    (tmp_path / "hf_quant_config.json").write_text(json.dumps({"quant_method": "modelopt", "quant_algo": "FP8"}))
+    transformer = tmp_path / "transformer"
+    transformer.mkdir()
+    (transformer / "config.json").write_text(
+        json.dumps(
+            {
+                "quantization_config": {
+                    "runtime": {
+                        "diffusion_step_policy": {
+                            "schema_version": 1,
+                            "type": "first_last_n",
+                            "first_steps": {"count": count, "mode": "a16"},
+                        }
+                    }
+                }
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="Invalid first_steps count"):
+        _resolve_mixed_precision_config(tmp_path, QuantizationConfig())
+
+
+def test_inherited_mixed_precision_validated_before_model_loading(tmp_path):
+    (tmp_path / "hf_quant_config.json").write_text(json.dumps({"quant_method": "modelopt", "quant_algo": "FP8"}))
+    transformer = tmp_path / "transformer"
+    transformer.mkdir()
+    (transformer / "config.json").write_text(
+        json.dumps(
+            {
+                "quantization_config": {
+                    "runtime": {
+                        "diffusion_step_policy": {
+                            "schema_version": 1,
+                            "type": "first_last_n",
+                            "first_steps": {"count": 3, "mode": "a16"},
+                        }
+                    }
+                }
+            }
+        )
+    )
+    with (
+        patch("cosmos_framework.inference.model._is_diffusers_checkpoint", return_value=True),
+        pytest.raises(ValueError, match="incompatible with use_cuda_graphs"),
+    ):
+        LightweightDcpModel.from_pretrained_dcp(
+            tmp_path, config=Cosmos3OmniConfig(), compile_config=CompileConfig(use_cuda_graphs=True)
+        )
