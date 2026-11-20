@@ -202,6 +202,14 @@ class CompileConfig(BaseModel):
             "callback's progressive warmup."
         ),
     )
+    compiled_region: Literal["language", "all"] = Field(
+        default="language",
+        description=(
+            "Which part of the network to torch.compile. "
+            "'language' compiles only the MoT TransformerBlocks; "
+            "'all' also compiles the VAE encoder/decoder heads (VFM only)."
+        ),
+    )
 
 
 class ActivationCheckpointingConfig(BaseModel):
