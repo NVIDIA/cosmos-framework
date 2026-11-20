@@ -1,15 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import contextlib
 import functools
 import inspect
 import os
+import random
 import signal
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.utils.data
@@ -259,6 +262,30 @@ def persistent_validation_enabled(config_trainer: Any) -> bool:
         and getattr(config_trainer, "prefetch_validation", False)
         and config_trainer.max_val_iter is not None
     )
+
+
+@contextlib.contextmanager
+def seeded_rng(seed: int | None):
+    """Seed the Python, NumPy and torch RNGs (``seed`` + rank) inside the block and restore their state after it.
+
+    ``seed=None`` is a no-op.
+    """
+    if seed is None:
+        yield
+        return
+    saved = (random.getstate(), np.random.get_state(), torch.get_rng_state(), torch.cuda.get_rng_state_all())
+    rank_seed = seed + distributed.get_rank()
+    random.seed(rank_seed)
+    np.random.seed(rank_seed)
+    torch.manual_seed(rank_seed)
+    torch.cuda.manual_seed_all(rank_seed)
+    try:
+        yield
+    finally:
+        random.setstate(saved[0])
+        np.random.set_state(saved[1])
+        torch.set_rng_state(saved[2])
+        torch.cuda.set_rng_state_all(saved[3])
 
 
 class ImaginaireTrainer:
@@ -866,6 +893,10 @@ class ImaginaireTrainer:
             dataloader_val (torch.utils.data.DataLoader): The validation data loader.
             iteration (int): Current iteration number.
         """
+        with seeded_rng(getattr(self.config.trainer, "validation_seed", None)):
+            self._validate(model, dataloader_val, iteration)
+
+    def _validate(self, model: ImaginaireModel, dataloader_val: torch.utils.data.DataLoader, iteration: int) -> None:
         self.callbacks.on_validation_start(model, dataloader_val, iteration=iteration)
         model.eval()
         max_val_iter = self.config.trainer.max_val_iter

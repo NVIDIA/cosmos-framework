@@ -5241,7 +5241,9 @@ class OmniMoTModel(ImaginaireModel):
 
     @torch.no_grad()
     def validation_step(self, data_batch: dict[str, torch.Tensor], iteration: int):
-        pass
+        """The training objective on a validation batch, without gradients."""
+        with torch.no_grad():
+            return self.training_step(data_batch, iteration)
 
     @torch.no_grad()
     def forward(self, xt, t):
