@@ -91,6 +91,8 @@ def _register(name: str, family: str, *, max_iter: int, save_iter: int, **kwargs
 def make_config():
     config = _make_h_embodied_config()
     _register("suturebot_fd", "suturebot", max_iter=3000, save_iter=500, num_workers=8, prefetch_factor=4)
+    # With COSMOS_SMOKE=1 (the launcher's SMOKE=1), cosmos-framework forces trainer.max_iter=2, so the smoke
+    # test runs 2 iterations and writes iter_000000002; max_iter/save_iter here apply only without it.
     _register(
         "suturebot_fd_smoke", "suturebot", max_iter=20, save_iter=10, num_workers=2, prefetch_factor=2, max_windows=64
     )

@@ -62,15 +62,15 @@ The hero is a qualitative preview. The measured result belongs in
 
 ## Pipeline
 
-| Stage | What happens                                                                                    | Expected time and hardware                                                                                                                                                                                            |
-| ----- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | Download SutureBot at the pinned revision (10 tissue zips, 221 GB) and the released checkpoint. | Network- and disk-bound. Measured: unzipping took 2–50 min per tissue on a network file system, run as ten parallel jobs; the script unzips one tissue after another (about 4.4 h for all ten, estimated as the sum). |
-| 2     | Convert SutureBot to LeRobot v3.0 (one root per tissue) and the checkpoint to DCP.              | Data: 63 min for all 662,298 frames with `--workers 10` on a 96-core CPU node, measured (12 CPU-hours of process time). Checkpoint: 88 s on CPU, measured.                                                            |
-| 3     | Smoke test: the real launcher and config with a 2-layer model.                                  | About 4 min on one A100 80 GB, measured (about 1 min on an RTX A6000).                                                                                                                                                |
-| 4     | Post-train forward dynamics, 3,000 iterations.                                                  | 3 h 24 min on 8× A100 80 GB (27 GPU-hours), measured over two jobs with one restart.                                                                                                                                  |
-| 5     | Pick checkpoints; evaluation loads the training DCP directly (no export step).                  | —                                                                                                                                                                                                                     |
-| 6     | Evaluate the released and fine-tuned checkpoints on the val and test splits.                    | 22–24 min per checkpoint (2 × 128 clips) on one A100 80 GB, measured.                                                                                                                                                 |
-| 7     | Compare with the control and write `outputs/metrics.json`.                                      | Seconds, CPU.                                                                                                                                                                                                         |
+| Stage | What happens                                                                                    | Expected time and hardware                                                                                                                                                                                                                                                                                               |
+| ----- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1     | Download SutureBot at the pinned revision (10 tissue zips, 221 GB) and the released checkpoint. | Network- and disk-bound. Measured on a network file system, one job per tissue in parallel: download plus unzip took 2–50 min per tissue in one run and 2–109 min in another (the Hub download itself takes minutes); the script processes tissues one after another (about 4.4–10 h for all ten, estimated as the sum). |
+| 2     | Convert SutureBot to LeRobot v3.0 (one root per tissue) and the checkpoint to DCP.              | Data: 63 min for all 662,298 frames with `--workers 10` on a 96-core CPU node, measured (12 CPU-hours of process time). Checkpoint: 88 s on CPU, measured.                                                                                                                                                               |
+| 3     | Smoke test: the real launcher and config with a 2-layer model.                                  | About 4 min on one A100 80 GB, measured (about 1 min on an RTX A6000).                                                                                                                                                                                                                                                   |
+| 4     | Post-train forward dynamics, 3,000 iterations.                                                  | 3 h 24 min on 8× A100 80 GB (27 GPU-hours), measured over two jobs with one restart.                                                                                                                                                                                                                                     |
+| 5     | Pick checkpoints; evaluation loads the training DCP directly (no export step).                  | —                                                                                                                                                                                                                                                                                                                        |
+| 6     | Evaluate the released and fine-tuned checkpoints on the val and test splits.                    | 22–26 min per checkpoint (2 × 128 clips: about 4–5 min of model load per split plus about 4 s per clip) on one A100 80 GB, measured.                                                                                                                                                                                     |
+| 7     | Compare with the control and write `outputs/metrics.json`.                                      | Seconds, CPU.                                                                                                                                                                                                                                                                                                            |
 
 ## Prerequisites
 
@@ -97,12 +97,25 @@ uv pip install --no-deps -e Cosmos3-H-Embodied-Nano             # into the cosmo
 cd cosmos-framework/.agents/skills/cosmos-h-surgical-robotics     # the recipe directory ($RECIPE_DIR)
 ```
 
+**Container.** The measured runs ran on hosts with driver 535, Ubuntu 20.04 (glibc 2.31) and no FFmpeg, so
+every step ran in a container: `nvcr.io/nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04` with `ffmpeg git git-lfs
+curl unzip` installed and `uv` 0.11 from the host. A blind reproduction of the setup, smoke test and
+control evaluation used `nvcr.io/nvidia/pytorch:25.06-py3` with the same packages. Keep the venv and uv's
+Python install directory (`UV_PYTHON_INSTALL_DIR`) on storage that every job mounts. With SLURM and
+pyxis, for example (paths are placeholders):
+
+```text
+srun --container-image=nvcr.io#nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 --container-save=/work/cuda128-ffmpeg.sqsh \
+    --container-remap-root bash -c 'apt-get update && apt-get install -y --no-install-recommends ffmpeg git git-lfs curl unzip ca-certificates'
+srun --container-image=/work/cuda128-ffmpeg.sqsh --container-mounts=/work:/work,/data:/data bash -c '<commands>'
+```
+
 | Requirement                                                                                                                                                                                            | Why                                                                                                                                                                                                                                                                                                               |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Training: 8× NVIDIA A100 80 GB (measured); 4× 80 GB is the minimum that fits (measured in a 25-iteration probe)                                                                                        | Full SFT keeps fp32 master weights for all 15.17 B parameters plus gradients, AdamW state and EMA for the 6.98 B trainable ones, sharded with FSDP. Measured: 2× A100 80 GB run out of memory in the first training step; 2× 48 GB GPUs run out of memory while the model is set up (43–47 GB allocated per GPU). |
 | Evaluation: one GPU with ≥ 40 GB                                                                                                                                                                       | Measured peak 31–32 GB on an RTX A6000 (48 GB) and on an A100 80 GB for bf16 inference.                                                                                                                                                                                                                           |
-| Driver for CUDA 13.0 (`cu130-train`) or 12.8 (`cu128-train`)                                                                                                                                           | cosmos-framework training extras; see its `docs/setup.md`. The measured runs used `cu128-train` in a CUDA 12.8 container on driver 535.                                                                                                                                                                           |
-| Model access: [`nvidia/Cosmos3-H-Embodied-Nano`](https://huggingface.co/nvidia/Cosmos3-H-Embodied-Nano), public, no acceptance step                                                                    | Released checkpoint (`c3-h-e-n_model_bf16.safetensors`, 30 GB bf16, NVIDIA Open Model License), converted to a 61 GB DCP directory (`net` + `net_ema`).                                                                                                                                                           |
+| Driver for CUDA 13.0 (`cu130-train`) or 12.8 (`cu128-train`)                                                                                                                                           | cosmos-framework training extras; see its `docs/setup.md`. The measured runs used `cu128-train` in a CUDA 12.8 container on driver 535 (see Container below).                                                                                                                                                     |
+| Model access: [`nvidia/Cosmos3-H-Embodied-Nano`](https://huggingface.co/nvidia/Cosmos3-H-Embodied-Nano), public, no acceptance step                                                                    | Released checkpoint (`c3-h-e-n_model_bf16.safetensors`, 30 GB bf16, NVIDIA Open Model License), converted to a 61 GB DCP directory whose `model/` holds `net` and `net_ema` (the EMA starts as a copy).                                                                                                           |
 | Dataset access: [`jchen396/SutureBot`](https://huggingface.co/datasets/jchen396/SutureBot), public, no acceptance step                                                                                 | CC-BY-4.0.                                                                                                                                                                                                                                                                                                        |
 | Hugging Face Hub access on the first run                                                                                                                                                               | The first training and evaluation run downloads the Wan2.2 VAE and the Qwen3-VL tokenizer; the loaders switch the Hub to offline mode unless `HF_HUB_OFFLINE` is set, so run the first time with `HF_HUB_OFFLINE=0`.                                                                                              |
 | CPU RAM ≥ 160 GB for 8-GPU training                                                                                                                                                                    | Measured peak host memory: 147 GB for 8-GPU training (8 data-loader workers per GPU), 61 GB for 4 GPUs, 29 GB for checkpoint conversion, 6 GB for the smoke test.                                                                                                                                                 |
@@ -111,13 +124,13 @@ cd cosmos-framework/.agents/skills/cosmos-h-surgical-robotics     # the recipe d
 
 ### Hardware
 
-| Configuration                                         | Post-training                                                                                                                                                                                    | Evaluation                                                                      |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| 8× A100 80 GB (measured run)                          | 3,000 iterations in 3 h 24 min (27 GPU-hours, two jobs with one restart), 3.7 s per iteration (median); peak memory per GPU 31 GB allocated, 37 GB reserved by PyTorch, 47–50 GB in `nvidia-smi` | 1 GPU: 32 GB peak; 22–24 min per checkpoint (2 × 128 clips), about 5 s per clip |
-| 4× A100 80 GB                                         | Fits (25-iteration probe): 73 GB per GPU in `nvidia-smi`, 4.0 s per iteration; half the clips per step of the 8-GPU run                                                                          | —                                                                               |
-| 2× A100 80 GB                                         | Does not fit (measured: OOM in the first training step)                                                                                                                                          | —                                                                               |
-| 1× RTX A6000 48 GB                                    | Does not fit (measured: OOM at model setup, also with 2 GPUs)                                                                                                                                    | 31 GB peak; about 7 s per clip at 35 steps, measured                            |
-| 1× A100 80 GB or RTX A6000 48 GB, 2-layer smoke model | 2 iterations + checkpoint write: about 4 min on the A100 (first run), about 1 min on the A6000, measured; 31 GB peak on the A100                                                                 | Not applicable (inference always builds the full model)                         |
+| Configuration                                         | Post-training                                                                                                                                                                                    | Evaluation                                                                                                                 |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| 8× A100 80 GB (measured run)                          | 3,000 iterations in 3 h 24 min (27 GPU-hours, two jobs with one restart), 3.7 s per iteration (median); peak memory per GPU 31 GB allocated, 37 GB reserved by PyTorch, 47–50 GB in `nvidia-smi` | 1 GPU: 32 GB peak; 22–26 min per checkpoint (2 × 128 clips: about 4–5 min of model load per split plus about 4 s per clip) |
+| 4× A100 80 GB                                         | Fits (25-iteration probe): 73 GB per GPU in `nvidia-smi`, 4.0 s per iteration; half the clips per step of the 8-GPU run                                                                          | —                                                                                                                          |
+| 2× A100 80 GB                                         | Does not fit (measured: OOM in the first training step)                                                                                                                                          | —                                                                                                                          |
+| 1× RTX A6000 48 GB                                    | Does not fit (measured: OOM at model setup, also with 2 GPUs)                                                                                                                                    | 31 GB peak; about 7 s per clip at 35 steps, measured                                                                       |
+| 1× A100 80 GB or RTX A6000 48 GB, 2-layer smoke model | 2 iterations + checkpoint write: 4–7 min on the A100 (first run; longer with the environment on a network file system), about 1 min on the A6000, measured; 31 GB peak on the A100               | Not applicable (inference always builds the full model)                                                                    |
 
 ### GPU you need
 
@@ -125,9 +138,9 @@ cd cosmos-framework/.agents/skills/cosmos-h-surgical-robotics     # the recipe d
 | --------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------- |
 | Data conversion       | CPU only                                                                   | 96-core CPU node, `--workers 10` (one tissue per worker) | 63 min for all ten tissues (12 CPU-hours of process time) |
 | Checkpoint conversion | CPU only (29 GB peak RAM, measured)                                        | CPU node                                                 | 88 s                                                      |
-| Smoke test            | 1 GPU                                                                      | 1× A100 80 GB; 1× RTX A6000 48 GB                        | about 4 min; about 1 min                                  |
+| Smoke test            | 1 GPU                                                                      | 1× A100 80 GB; 1× RTX A6000 48 GB                        | 4–7 min; about 1 min                                      |
 | Full post-training    | 4× 80 GB GPUs (measured to fit; 2× 80 GB and 2× 48 GB measured not to fit) | 8× A100 80 GB                                            | 3 h 24 min (3,000 iterations)                             |
-| Evaluation            | 1 GPU with ≥ 40 GB                                                         | 1× A100 80 GB                                            | 22–24 min per checkpoint                                  |
+| Evaluation            | 1 GPU with ≥ 40 GB                                                         | 1× A100 80 GB                                            | 22–26 min per checkpoint                                  |
 
 ## Dataset
 
@@ -259,7 +272,12 @@ export BASE_CHECKPOINT_PATH=$CKPT_ROOT/Cosmos3-H-Embodied-Nano_dcp
 # 3. Smoke test using the real launcher and config (1 GPU, 2-layer model, 2 iterations)
 SMOKE=1 bash launch_sft_action_fd_suturebot_posttrain.sh
 
-# 4. Full run (8 GPUs on one node); only after the smoke test passed (see What to check)
+# 4. Control evaluation, the go/no-go check before the full run (1 GPU, about 25 min; see What to check)
+bash scripts/evaluate.sh $BASE_CHECKPOINT_PATH/model outputs/eval/base
+python scripts/summarize_results.py --reference base --metadata results/metadata.json \
+    -o outputs/metrics_control.json --run base=outputs/eval/base
+
+# 5. Full run (8 GPUs on one node); only after the smoke test and the control evaluation passed
 bash launch_sft_action_fd_suturebot_posttrain.sh
 ```
 
@@ -278,7 +296,14 @@ What to check after each step:
   `$IMAGINAIRE_OUTPUT_ROOT/cosmos3_h_embodied/openh_h16/suturebot_fd_smoke/checkpoints/iter_000000002/`
   with `model/ optim/ scheduler/ trainer/ dataloader/`. The log shows
   `GeneralizedDvrkHistoryDataset [tissue_N]: split=train` for every training tissue and loads
-  `suturebot_backward_anchored_worldtrans_rot6d.json`.
+  `suturebot_backward_anchored_worldtrans_rot6d.json`. Expected and harmless (also in the full run and
+  evaluation): repeated `Length of IterableDataset ... was reported to be 0 ... but N samples have been
+  fetched`, `OmniMoTModel: precision torch.bfloat16`, a `TRANSFORMERS_CACHE` deprecation warning, and
+  `You are sending unauthenticated requests to the HF Hub` without `HF_TOKEN`.
+- **Control evaluation:** `outputs/eval/base/{val,test}/seed_20260908/metrics_aggregate.json` with
+  `forward_dynamics.psnr.count` = 128, and split means in `outputs/metrics_control.json`
+  (`runs.base.<split>.psnr.all.mean`) within 0.05 dB of 27.02 dB (val) and 28.13 dB (test). Measured:
+  four repeat evaluations, one of them a blind reproduction from this README, landed within 0.02 dB.
 - **Full run:** 7–8 min from launch to `Iteration 1:` (model build and checkpoint load). The
   first 50 iterations each log `Iteration N: ... | Loss: <value>`; afterwards a line
   `N : iter_speed <s> seconds per iteration | Loss: <10-iteration average> | 38,0xx tokens per iteration`
@@ -432,10 +457,10 @@ or clips are copied into this folder.
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------: | --------------------------------- | -------------------------------------------------------------------------------: | --------: | -------------------------------------: |
 | Data conversion                                           | 63 min for all ten tissues, `--workers 10` on 96 cores (12 CPU-hours of process time) | CPU                               |                                                        0.7 GB per worker process |         0 |                                11.2 GB |
 | Checkpoint conversion                                     |                                                                                  88 s | CPU                               |                                                                      29 GB (RAM) |         0 |                                  61 GB |
-| Smoke test                                                |                                    about 4 min (A100, first run); about 1 min (A6000) | 1× A100 80 GB; 1× RTX A6000 48 GB |                                                       31 GB (A100, `nvidia-smi`) |     < 0.1 |       19 GB checkpoint (2-layer model) |
+| Smoke test                                                |                                        4–7 min (A100, first run); about 1 min (A6000) | 1× A100 80 GB; 1× RTX A6000 48 GB |                                                       31 GB (A100, `nvidia-smi`) |     < 0.1 |       19 GB checkpoint (2-layer model) |
 | Full run (3,000 iterations)                               |                                     3 h 24 min (two jobs, one restart of about 7 min) | 8× A100 80 GB                     | 31 GB allocated, 37 GB reserved per GPU (47–50 GB `nvidia-smi`); 147 GB host RAM |        27 | 177 GB per checkpoint, six checkpoints |
 | Checkpoint write                                          |                                                                               30–37 s | 8× A100 80 GB                     |                                                                                — |         — |                                 177 GB |
-| Evaluation (2 splits × 128 clips, 1 seed, per checkpoint) |                                                                             22–24 min | 1× A100 80 GB                     |                                                                            32 GB |       0.4 |           0.14 GB (videos and metrics) |
+| Evaluation (2 splits × 128 clips, 1 seed, per checkpoint) |                                                                             22–26 min | 1× A100 80 GB                     |                                                                            32 GB |       0.4 |           0.14 GB (videos and metrics) |
 
 ## How you know it worked
 
@@ -443,6 +468,8 @@ or clips are copied into this folder.
   counts of the dataset table (1,891 in total). Each `tissue_<N>/meta/modality.json` exists.
 - Smoke test: exit 0, finite loss on both iterations, checkpoint `iter_000000002` with a `dataloader/`
   component, and a `split=train` line for every training tissue.
+- Control: the released checkpoint's split means are within 0.05 dB of 27.02 dB (val) and 28.13 dB
+  (test), with 128 clips per split.
 - Training: no `SkipNaNStep` warnings; every logged loss finite, and the 10-iteration loss averages
   after iteration 500 stay below 2.5 and do not trend upward (measured: 0.36 to 1.84 up to iteration
   3,000; the means over blocks of 500 iterations are 0.58 to 0.77).
@@ -514,7 +541,7 @@ Give the agent:
 - Expected outputs: `$OPENH_DATA_ROOT/suturebot/tissue_<N>/`,
   `$IMAGINAIRE_OUTPUT_ROOT/cosmos3_h_embodied/openh_h16/suturebot_fd/checkpoints/iter_<N>/`,
   `outputs/eval/<run>/<split>/seed_<s>/metrics_aggregate.json`, `outputs/metrics.json`.
-- The smoke test first; the full run only after it passes.
+- The smoke test first, then the control evaluation; the full run only after both pass.
 - Budget: about 27 GPU-hours for training on 8× A100 80 GB (3,000 iterations) plus about 0.4
   GPU-hours per evaluated checkpoint. Stop if the loss stays non-finite, if the 10-iteration loss
   average climbs above its starting level after the 100-step warm-up, or if the iteration time stays
@@ -539,7 +566,7 @@ Failure modes:
 | Hub errors (`LocalEntryNotFoundError`, offline mode) on the first run                                      | Set `HF_HUB_OFFLINE=0` once so the VAE and tokenizer can download.                                                                                                          |
 | `RuntimeError: Missing key in checkpoint state_dict: net_ema...layers.<k>` in evaluation                   | The checkpoint comes from the 2-layer smoke model (`SMOKE=1`); inference builds the full model. Evaluate only full-run checkpoints.                                         |
 | A tissue line in the conversion log shows `"skipped" > 0`                                                  | Incomplete download or unzip of that tissue; see `meta/suturebot_episodes.json` for the episodes and errors, re-download the zip.                                           |
-| Base-checkpoint PSNR much lower than the control numbers in this document                                  | Wrong normalizer: `SUTUREBOT_NORMALIZER` must be unset (or the shipped SutureBot file) for the control.                                                                     |
+| Control split means more than about 0.05 dB from 27.02 dB (val) or 28.13 dB (test)                         | Wrong normalizer: `SUTUREBOT_NORMALIZER` must be unset (or the shipped SutureBot file) for the control.                                                                     |
 
 ## Known limitations
 
