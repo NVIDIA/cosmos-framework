@@ -1002,7 +1002,7 @@ def compute_fw_poly(
     def eval_polynomial_derivative(x: float, coeffs: list) -> float:
         result = 0.0
         n = len(coeffs)
-        for i, c in enumerate(reversed(coeffs[:-1])):
+        for i, c in enumerate(reversed(coeffs[1:])):
             result = result * x + c * (n - 1 - i)
         return result
 
