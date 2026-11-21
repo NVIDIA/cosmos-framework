@@ -532,11 +532,14 @@ class CosmosFrameworkRuntime:
             if decoded_media is not None:
                 media_value = decoded_media[media_index]["frames"]
             item = {"type": media_mode, media_mode: media_value}
-            if decoded_media is not None:
-                item["fps"] = decoded_media[media_index]["fps"]
             for key in ("fps", "min_pixels", "max_pixels", "total_pixels"):
                 if vision_config.get(key) is not None:
                     item[key] = vision_config[key]
+            if decoded_media is not None:
+                # These frames are already sampled. Their measured rate is what
+                # the prompt's timestamps need, not the rate a reader would be
+                # asked to sample at.
+                item["fps"] = decoded_media[media_index]["fps"]
             configured_frames = vision_config.get("nframes", vision_config.get("num_frames"))
             if configured_frames is not None:
                 # qwen-vl-utils consumes ``nframes`` on each video content item.
@@ -716,17 +719,12 @@ class CosmosFrameworkRuntime:
         cache, and it remains keyed by the same complete visual-input identity
         as the processor and feature caches.
         """
-        from qwen_vl_utils import process_vision_info
+        from cosmos_framework.inference.reasoner.decoded_video_frames import process_vision_info
 
         active_key = self._video_feature_cache_active_key
         capacity = int(getattr(self, "_video_processor_cache_capacity", 0))
         if active_key is None or capacity <= 0:
-            return process_vision_info(
-                conversations,
-                image_patch_size=16,
-                return_video_kwargs=True,
-                return_video_metadata=True,
-            )
+            return process_vision_info(conversations, image_patch_size=16)
 
         cache = self._video_input_cache
         if active_key in cache:
@@ -743,12 +741,7 @@ class CosmosFrameworkRuntime:
             return cached
 
         self._video_input_cache_misses += 1
-        prepared = process_vision_info(
-            conversations,
-            image_patch_size=16,
-            return_video_kwargs=True,
-            return_video_metadata=True,
-        )
+        prepared = process_vision_info(conversations, image_patch_size=16)
         cache[active_key] = prepared
         while len(cache) > capacity:
             cache.popitem(last=False)
@@ -784,19 +777,14 @@ class CosmosFrameworkRuntime:
 
     def _prepare_transformers_inputs(self, conversation: list[dict[str, Any]]) -> Any:
         """Materialize visual inputs through the registered Qwen GPU reader."""
-        from qwen_vl_utils import process_vision_info
+        from cosmos_framework.inference.reasoner.decoded_video_frames import process_vision_info
 
         text = self.processor.apply_chat_template(
             conversation,
             tokenize=False,
             add_generation_prompt=True,
         )
-        image_inputs, video_inputs, video_kwargs = process_vision_info(
-            conversation,
-            image_patch_size=16,
-            return_video_kwargs=True,
-            return_video_metadata=True,
-        )
+        image_inputs, video_inputs, video_kwargs = process_vision_info(conversation, image_patch_size=16)
         processor_kwargs: dict[str, Any] = {
             "text": [text],
             "images": image_inputs,
