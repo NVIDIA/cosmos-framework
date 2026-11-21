@@ -20,6 +20,11 @@ All modalities also report DOVER video quality. Each modality generates 121 fram
 
 ## Quick Start
 
+Run from this recipe directory. The launcher reuses the containing Cosmos Framework
+checkout by default, even when invoked from another working directory. Set
+`COSMOS3_REPO` to use a different checkout or clone destination. Legacy cookbook
+layouts with a Framework checkout under `packages/` remain supported.
+
 ```bash
 # Set your HuggingFace token once (needed for gated model and dataset downloads)
 export HF_TOKEN=hf_...
@@ -57,6 +62,9 @@ with inline video previews and metric display.
 
 ## Files
 
+- `test_launcher_paths.py` — CPU-only path-resolution checks; run with
+  `python -m unittest discover -s .agents/skills/evaluation/cosmos3/generator/paibench_c -p test_launcher_paths.py -v`
+  from the Framework root.
 - `run_paibench_c.sh` — self-contained bash script; mirrors every step of the notebook.
 - `run_with_cosmos_framework.ipynb` — interactive notebook (demo case + four full-sweep cells).
 - `assets/tasks.json` — 600 task entries, each with:
