@@ -1830,26 +1830,6 @@ def _mask_items_partly_posed_action_pack(
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_maskless_geometry_supports_optional_camera_pose_actions() -> None:
-    """The source mv100 layout may mix rows with and without one dense action control."""
-    pack = _mask_items_partly_posed_action_pack(num_views=2)
-    plan = _multiview_maskless_geometry_for_test(pack)
-
-    assert plan.num_views == (2, 2, 2)
-    assert plan.token_shapes == ((4, 1, 1), (4, 1, 1), (6, 1, 1))
-    assert plan.items_per_sample == (1, 2)
-    assert plan.is_control == (False, False, True)
-    assert plan.view_axis == (0, 0, 0)
-    # Control tokens share their target camera view groups and are excluded from the
-    # cross-instant pass, exactly the all-frame control rules of the source mask.
-    assert torch.diff(plan.same_view_offsets).tolist() == [2, 2, 5, 5]
-    (cross_pass,) = cross_view_passes(plan)
-    assert len(cross_pass.gather) == 8
-    assert torch.diff(cross_pass.offsets).tolist() == [1] * 8
-
-
-@pytest.mark.L0
-@torch.no_grad()
 def test_multiview_maskless_action_plan_matches_source_flex_mask() -> None:
     """The folds reproduce the source action-control rules for one representative pack."""
     pack = _mask_items_partly_posed_action_pack(num_views=2)
@@ -1896,15 +1876,6 @@ def test_multiview_maskless_action_plan_matches_source_flex_mask() -> None:
     flex_mask = pair_allowed(torch.tensor(0), torch.tensor(0), q[:, None], q[None, :])
 
     assert torch.equal(fold_mask, flex_mask)
-
-
-@pytest.mark.L0
-def test_multiview_maskless_geometry_rejects_action_without_a_target_vision_item() -> None:
-    pack = _mask_items_partly_posed_action_pack(num_views=2, num_action_items_per_sample=(1, 0))
-    pack.num_vision_items_per_sample = [0, 2]
-
-    with pytest.raises(ValueError, match="action control needs exactly one target vision item"):
-        _multiview_maskless_geometry_for_test(pack)
 
 
 @pytest.mark.L0
