@@ -1,0 +1,165 @@
+{
+  "schema_version": "1.0",
+  "tracks": {
+    "state": {
+      "name": "Failure state",
+      "fill_label": "unknown",
+      "labels": [
+        {
+          "key": "normal",
+          "name": "Normal",
+          "short": "Normal",
+          "hotkey": "1",
+          "color": "#36d399"
+        },
+        {
+          "key": "pickup_miss",
+          "name": "Pickup Miss",
+          "short": "Pickup Miss",
+          "hotkey": "2",
+          "color": "#fb923c"
+        },
+        {
+          "key": "pickup_slip",
+          "name": "Pickup Slip",
+          "short": "Pickup Slip",
+          "hotkey": "3",
+          "color": "#ef4444"
+        },
+        {
+          "key": "handover_drop",
+          "name": "Handover Drop",
+          "short": "Handover Drop",
+          "hotkey": "4",
+          "color": "#dc2626"
+        },
+        {
+          "key": "unknown",
+          "name": "Unknown",
+          "short": "Unknown",
+          "hotkey": "7",
+          "color": "#94a3b8"
+        }
+      ]
+    },
+    "phase": {
+      "name": "Task phase",
+      "fill_label": "unknown",
+      "labels": [
+        {
+          "key": "pick_grasp",
+          "name": "Pick Grasp",
+          "short": "Pick Grasp",
+          "hotkey": "Q",
+          "color": "#60a5fa"
+        },
+        {
+          "key": "lift_extract",
+          "name": "Lift Extract",
+          "short": "Lift Extract",
+          "hotkey": "W",
+          "color": "#38bdf8"
+        },
+        {
+          "key": "move_to_handover",
+          "name": "Move To Handover",
+          "short": "Move To Handover",
+          "hotkey": "E",
+          "color": "#22d3ee"
+        },
+        {
+          "key": "handover",
+          "name": "Handover",
+          "short": "Handover",
+          "hotkey": "R",
+          "color": "#a78bfa"
+        },
+        {
+          "key": "transport",
+          "name": "Transport",
+          "short": "Transport",
+          "hotkey": "T",
+          "color": "#c084fc"
+        },
+        {
+          "key": "place_release",
+          "name": "Place Release",
+          "short": "Place Release",
+          "hotkey": "Y",
+          "color": "#34d399"
+        },
+        {
+          "key": "recovery",
+          "name": "Recovery",
+          "short": "Recovery",
+          "hotkey": "U",
+          "color": "#facc15"
+        },
+        {
+          "key": "idle",
+          "name": "Idle",
+          "short": "Idle",
+          "hotkey": "I",
+          "color": "#64748b"
+        },
+        {
+          "key": "unknown",
+          "name": "Unknown",
+          "short": "Unknown",
+          "hotkey": "O",
+          "color": "#94a3b8"
+        }
+      ]
+    }
+  },
+  "default_outcome": "unreviewed",
+  "outcomes": [
+    {
+      "key": "unreviewed",
+      "label": "Unreviewed"
+    },
+    {
+      "key": "intended_failure",
+      "label": "Intended failure"
+    },
+    {
+      "key": "no_failure",
+      "label": "No failure"
+    },
+    {
+      "key": "different_failure",
+      "label": "Different failure"
+    },
+    {
+      "key": "invalid_generation",
+      "label": "Invalid video"
+    },
+    {
+      "key": "uncertain",
+      "label": "Uncertain"
+    }
+  ],
+  "cameras": [
+    {
+      "key": "synthetic",
+      "label": "Generated clip \u00b7 all cameras",
+      "path_contains": [
+        "/synthetic/"
+      ],
+      "primary": true
+    }
+  ],
+  "failure_event_policy": {
+    "convention": "active_failure_event_only_v1",
+    "intervals": "[start, end)",
+    "failure_labels": [
+      "pickup_miss",
+      "pickup_slip",
+      "handover_drop"
+    ],
+    "post_event_label": "normal",
+    "instructions": "Label only the active failure event. After the fall or empty withdrawal finishes, return to Normal. Keep the episode failure outcome; label recovery separately on the task-phase track.",
+    "unknown_evidence_label": "unknown",
+    "end_rule": "End at the first frame after the visible event finishes. If still active at clip end, record event_end_observed=false."
+  }
+}

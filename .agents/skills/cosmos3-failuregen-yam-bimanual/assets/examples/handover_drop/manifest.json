@@ -1,0 +1,62 @@
+{
+  "source_batch": "failure-types/eval-v6-20261002/job3218072",
+  "donor_episode": 42,
+  "host_episode": 79,
+  "donor_start_seconds": 10.6,
+  "host_start_seconds": 10.8,
+  "media": "Recorded donor and host clips, plus a labeled side-by-side GIF and MP4 using the existing synthetic handover-drop continuation.",
+  "videos": [
+    {
+      "role": "donor",
+      "title": "Recorded failure donor",
+      "file": "donor.mp4",
+      "source_path": "sources/ep000042_f000053_c1/ground_truth.mp4",
+      "sha256": "59b83043239fdc5c8e2c5ba66d5e8e90795232c5b6cb2c4a1b1bc28bcbb72c22",
+      "bytes": 599326
+    },
+    {
+      "role": "host",
+      "title": "Recorded successful host",
+      "file": "host.mp4",
+      "source_path": "sources/ep000079_f000054_c1/ground_truth.mp4",
+      "sha256": "a4b76d98f187ed6d487ab9a51b7f3ab16ccfc964794603da1c3caf1412e136ef",
+      "bytes": 786692
+    }
+  ],
+  "failure_type": "handover_drop",
+  "hero": {
+    "layout": [
+      "real failure",
+      "real success",
+      "synthetic failure"
+    ],
+    "synthetic_source": {
+      "source_batch": "failure-types/eval-v6-20261002/job3218072",
+      "source_path": "seeds/seed0/runs/handover_drop_eval_ep42__ep000079_f000054__failure_donor/synth.mp4",
+      "sha256": "8dae679126939df6cc58be0e5ab25b899f33b43d7e8dda1286f304776de83a64",
+      "seed": 0
+    },
+    "presentation": {
+      "width": 1224,
+      "height": 480,
+      "fps": 5,
+      "source_frames": 17,
+      "video_duration_seconds": 3.4,
+      "gif_final_hold_seconds": 1.0,
+      "gif_loop": "infinite",
+      "processing": "Full camera canvases resized to 400x400 with labeled headers; original frame order and timing preserved, no interpolation."
+    },
+    "files": [
+      {
+        "file": "handover-drop-comparison.gif",
+        "bytes": 3473404,
+        "sha256": "1ee1eedf3e0e32492a42e82583eb9d9697da754a9fcb984e2c0355169713b847"
+      },
+      {
+        "file": "handover-drop-comparison.mp4",
+        "bytes": 433566,
+        "sha256": "42cadcf32029f664198b85906f23b2f03fe1efe3e77590ee90c697b8ff5e54c0"
+      }
+    ]
+  }
+}

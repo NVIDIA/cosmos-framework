@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "source_batch": "job3218072",
+  "labeling_set": "labeler-job3218072",
+  "families": [
+    {
+      "id": "handover_drop_eval_ep42",
+      "label": "handover_drop",
+      "phase": "handover",
+      "arms": [
+        "left",
+        "right"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "start",
+      "event_offset_s": 1.8,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 42,
+      "donor_split": "train",
+      "donor_start": 10.6,
+      "event_start": 11.6,
+      "example": {
+        "seed": 0,
+        "host_episode": 79,
+        "host_start": 10.8,
+        "run_name": "handover_drop_eval_ep42__ep000079_f000054__failure_donor"
+      },
+      "donor_event_index": 1
+    },
+    {
+      "id": "pickup_miss_eval_ep40",
+      "label": "pickup_miss",
+      "phase": "pick_grasp",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 40,
+      "donor_split": "train",
+      "donor_start": 7.2,
+      "event_start": 8.2,
+      "example": {
+        "seed": 0,
+        "host_episode": 43,
+        "host_start": 4.4,
+        "run_name": "pickup_miss_eval_ep40__ep000043_f000022__failure_donor"
+      },
+      "donor_event_index": 1
+    },
+    {
+      "id": "pickup_slip_eval_ep61",
+      "label": "pickup_slip",
+      "phase": "lift_extract",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 61,
+      "donor_split": "train",
+      "donor_start": 8.6,
+      "event_start": 9.4,
+      "example": {
+        "seed": 0,
+        "host_episode": 46,
+        "host_start": 7.6,
+        "run_name": "pickup_slip_eval_ep61__ep000046_f000038__failure_donor"
+      },
+      "donor_event_index": 1
+    }
+  ]
+}
