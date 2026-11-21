@@ -19,10 +19,11 @@ import os
 from cosmos_framework.posttrain.utils.log import info0
 
 
-def enable_determinism() -> None:
-    """Set PyTorch's determinism knobs so the loss is bit-exact across reruns on the same GPU and
-    torch build. Lifted from `tests/parity_cli._enable_determinism`, which `test_parity_cosmos3.py`
-    already relies on for a bit-identical 8B loss.
+def enable_determinism(*, strict: bool = False) -> None:
+    """Configure reproducibility controls; exact equivalence remains an execution-test gate.
+
+    Lifted from `tests/parity_cli._enable_determinism`, which `test_parity_cosmos3.py`
+    already relies on for a bit-identical 8B loss on its qualified configuration.
 
     MUST run before any CUDA / flash-attn init, in EVERY process that touches CUDA — the driver AND
     each Ray actor (separate processes that do not inherit the driver's `os.environ`). cuBLAS reads
@@ -30,8 +31,10 @@ def enable_determinism() -> None:
     nothing: the run then LOOKS configured while drifting. The `Raises` guard makes that loud, which
     is why only the launch environment (not a late mutation) reliably reaches the actors.
 
-    `use_deterministic_algorithms(warn_only=True)` is deliberate: a kernel with no deterministic
-    implementation should warn and proceed, not kill the run.
+    The default preserves existing warning-only behavior. ``strict=True`` requests deterministic
+    kernels and fails when an operation has no supported deterministic implementation. In particular,
+    PyTorch Flash SDPA backward only selects its deterministic algorithm with ``warn_only=False``;
+    the warning-only mode can continue with a nondeterministic backward algorithm.
 
     Raises:
         RuntimeError: `CUBLAS_WORKSPACE_CONFIG` was not already set (e.g. inherited from the launch
@@ -56,4 +59,4 @@ def enable_determinism() -> None:
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.use_deterministic_algorithms(True, warn_only=not strict)

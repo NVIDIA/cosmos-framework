@@ -1,0 +1,1756 @@
+{
+  "base_model": {
+    "config_sha256": "5cd452860dc1e9c29dd71cc3cef7f39b338b7a40793f7a260655c2d3568f3661",
+    "processor_sha256": "9d674c4ab12ba55505f763912e1fadf3d8660125dcb774c20462743582d8b180",
+    "protocol": "cosmos.adapter-source.v1",
+    "repository": "Qwen/Qwen3-VL-8B-Instruct",
+    "revision": "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+    "weights_sha256": "69368621649dca3287fe9587bcac3d1d2fb6380974d9b59ade8c80aaa9879daf"
+  },
+  "bf16": {
+    "adapter_dtype": "float32",
+    "adapter_parameters": 504,
+    "correctness": {
+      "cross_worker_payload_exact": true,
+      "cross_worker_trajectory_exact": true,
+      "own_lifecycle_15_passed": true,
+      "own_reload_exact": true
+    },
+    "cost": {
+      "allocated_cpu_seconds": 29328,
+      "bf16": 1688.1627424701583,
+      "gpu_allocation_seconds": 1833,
+      "nf4": 0.0,
+      "outside_stage_timer_seconds": 121.40980524162296,
+      "shared": 1.3833101111231372,
+      "unlabelled_allocation_preflight_seconds": 22.044142177095637
+    },
+    "cross_worker_exact_atol": 0,
+    "cross_worker_exact_rtol": 0,
+    "cross_worker_payload_components": {
+      "data": {
+        "exact_except_explicit_identity_and_existing_storage_publication_fields": true
+      },
+      "model": {
+        "entries": 504,
+        "exact": true,
+        "tensor_entries": 504
+      },
+      "optim": {
+        "entries": 1525,
+        "exact": true,
+        "tensor_entries": 1512
+      },
+      "trainer": {
+        "exact_except_explicit_identity_and_existing_storage_publication_fields": true
+      }
+    },
+    "cross_worker_updates": [
+      {
+        "excluded_observational_metrics": [
+          "timer/*",
+          "train/preprocessing_*",
+          "train/grad_clip_fraction"
+        ],
+        "numerical_metrics": {
+          "optim/attempt_id": 1.0,
+          "optim/finite_gradient_check_enabled": 1.0,
+          "optim/nonfinite_gradient": 0.0,
+          "optim/nonfinite_loss": 0.0,
+          "optim/nonfinite_skips_consecutive": 0.0,
+          "optim/nonfinite_skips_total": 0.0,
+          "optim/optimizer_step": 1.0,
+          "optim/step_skipped": 0.0,
+          "train/grad_norm": 10.785496711730957,
+          "train/learning_rate": 1.0000000000000002e-06,
+          "train/loss_avg": 1.5679447503061965,
+          "train/valid_sequence_count": 8.0,
+          "train/valid_token_count": 16.0
+        },
+        "optimizer_step": 1,
+        "passed": true,
+        "scope": "Exact native numerical update metrics only; cold-cache counters, timings and reporter-history clip fractions are observational. Model, optimizer, control, RNG and data payload equality requires a separately executed checkpoint comparison and is not established by this metrics result."
+      },
+      {
+        "excluded_observational_metrics": [
+          "timer/*",
+          "train/preprocessing_*",
+          "train/grad_clip_fraction"
+        ],
+        "numerical_metrics": {
+          "optim/attempt_id": 2.0,
+          "optim/finite_gradient_check_enabled": 1.0,
+          "optim/nonfinite_gradient": 0.0,
+          "optim/nonfinite_loss": 0.0,
+          "optim/nonfinite_skips_consecutive": 0.0,
+          "optim/nonfinite_skips_total": 0.0,
+          "optim/optimizer_step": 2.0,
+          "optim/step_skipped": 0.0,
+          "train/grad_norm": 9.851094245910645,
+          "train/learning_rate": 0.0001,
+          "train/loss_avg": 0.3651453356407046,
+          "train/valid_sequence_count": 8.0,
+          "train/valid_token_count": 16.0
+        },
+        "optimizer_step": 2,
+        "passed": true,
+        "scope": "Exact native numerical update metrics only; cold-cache counters, timings and reporter-history clip fractions are observational. Model, optimizer, control, RNG and data payload equality requires a separately executed checkpoint comparison and is not established by this metrics result."
+      },
+      {
+        "excluded_observational_metrics": [
+          "timer/*",
+          "train/preprocessing_*",
+          "train/grad_clip_fraction"
+        ],
+        "numerical_metrics": {
+          "optim/attempt_id": 3.0,
+          "optim/finite_gradient_check_enabled": 1.0,
+          "optim/nonfinite_gradient": 0.0,
+          "optim/nonfinite_loss": 0.0,
+          "optim/nonfinite_skips_consecutive": 0.0,
+          "optim/nonfinite_skips_total": 0.0,
+          "optim/optimizer_step": 3.0,
+          "optim/step_skipped": 0.0,
+          "train/grad_norm": 13.049295425415039,
+          "train/learning_rate": 7.75e-05,
+          "train/loss_avg": 2.342244749190286,
+          "train/valid_sequence_count": 8.0,
+          "train/valid_token_count": 16.0
+        },
+        "optimizer_step": 3,
+        "passed": true,
+        "scope": "Exact native numerical update metrics only; cold-cache counters, timings and reporter-history clip fractions are observational. Model, optimizer, control, RNG and data payload equality requires a separately executed checkpoint comparison and is not established by this metrics result."
+      },
+      {
+        "excluded_observational_metrics": [
+          "timer/*",
+          "train/preprocessing_*",
+          "train/grad_clip_fraction"
+        ],
+        "numerical_metrics": {
+          "optim/attempt_id": 4.0,
+          "optim/finite_gradient_check_enabled": 1.0,
+          "optim/nonfinite_gradient": 0.0,
+          "optim/nonfinite_loss": 0.0,
+          "optim/nonfinite_skips_consecutive": 0.0,
+          "optim/nonfinite_skips_total": 0.0,
+          "optim/optimizer_step": 4.0,
+          "optim/step_skipped": 0.0,
+          "train/grad_norm": 4.255979061126709,
+          "train/learning_rate": 3.250000000000001e-05,
+          "train/loss_avg": 0.635857376306376,
+          "train/valid_sequence_count": 8.0,
+          "train/valid_token_count": 16.0
+        },
+        "optimizer_step": 4,
+        "passed": true,
+        "scope": "Exact native numerical update metrics only; cold-cache counters, timings and reporter-history clip fractions are observational. Model, optimizer, control, RNG and data payload equality requires a separately executed checkpoint comparison and is not established by this metrics result."
+      }
+    ],
+    "existing_storage_publication_exclusions": [
+      "validation.publication.destination",
+      "validation.publication.id",
+      "validation.publication.manifest"
+    ],
+    "outer_stages": 7,
+    "own_inspected_boundaries": 6,
+    "own_lifecycle_stages": 15,
+    "own_payload_comparisons": {
+      "accumulation_compare_3": {
+        "atol": 0.0,
+        "controls_rng_and_data_exact": true,
+        "excluded_storage_identity_fields": [
+          "validation.publication.destination",
+          "validation.publication.id",
+          "validation.publication.manifest"
+        ],
+        "maximum_tensor_difference": {
+          "model": 0.0,
+          "optim": 0.0
+        },
+        "passed": true,
+        "rtol": 0.0
+      },
+      "accumulation_compare_4": {
+        "atol": 0.0,
+        "controls_rng_and_data_exact": true,
+        "excluded_storage_identity_fields": [
+          "validation.publication.destination",
+          "validation.publication.id",
+          "validation.publication.manifest"
+        ],
+        "maximum_tensor_difference": {
+          "model": 0.0,
+          "optim": 0.0
+        },
+        "passed": true,
+        "rtol": 0.0
+      },
+      "accumulation_source_compare": {
+        "atol": 0.0,
+        "controls_rng_and_data_exact": true,
+        "excluded_storage_identity_fields": [
+          "validation.publication.destination",
+          "validation.publication.id",
+          "validation.publication.manifest"
+        ],
+        "maximum_tensor_difference": {
+          "model": 0.0,
+          "optim": 0.0
+        },
+        "passed": true,
+        "rtol": 0.0
+      },
+      "boundary_compare_3": {
+        "atol": 0.0,
+        "controls_rng_and_data_exact": true,
+        "excluded_storage_identity_fields": [
+          "validation.publication.destination",
+          "validation.publication.id",
+          "validation.publication.manifest"
+        ],
+        "maximum_tensor_difference": {
+          "model": 0.0,
+          "optim": 0.0
+        },
+        "passed": true,
+        "rtol": 0.0
+      },
+      "boundary_compare_4": {
+        "atol": 0.0,
+        "controls_rng_and_data_exact": true,
+        "excluded_storage_identity_fields": [
+          "validation.publication.destination",
+          "validation.publication.id",
+          "validation.publication.manifest"
+        ],
+        "maximum_tensor_difference": {
+          "model": 0.0,
+          "optim": 0.0
+        },
+        "passed": true,
+        "rtol": 0.0
+      },
+      "boundary_source_compare": {
+        "atol": 0.0,
+        "controls_rng_and_data_exact": true,
+        "excluded_storage_identity_fields": [
+          "validation.publication.destination",
+          "validation.publication.id",
+          "validation.publication.manifest"
+        ],
+        "maximum_tensor_difference": {
+          "model": 0.0,
+          "optim": 0.0
+        },
+        "passed": true,
+        "rtol": 0.0
+      }
+    },
+    "own_reload": {
+      "atol": 0.0,
+      "differences": {
+        "image": {
+          "logits_max_abs": 0.0,
+          "loss_abs": 0.0
+        },
+        "text": {
+          "logits_max_abs": 0.0,
+          "loss_abs": 0.0
+        },
+        "video": {
+          "logits_max_abs": 0.0,
+          "loss_abs": 0.0
+        }
+      },
+      "passed": true,
+      "rtol": 0.0
+    },
+    "production_cross_worker_resume_qualified": false,
+    "quantized_matrices": 0,
+    "resource": {
+      "incomplete_raw_rows": 0,
+      "lifecycle_allocator_intervals": {
+        "accumulation": {
+          "allocator_evidence_complete": true,
+          "allocator_peak_allocated_bytes": 19381489152,
+          "allocator_peak_reserved_bytes": 19599982592,
+          "interval_count": 11,
+          "intervals_without_samples": 4,
+          "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+          "phases": {
+            "checkpoint_write": {
+              "allocator_peak_allocated_bytes": 19073119744,
+              "allocator_peak_reserved_bytes": 19599982592,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 20.396335872937925,
+                "mean": 19.767509459517896,
+                "median": 19.767509459517896,
+                "p95": 20.33345323159592,
+                "sum": 39.53501891903579
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 20671627264
+            },
+            "first_update": {
+              "allocator_peak_allocated_bytes": 19072376320,
+              "allocator_peak_reserved_bytes": 19277021184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 28.74085295002442,
+                "mean": 28.74085295002442,
+                "median": 28.74085295002442,
+                "p95": 28.74085295002442,
+                "sum": 28.74085295002442
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 19998441472
+            },
+            "initial_validation": {
+              "allocator_peak_allocated_bytes": 18079789568,
+              "allocator_peak_reserved_bytes": 18199085056,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 21.890074267052114,
+                "mean": 21.890074267052114,
+                "median": 21.890074267052114,
+                "p95": 21.890074267052114,
+                "sum": 21.890074267052114
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 19237175296
+            },
+            "loading": {
+              "allocator_peak_allocated_bytes": 17931589632,
+              "allocator_peak_reserved_bytes": 17966301184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 23.870613258099183,
+                "mean": 23.870613258099183,
+                "median": 23.870613258099183,
+                "p95": 23.870613258099183,
+                "sum": 23.870613258099183
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 18956156928
+            },
+            "post_checkpoint_boundary": {
+              "allocator_peak_allocated_bytes": 19184345600,
+              "allocator_peak_reserved_bytes": 19599982592,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 0.9328468140447512,
+                "mean": 0.47708359151147306,
+                "median": 0.47708359151147306,
+                "p95": 0.8872704917914234,
+                "sum": 0.9541671830229461
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": 20671627264
+            },
+            "trainer_setup": {
+              "allocator_peak_allocated_bytes": 17931589632,
+              "allocator_peak_reserved_bytes": 17966301184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 0.040374756907112896,
+                "mean": 0.040374756907112896,
+                "median": 0.040374756907112896,
+                "p95": 0.040374756907112896,
+                "sum": 0.040374756907112896
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": null
+            },
+            "updates": {
+              "allocator_peak_allocated_bytes": 19381489152,
+              "allocator_peak_reserved_bytes": 19599982592,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 11.044301048037596,
+                "mean": 11.044301048037596,
+                "median": 11.044301048037596,
+                "p95": 11.044301048037596,
+                "sum": 11.044301048037596
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 20671627264
+            },
+            "validation_or_boundary_overhead": {
+              "allocator_peak_allocated_bytes": 19072371200,
+              "allocator_peak_reserved_bytes": 19599982592,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 0.04146548290736973,
+                "mean": 0.03346554143354297,
+                "median": 0.03346554143354297,
+                "p95": 0.04066548875998706,
+                "sum": 0.06693108286708593
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": null
+            }
+          },
+          "sampled": {
+            "device_peak_bytes": 21405827072,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 5946875904,
+            "host_rss_sum_peak_bytes": 6473891840,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 124.91842103004456,
+            "owned_device_process_peak_bytes": 20671627264,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 97,
+            "sampling_gap_seconds": {
+              "count": 96,
+              "maximum": 1.4259326457977295,
+              "mean": 1.3012335523962975,
+              "median": 1.2970374822616577,
+              "p95": 1.3620784878730774,
+              "sum": 124.91842103004456
+            }
+          }
+        },
+        "accumulation_resumed": {
+          "allocator_evidence_complete": true,
+          "allocator_peak_allocated_bytes": 19698956288,
+          "allocator_peak_reserved_bytes": 20390608896,
+          "interval_count": 11,
+          "intervals_without_samples": 4,
+          "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+          "phases": {
+            "checkpoint_write": {
+              "allocator_peak_allocated_bytes": 19078927872,
+              "allocator_peak_reserved_bytes": 20390608896,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 20.645094001083635,
+                "mean": 19.86020986706717,
+                "median": 19.86020986706717,
+                "p95": 20.566605587681988,
+                "sum": 39.72041973413434
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 21462253568
+            },
+            "initial_validation": {
+              "allocator_peak_allocated_bytes": 18638587904,
+              "allocator_peak_reserved_bytes": 19723714560,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 0.025317218038253486,
+                "mean": 0.025317218038253486,
+                "median": 0.025317218038253486,
+                "p95": 0.025317218038253486,
+                "sum": 0.025317218038253486
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": null
+            },
+            "loading": {
+              "allocator_peak_allocated_bytes": 17931589632,
+              "allocator_peak_reserved_bytes": 17966301184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 23.74563761195168,
+                "mean": 23.74563761195168,
+                "median": 23.74563761195168,
+                "p95": 23.74563761195168,
+                "sum": 23.74563761195168
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 18956156928
+            },
+            "post_checkpoint_boundary": {
+              "allocator_peak_allocated_bytes": 19192783360,
+              "allocator_peak_reserved_bytes": 20390608896,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 3.118141543935053,
+                "mean": 1.5699843674665317,
+                "median": 1.5699843674665317,
+                "p95": 2.9633258262882007,
+                "sum": 3.1399687349330634
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": 21462253568
+            },
+            "trainer_setup": {
+              "allocator_peak_allocated_bytes": 19698956288,
+              "allocator_peak_reserved_bytes": 19723714560,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 18.433326995000243,
+                "mean": 18.433326995000243,
+                "median": 18.433326995000243,
+                "p95": 18.433326995000243,
+                "sum": 18.433326995000243
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 20713570304
+            },
+            "unclassified": {
+              "allocator_peak_allocated_bytes": 19387014656,
+              "allocator_peak_reserved_bytes": 20390608896,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 30.166509647038765,
+                "mean": 30.166509647038765,
+                "median": 30.166509647038765,
+                "p95": 30.166509647038765,
+                "sum": 30.166509647038765
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 21462253568
+            },
+            "updates": {
+              "allocator_peak_allocated_bytes": 19391814656,
+              "allocator_peak_reserved_bytes": 20390608896,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 9.99575899692718,
+                "mean": 9.99575899692718,
+                "median": 9.99575899692718,
+                "p95": 9.99575899692718,
+                "sum": 9.99575899692718
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 21462253568
+            },
+            "validation_or_boundary_overhead": {
+              "allocator_peak_allocated_bytes": 19078179328,
+              "allocator_peak_reserved_bytes": 20390608896,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 0.030761218979023397,
+                "mean": 0.02969468996161595,
+                "median": 0.02969468996161595,
+                "p95": 0.030654566077282654,
+                "sum": 0.0593893799232319
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": null
+            }
+          },
+          "sampled": {
+            "device_peak_bytes": 22196453376,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 6784823296,
+            "host_rss_sum_peak_bytes": 6920785920,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 123.74224805831909,
+            "owned_device_process_peak_bytes": 21462253568,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 96,
+            "sampling_gap_seconds": {
+              "count": 95,
+              "maximum": 1.3809499740600586,
+              "mean": 1.3025499795612536,
+              "median": 1.2972424030303955,
+              "p95": 1.3409680604934693,
+              "sum": 123.74224805831909
+            }
+          }
+        },
+        "boundary": {
+          "allocator_evidence_complete": true,
+          "allocator_peak_allocated_bytes": 19381489152,
+          "allocator_peak_reserved_bytes": 19599982592,
+          "interval_count": 11,
+          "intervals_without_samples": 4,
+          "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+          "phases": {
+            "checkpoint_write": {
+              "allocator_peak_allocated_bytes": 19073119744,
+              "allocator_peak_reserved_bytes": 19599982592,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 19.862748606014065,
+                "mean": 19.502769726968836,
+                "median": 19.502769726968836,
+                "p95": 19.826750718109544,
+                "sum": 39.00553945393767
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 20671627264
+            },
+            "first_update": {
+              "allocator_peak_allocated_bytes": 19072376320,
+              "allocator_peak_reserved_bytes": 19277021184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 28.967341179959476,
+                "mean": 28.967341179959476,
+                "median": 28.967341179959476,
+                "p95": 28.967341179959476,
+                "sum": 28.967341179959476
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 19998441472
+            },
+            "initial_validation": {
+              "allocator_peak_allocated_bytes": 18079789568,
+              "allocator_peak_reserved_bytes": 18199085056,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 21.313200504984707,
+                "mean": 21.313200504984707,
+                "median": 21.313200504984707,
+                "p95": 21.313200504984707,
+                "sum": 21.313200504984707
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 19237175296
+            },
+            "loading": {
+              "allocator_peak_allocated_bytes": 17931589632,
+              "allocator_peak_reserved_bytes": 17966301184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 23.87308214197401,
+                "mean": 23.87308214197401,
+                "median": 23.87308214197401,
+                "p95": 23.87308214197401,
+                "sum": 23.87308214197401
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 18956156928
+            },
+            "post_checkpoint_boundary": {
+              "allocator_peak_allocated_bytes": 19184345600,
+              "allocator_peak_reserved_bytes": 19599982592,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 0.9290474660228938,
+                "mean": 0.476264507509768,
+                "median": 0.476264507509768,
+                "p95": 0.8837691701715812,
+                "sum": 0.952529015019536
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": 20671627264
+            },
+            "trainer_setup": {
+              "allocator_peak_allocated_bytes": 17931589632,
+              "allocator_peak_reserved_bytes": 17966301184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 0.03704729804303497,
+                "mean": 0.03704729804303497,
+                "median": 0.03704729804303497,
+                "p95": 0.03704729804303497,
+                "sum": 0.03704729804303497
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": null
+            },
+            "updates": {
+              "allocator_peak_allocated_bytes": 19381489152,
+              "allocator_peak_reserved_bytes": 19599982592,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 10.878365081036463,
+                "mean": 10.878365081036463,
+                "median": 10.878365081036463,
+                "p95": 10.878365081036463,
+                "sum": 10.878365081036463
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 20671627264
+            },
+            "validation_or_boundary_overhead": {
+              "allocator_peak_allocated_bytes": 19072371200,
+              "allocator_peak_reserved_bytes": 19599982592,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 0.03669698000885546,
+                "mean": 0.03236800502054393,
+                "median": 0.03236800502054393,
+                "p95": 0.03626408251002431,
+                "sum": 0.06473601004108787
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": null
+            }
+          },
+          "sampled": {
+            "device_peak_bytes": 21405827072,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 5856873472,
+            "host_rss_sum_peak_bytes": 6723481600,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 123.7583155632019,
+            "owned_device_process_peak_bytes": 20671627264,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 96,
+            "sampling_gap_seconds": {
+              "count": 95,
+              "maximum": 1.4181785583496094,
+              "mean": 1.302719111191599,
+              "median": 1.2983174324035645,
+              "p95": 1.3346779108047486,
+              "sum": 123.7583155632019
+            }
+          }
+        },
+        "boundary_resumed": {
+          "allocator_evidence_complete": true,
+          "allocator_peak_allocated_bytes": 19698956288,
+          "allocator_peak_reserved_bytes": 20390608896,
+          "interval_count": 11,
+          "intervals_without_samples": 4,
+          "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+          "phases": {
+            "checkpoint_write": {
+              "allocator_peak_allocated_bytes": 19078927872,
+              "allocator_peak_reserved_bytes": 20390608896,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 19.943985156947747,
+                "mean": 19.809420499484986,
+                "median": 19.809420499484986,
+                "p95": 19.93052869120147,
+                "sum": 39.61884099896997
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 21462253568
+            },
+            "initial_validation": {
+              "allocator_peak_allocated_bytes": 18638587904,
+              "allocator_peak_reserved_bytes": 19723714560,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 0.025213177897967398,
+                "mean": 0.025213177897967398,
+                "median": 0.025213177897967398,
+                "p95": 0.025213177897967398,
+                "sum": 0.025213177897967398
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": null
+            },
+            "loading": {
+              "allocator_peak_allocated_bytes": 17931589632,
+              "allocator_peak_reserved_bytes": 17966301184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 24.068745021009818,
+                "mean": 24.068745021009818,
+                "median": 24.068745021009818,
+                "p95": 24.068745021009818,
+                "sum": 24.068745021009818
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 18956156928
+            },
+            "post_checkpoint_boundary": {
+              "allocator_peak_allocated_bytes": 19192783360,
+              "allocator_peak_reserved_bytes": 20390608896,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 3.091819545952603,
+                "mean": 1.5570216669584624,
+                "median": 1.5570216669584624,
+                "p95": 2.938339758053189,
+                "sum": 3.114043333916925
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": 21462253568
+            },
+            "trainer_setup": {
+              "allocator_peak_allocated_bytes": 19698956288,
+              "allocator_peak_reserved_bytes": 19723714560,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 18.175456274999306,
+                "mean": 18.175456274999306,
+                "median": 18.175456274999306,
+                "p95": 18.175456274999306,
+                "sum": 18.175456274999306
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 20713570304
+            },
+            "unclassified": {
+              "allocator_peak_allocated_bytes": 19387014656,
+              "allocator_peak_reserved_bytes": 20390608896,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 28.977179301087745,
+                "mean": 28.977179301087745,
+                "median": 28.977179301087745,
+                "p95": 28.977179301087745,
+                "sum": 28.977179301087745
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 21462253568
+            },
+            "updates": {
+              "allocator_peak_allocated_bytes": 19391814656,
+              "allocator_peak_reserved_bytes": 20390608896,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 9.815319809014909,
+                "mean": 9.815319809014909,
+                "median": 9.815319809014909,
+                "p95": 9.815319809014909,
+                "sum": 9.815319809014909
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 21462253568
+            },
+            "validation_or_boundary_overhead": {
+              "allocator_peak_allocated_bytes": 19078179328,
+              "allocator_peak_reserved_bytes": 20390608896,
+              "interval_seconds": {
+                "count": 2,
+                "maximum": 0.031115703051909804,
+                "mean": 0.029401593026705086,
+                "median": 0.029401593026705086,
+                "p95": 0.03094429204938933,
+                "sum": 0.05880318605341017
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": null
+            }
+          },
+          "sampled": {
+            "device_peak_bytes": 22196453376,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 5892748288,
+            "host_rss_sum_peak_bytes": 6761521152,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 123.18286752700806,
+            "owned_device_process_peak_bytes": 21462253568,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 95,
+            "sampling_gap_seconds": {
+              "count": 94,
+              "maximum": 1.4749269485473633,
+              "mean": 1.3104560375213623,
+              "median": 1.3056186437606812,
+              "p95": 1.3673030495643614,
+              "sum": 123.18286752700806
+            }
+          }
+        },
+        "probe_dcp": {
+          "allocator_evidence_complete": true,
+          "allocator_peak_allocated_bytes": 17931589632,
+          "allocator_peak_reserved_bytes": 17966301184,
+          "interval_count": 1,
+          "intervals_without_samples": 0,
+          "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+          "phases": {
+            "loading": {
+              "allocator_peak_allocated_bytes": 17931589632,
+              "allocator_peak_reserved_bytes": 17966301184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 23.597634932026267,
+                "mean": 23.597634932026267,
+                "median": 23.597634932026267,
+                "p95": 23.597634932026267,
+                "sum": 23.597634932026267
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 18480103424
+            }
+          },
+          "sampled": {
+            "device_peak_bytes": 19214303232,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 6415378432,
+            "host_rss_sum_peak_bytes": 6539120640,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 22.113621711730957,
+            "owned_device_process_peak_bytes": 18480103424,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 18,
+            "sampling_gap_seconds": {
+              "count": 17,
+              "maximum": 1.3557915687561035,
+              "mean": 1.3008012771606445,
+              "median": 1.2954328060150146,
+              "p95": 1.343093204498291,
+              "sum": 22.113621711730957
+            }
+          }
+        },
+        "probe_portable": {
+          "allocator_evidence_complete": true,
+          "allocator_peak_allocated_bytes": 17931589632,
+          "allocator_peak_reserved_bytes": 17966301184,
+          "interval_count": 1,
+          "intervals_without_samples": 0,
+          "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+          "phases": {
+            "loading": {
+              "allocator_peak_allocated_bytes": 17931589632,
+              "allocator_peak_reserved_bytes": 17966301184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 23.75953447096981,
+                "mean": 23.75953447096981,
+                "median": 23.75953447096981,
+                "p95": 23.75953447096981,
+                "sum": 23.75953447096981
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 18480103424
+            }
+          },
+          "sampled": {
+            "device_peak_bytes": 19214303232,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 6925607936,
+            "host_rss_sum_peak_bytes": 7084806144,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 22.009702444076538,
+            "owned_device_process_peak_bytes": 18480103424,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 18,
+            "sampling_gap_seconds": {
+              "count": 17,
+              "maximum": 1.3332509994506836,
+              "mean": 1.2946883790633257,
+              "median": 1.2945828437805176,
+              "p95": 1.3176563262939454,
+              "sum": 22.009702444076538
+            }
+          }
+        },
+        "reference": {
+          "allocator_evidence_complete": true,
+          "allocator_peak_allocated_bytes": 19389520896,
+          "allocator_peak_reserved_bytes": 19633537024,
+          "interval_count": 19,
+          "intervals_without_samples": 8,
+          "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+          "phases": {
+            "checkpoint_write": {
+              "allocator_peak_allocated_bytes": 19077043712,
+              "allocator_peak_reserved_bytes": 19631439872,
+              "interval_seconds": {
+                "count": 4,
+                "maximum": 20.186571156024,
+                "mean": 19.830894896993414,
+                "median": 19.766637434484437,
+                "p95": 20.13783634142019,
+                "sum": 79.32357958797365
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 20703084544
+            },
+            "first_update": {
+              "allocator_peak_allocated_bytes": 19072376320,
+              "allocator_peak_reserved_bytes": 19277021184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 29.25455047294963,
+                "mean": 29.25455047294963,
+                "median": 29.25455047294963,
+                "p95": 29.25455047294963,
+                "sum": 29.25455047294963
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 19998441472
+            },
+            "initial_validation": {
+              "allocator_peak_allocated_bytes": 18079789568,
+              "allocator_peak_reserved_bytes": 18199085056,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 21.75558550201822,
+                "mean": 21.75558550201822,
+                "median": 21.75558550201822,
+                "p95": 21.75558550201822,
+                "sum": 21.75558550201822
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 19058917376
+            },
+            "loading": {
+              "allocator_peak_allocated_bytes": 17931589632,
+              "allocator_peak_reserved_bytes": 17966301184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 25.96101601596456,
+                "mean": 25.96101601596456,
+                "median": 25.96101601596456,
+                "p95": 25.96101601596456,
+                "sum": 25.96101601596456
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 18956156928
+            },
+            "post_checkpoint_boundary": {
+              "allocator_peak_allocated_bytes": 19190899200,
+              "allocator_peak_reserved_bytes": 19633537024,
+              "interval_seconds": {
+                "count": 4,
+                "maximum": 0.8146309379953891,
+                "mean": 0.4151485317852348,
+                "median": 0.4151136660366319,
+                "p95": 0.8141863957454916,
+                "sum": 1.6605941271409392
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": 20671627264
+            },
+            "trainer_setup": {
+              "allocator_peak_allocated_bytes": 17931589632,
+              "allocator_peak_reserved_bytes": 17966301184,
+              "interval_seconds": {
+                "count": 1,
+                "maximum": 0.039684382965788245,
+                "mean": 0.039684382965788245,
+                "median": 0.039684382965788245,
+                "p95": 0.039684382965788245,
+                "sum": 0.039684382965788245
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": null
+            },
+            "updates": {
+              "allocator_peak_allocated_bytes": 19389520896,
+              "allocator_peak_reserved_bytes": 19631439872,
+              "interval_seconds": {
+                "count": 3,
+                "maximum": 11.161993546993472,
+                "mean": 10.69469517430601,
+                "median": 10.85164982790593,
+                "p95": 11.130959175084717,
+                "sum": 32.08408552291803
+              },
+              "sampled_errors": [],
+              "sampled_gpu_evidence_complete": true,
+              "sampled_owned_device_process_peak_bytes": 20703084544
+            },
+            "validation_or_boundary_overhead": {
+              "allocator_peak_allocated_bytes": 19076295168,
+              "allocator_peak_reserved_bytes": 19631439872,
+              "interval_seconds": {
+                "count": 4,
+                "maximum": 0.035819979035295546,
+                "mean": 0.027051958750234917,
+                "median": 0.025141069025266916,
+                "p95": 0.03457810173276812,
+                "sum": 0.10820783500093967
+              },
+              "sampled_errors": [
+                "no_samples"
+              ],
+              "sampled_gpu_evidence_complete": false,
+              "sampled_owned_device_process_peak_bytes": null
+            }
+          },
+          "sampled": {
+            "device_peak_bytes": 21437284352,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 6907239424,
+            "host_rss_sum_peak_bytes": 7140806656,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 188.8592884540558,
+            "owned_device_process_peak_bytes": 20703084544,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 146,
+            "sampling_gap_seconds": {
+              "count": 145,
+              "maximum": 1.3871359825134277,
+              "mean": 1.3024778514072812,
+              "median": 1.2988197803497314,
+              "p95": 1.3397483348846435,
+              "sum": 188.8592884540558
+            }
+          }
+        }
+      },
+      "outer_stages": {
+        "allocation_preflight": {
+          "host_incomplete_rows": 0,
+          "memory": {
+            "allocator_evidence_complete": false,
+            "allocator_peak_allocated_bytes": null,
+            "allocator_peak_reserved_bytes": null,
+            "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+            "sampled": {
+              "device_peak_bytes": 727252992,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 36550656,
+              "host_rss_sum_peak_bytes": 39342080,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 0,
+              "owned_device_process_peak_bytes": 0,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 1,
+              "sampling_gap_seconds": {
+                "count": 0,
+                "maximum": null,
+                "mean": null,
+                "median": null,
+                "p95": null,
+                "sum": 0.0
+              }
+            }
+          },
+          "seconds": 22.044142177095637
+        },
+        "compare_worker_payloads4_bf16": {
+          "host_incomplete_rows": 0,
+          "memory": {
+            "allocator_evidence_complete": false,
+            "allocator_peak_allocated_bytes": null,
+            "allocator_peak_reserved_bytes": null,
+            "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+            "sampled": {
+              "device_peak_bytes": 727252992,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 2133001216,
+              "host_rss_sum_peak_bytes": 2140946432,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 12.709578275680542,
+              "owned_device_process_peak_bytes": 0,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 11,
+              "sampling_gap_seconds": {
+                "count": 10,
+                "maximum": 1.3665411472320557,
+                "mean": 1.2709578275680542,
+                "median": 1.259112000465393,
+                "p95": 1.3416766405105591,
+                "sum": 12.709578275680542
+              }
+            }
+          },
+          "seconds": 13.432578423060477
+        },
+        "compare_worker_trajectory4_bf16": {
+          "host_incomplete_rows": 0,
+          "memory": {
+            "allocator_evidence_complete": false,
+            "allocator_peak_allocated_bytes": null,
+            "allocator_peak_reserved_bytes": null,
+            "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+            "sampled": {
+              "device_peak_bytes": null,
+              "errors": [
+                "no_samples"
+              ],
+              "gpu_memory_evidence_valid": false,
+              "host_pss_complete": false,
+              "host_pss_sum_peak_bytes": null,
+              "host_rss_sum_peak_bytes": null,
+              "nvml_capacity_bytes": null,
+              "observed_span_seconds": 0,
+              "owned_device_process_peak_bytes": null,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 0,
+              "sampling_gap_seconds": {
+                "count": 0,
+                "maximum": null,
+                "mean": null,
+                "median": null,
+                "p95": null,
+                "sum": 0.0
+              }
+            }
+          },
+          "seconds": 0.11661586805712432
+        },
+        "verify_actual_cpu_sticky_and_host": {
+          "host_incomplete_rows": 0,
+          "memory": {
+            "allocator_evidence_complete": false,
+            "allocator_peak_allocated_bytes": null,
+            "allocator_peak_reserved_bytes": null,
+            "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+            "sampled": {
+              "device_peak_bytes": null,
+              "errors": [
+                "no_samples"
+              ],
+              "gpu_memory_evidence_valid": false,
+              "host_pss_complete": false,
+              "host_pss_sum_peak_bytes": null,
+              "host_rss_sum_peak_bytes": null,
+              "nvml_capacity_bytes": null,
+              "observed_span_seconds": 0,
+              "owned_device_process_peak_bytes": null,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 0,
+              "sampling_gap_seconds": {
+                "count": 0,
+                "maximum": null,
+                "mean": null,
+                "median": null,
+                "p95": null,
+                "sum": 0.0
+              }
+            }
+          },
+          "seconds": 0.2160796490497887
+        },
+        "verify_actual_nativef5e_gate": {
+          "host_incomplete_rows": 0,
+          "memory": {
+            "allocator_evidence_complete": false,
+            "allocator_peak_allocated_bytes": null,
+            "allocator_peak_reserved_bytes": null,
+            "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+            "sampled": {
+              "device_peak_bytes": 727252992,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 68380672,
+              "host_rss_sum_peak_bytes": 77275136,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 0,
+              "owned_device_process_peak_bytes": 0,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 1,
+              "sampling_gap_seconds": {
+                "count": 0,
+                "maximum": null,
+                "mean": null,
+                "median": null,
+                "p95": null,
+                "sum": 0.0
+              }
+            }
+          },
+          "seconds": 1.1672304620733485
+        },
+        "worker1_reference4_bf16": {
+          "host_incomplete_rows": 0,
+          "memory": {
+            "allocator_evidence_complete": true,
+            "allocator_peak_allocated_bytes": 19389520896,
+            "allocator_peak_reserved_bytes": 19633537024,
+            "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+            "sampled": {
+              "device_peak_bytes": 21439381504,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 6664407040,
+              "host_rss_sum_peak_bytes": 6760042496,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 279.6767420768738,
+              "owned_device_process_peak_bytes": 20705181696,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 217,
+              "sampling_gap_seconds": {
+                "count": 216,
+                "maximum": 1.523247241973877,
+                "mean": 1.2947997318373785,
+                "median": 1.294020652770996,
+                "p95": 1.3240389823913574,
+                "sum": 279.6767420768738
+              }
+            }
+          },
+          "seconds": 281.5975006989902
+        },
+        "worker2_lifecycle_bf16": {
+          "host_incomplete_rows": 0,
+          "memory": {
+            "allocator_evidence_complete": false,
+            "allocator_peak_allocated_bytes": null,
+            "allocator_peak_reserved_bytes": null,
+            "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+            "sampled": {
+              "device_peak_bytes": 22196453376,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 6925607936,
+              "host_rss_sum_peak_bytes": 7140806656,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 1392.9750814437866,
+              "owned_device_process_peak_bytes": 21462253568,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 1074,
+              "sampling_gap_seconds": {
+                "count": 1073,
+                "maximum": 2.7883617877960205,
+                "mean": 1.2982060404881515,
+                "median": 1.2899115085601807,
+                "p95": 1.3501973152160645,
+                "sum": 1392.9750814437866
+              }
+            }
+          },
+          "seconds": 1393.0160474800505
+        }
+      },
+      "raw_samples": 1304,
+      "whole_observed_sample_interval": {
+        "device_peak_bytes": 22196453376,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 6925607936,
+        "host_rss_sum_peak_bytes": 7140806656,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 1690.3726425170898,
+        "owned_device_process_peak_bytes": 21462253568,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 1304,
+        "sampling_gap_seconds": {
+          "count": 1303,
+          "maximum": 2.7883617877960205,
+          "mean": 1.2972928952548657,
+          "median": 1.2904434204101562,
+          "p95": 1.3490742921829224,
+          "sum": 1690.3726425170898
+        }
+      }
+    },
+    "status": "completed"
+  },
+  "combined_allocation_cost": {
+    "allocated_cpu_seconds": 58816,
+    "gpu_seconds": 3676,
+    "nested_lifecycle_and_overlapping_diagnostics_charged_again": false,
+    "nf4_whole_allocation_opportunity_debit_seconds": 1843,
+    "opportunity_debit_additional_global_cost": false,
+    "opportunity_debit_is_measured_nf4_stage_time": false,
+    "separate_cpu_campaign_charge_seconds": 0
+  },
+  "configuration": {
+    "activation_checkpointing": "full_nonreentrant",
+    "actual_training_pixel_shapes_grid_values_and_frame_indices": null,
+    "adapter": {
+      "alpha": 64.0,
+      "bias": "none",
+      "dropout": 0.0,
+      "initialization": "kaiming_A_zero_B",
+      "initialization_seed": 42,
+      "method": "lora",
+      "modules_to_save": [],
+      "parameter_dtype": "float32",
+      "rank": 32,
+      "target_profile": "qwen3_vl_8b_language_v1"
+    },
+    "cache_bytes_both_worker_counts": 3221225472,
+    "cycle_updates": 4,
+    "data_source_role": "Existing WTS training source; a bounded correctness canary, not new independent task data.",
+    "gradient_accumulation": 8,
+    "maximum_configured_length": 4096,
+    "maximum_updates": 4,
+    "micro_batch_size": 1,
+    "optimizer": "torch.optim.AdamW",
+    "optimizer_fused": true,
+    "precision_contract": {
+      "adapter": "float32",
+      "base_dense": "bfloat16",
+      "optimizer_moments": "float32"
+    },
+    "preprocessing": {
+      "locations": [
+        "metadata.identity.training_contract.objective.preprocessing",
+        "trainer.objective_identity.preprocessing",
+        "trainer.validation.identity.objective_identity.preprocessing"
+      ],
+      "worker1": {
+        "cache_bytes": 3221225472,
+        "prefetch": true,
+        "protocol": "cosmos.sft-preprocessing.v1",
+        "window_examples": 8
+      },
+      "worker2": {
+        "affinity": "partition_inherited_all_worker_threads_v1",
+        "cache_budget": "sum_of_worker_limits",
+        "cache_bytes": 3221225472,
+        "dispatch": "window_least_assigned_sticky_lru_v1",
+        "media_owner_capacity": 1024,
+        "prefetch": true,
+        "protocol": "cosmos.sft-preprocessing.v3",
+        "window_examples": 8,
+        "workers": 2
+      }
+    },
+    "requested_processor_kwargs": {
+      "images_kwargs": {
+        "size": {
+          "longest_edge": 262144,
+          "shortest_edge": 65536
+        }
+      },
+      "videos_kwargs": {
+        "fps": null,
+        "num_frames": 8,
+        "size": {
+          "longest_edge": 524288,
+          "shortest_edge": 32768
+        }
+      }
+    },
+    "seed": 42,
+    "training_source_sha256": "04a42d6991c2ac67f5063bbdd479746472ffb9660a42c615fb944915234a5b1e",
+    "training_validation_max_samples": 4,
+    "warmup_updates": 1
+  },
+  "limitations": [
+    "The allocations overlapped as independent correctness work; timings are descriptive costs and cannot establish isolated or comparative training speed.",
+    "The comparison used 3 GiB with both worker counts. It does not measure a GPU-training benefit of increasing cache capacity from 1 GiB.",
+    "BF16 own recovery remains strict. The private cross-worker comparison normalizes exactly three validated preprocessing identity locations, with the existing storage-publication exclusions retained; production cross-worker resume remains refused.",
+    "The local review rehashed metadata and replayed numerical metrics and receipts; checkpoint tensor bytes were not reread locally. Allocated comparisons supply the tensor equality evidence.",
+    "All recorded BF16 host rows were complete over the observed sampling span, which is shorter than the allocation. Short named intervals have no samples. NF4 retains one false row and no sampler-exit receipt. Sampled peaks are lower bounds, not continuous peak or full-allocation coverage.",
+    "Process RSS/PSS excludes unmapped filesystem page cache. No allocation-cgroup charged-memory watermark, total-host bound, physical small-GPU support or complete-lifecycle NF/BF memory comparison was established.",
+    "Four-update canary recovery and payload equality do not establish task-quality improvement, full584 development scoring, long-run worker memory behavior, all275-video residency, NF4 worker2 support or release qualification."
+  ],
+  "native_revision": "f5e40cf0d27091abc85af23799a9f59b75761353",
+  "native_wheel_sha256": "45bdf66316585a7daeb27de6f875acb9c8c7904d0e090faee343f0cc9e45b813",
+  "nf4": {
+    "completed_outer_setup_stages": 3,
+    "correctness": {
+      "cross_worker_payload_exact": false,
+      "cross_worker_trajectory_exact": false,
+      "own_lifecycle_15_passed": false,
+      "own_reload_exact": false
+    },
+    "cost": {
+      "allocated_cpu_seconds": 29488,
+      "bf16_stage_seconds": 0.0,
+      "completed_allocation_preflight_seconds": 35.93042685200635,
+      "completed_shared_stage_seconds": 2.7892540359898703,
+      "gpu_allocation_seconds": 1843,
+      "nf4_completed_stage_timer_seconds": 0.0,
+      "nf4_whole_allocation_conservative_admission_bound_seconds": 1843,
+      "scope": "Bare allocation charged once. Native reference has no finalized outcome/time record; its duration and outside-timer startup cannot be exactly split. Diagnostic step rows overlap the same allocation and are not added again. The whole-allocation NF bound is an optional conservative admission bound, not an additional cost.",
+      "unfinalized_native_stage_and_outside_timer_seconds": 1804.2803191120038
+    },
+    "diagnostic_steps": {
+      "charged_again": false,
+      "count": 3,
+      "overlap_parent_allocation": true
+    },
+    "first_native_stage_publication_elapsed_seconds_approximate": true,
+    "first_native_stage_publication_seconds_after_allocation": 360,
+    "first_native_stage_publication_timestamp_resolution_seconds": 1,
+    "first_reference_completed": false,
+    "observed_optimizer_metric_records": 0,
+    "own_lifecycle_started": false,
+    "planned_outer_stages": 7,
+    "resource": {
+      "incomplete_raw_rows": 1,
+      "incomplete_row_error_categories": [
+        "discovery_identity_changed",
+        "invalid_pidfd_binding",
+        "invalid_pidfd_exit_proof",
+        "invalid_post_discovery_exit_proof",
+        "live_or_unknown_identity_unreadable",
+        "live_or_unknown_memory_unreadable",
+        "process_key_identity_mismatch",
+        "unbound_process_identity"
+      ],
+      "outer_stages": {
+        "allocation_preflight": {
+          "host_incomplete_rows": 0,
+          "memory": {
+            "allocator_evidence_complete": false,
+            "allocator_peak_allocated_bytes": null,
+            "allocator_peak_reserved_bytes": null,
+            "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+            "sampled": {
+              "device_peak_bytes": 727252992,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 35428352,
+              "host_rss_sum_peak_bytes": 37642240,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 0,
+              "owned_device_process_peak_bytes": 0,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 1,
+              "sampling_gap_seconds": {
+                "count": 0,
+                "maximum": null,
+                "mean": null,
+                "median": null,
+                "p95": null,
+                "sum": 0.0
+              }
+            }
+          },
+          "seconds": 35.93042685200635
+        },
+        "verify_actual_cpu_sticky_and_host": {
+          "host_incomplete_rows": 0,
+          "memory": {
+            "allocator_evidence_complete": false,
+            "allocator_peak_allocated_bytes": null,
+            "allocator_peak_reserved_bytes": null,
+            "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+            "sampled": {
+              "device_peak_bytes": null,
+              "errors": [
+                "no_samples"
+              ],
+              "gpu_memory_evidence_valid": false,
+              "host_pss_complete": false,
+              "host_pss_sum_peak_bytes": null,
+              "host_rss_sum_peak_bytes": null,
+              "nvml_capacity_bytes": null,
+              "observed_span_seconds": 0,
+              "owned_device_process_peak_bytes": null,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 0,
+              "sampling_gap_seconds": {
+                "count": 0,
+                "maximum": null,
+                "mean": null,
+                "median": null,
+                "p95": null,
+                "sum": 0.0
+              }
+            }
+          },
+          "seconds": 0.31748890299058985
+        },
+        "verify_actual_nativef5e_gate": {
+          "host_incomplete_rows": 0,
+          "memory": {
+            "allocator_evidence_complete": false,
+            "allocator_peak_allocated_bytes": null,
+            "allocator_peak_reserved_bytes": null,
+            "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+            "sampled": {
+              "device_peak_bytes": 727252992,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 68177920,
+              "host_rss_sum_peak_bytes": 75575296,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 1.2692630290985107,
+              "owned_device_process_peak_bytes": 0,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 2,
+              "sampling_gap_seconds": {
+                "count": 1,
+                "maximum": 1.2692630290985107,
+                "mean": 1.2692630290985107,
+                "median": 1.2692630290985107,
+                "p95": 1.2692630290985107,
+                "sum": 1.2692630290985107
+              }
+            }
+          },
+          "seconds": 2.4717651329992805
+        },
+        "worker1_reference4_nf4": {
+          "host_incomplete_rows": 1,
+          "memory": {
+            "allocator_evidence_complete": false,
+            "allocator_peak_allocated_bytes": null,
+            "allocator_peak_reserved_bytes": null,
+            "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+            "sampled": {
+              "device_peak_bytes": 1726152704,
+              "errors": [
+                "incomplete_host_pss"
+              ],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": false,
+              "host_pss_sum_peak_bytes": 1458120704,
+              "host_rss_sum_peak_bytes": 1474510848,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 1482.9796888828278,
+              "owned_device_process_peak_bytes": 991952896,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 1035,
+              "sampling_gap_seconds": {
+                "count": 1034,
+                "maximum": 2.8199996948242188,
+                "mean": 1.4342163335423865,
+                "median": 1.3675018548965454,
+                "p95": 1.7894374847412102,
+                "sum": 1482.9796888828278
+              }
+            }
+          },
+          "seconds": null
+        }
+      },
+      "raw_samples": 1038,
+      "sampler_exit_receipt_present": false,
+      "whole_observed_sample_interval": {
+        "device_peak_bytes": 1726152704,
+        "errors": [
+          "incomplete_host_pss"
+        ],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": false,
+        "host_pss_sum_peak_bytes": 1458120704,
+        "host_rss_sum_peak_bytes": 1474510848,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 1486.8269267082214,
+        "owned_device_process_peak_bytes": 991952896,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 1038,
+        "sampling_gap_seconds": {
+          "count": 1037,
+          "maximum": 2.8199996948242188,
+          "mean": 1.4337771713676195,
+          "median": 1.3672387599945068,
+          "p95": 1.7882734775543208,
+          "sum": 1486.8269267082214
+        }
+      }
+    },
+    "root_continuation_with_original_deadline_recorded": true,
+    "startup_watchdog_passed": false,
+    "startup_watchdog_seconds": 300,
+    "status": "cancelled_during_first_native_reference_startup",
+    "storage_delay": {
+      "node_hardware_or_quantizer_defect_established": false,
+      "observed": true,
+      "root_cause_established": false,
+      "specific_blocking_file_identified": false
+    }
+  },
+  "processor_contract_sha256": "f799502f54f295ed7e5935511bd12b9c4090101a55ee0ea56856ce96e298a903",
+  "product_objective_qualified": false,
+  "protocol": "cosmos.native-worker2-3gib-bounded-correctness.v1",
+  "receipt_sha256": {
+    "bf16_capture": "0523dd6781456bf3db542c55d88f79563f97feed66ebdba398fa149935723182",
+    "bf16_cross_worker_payload": "3fd6e6ff42064aeeb4098f4a9840b2082356e7da1e22bcc0f8b3bfd11b504bc5",
+    "bf16_resource_review": "52c665f0e4c8988dc4f33cafca9d5b70f8b1b3e624c0778f3a6dc5714a8ebe33",
+    "bf16_scientific_review": "df5a2ca37a25e92734d33ba10c672fdee72107d9d8b10544f70fe329305ead7c",
+    "nf4_cancelled_science": "db5ef99c907c86a47f0fa77f62cc632c212dff98282de6b29815b7046865e7f8",
+    "nf4_capture": "ef98d60927893122cecf8175109a62c3d2335573a5c8fdc40331119cbe6079a0",
+    "nf4_resource_review": "34d9053da652346aca2f3820d2b3ea093b5b97d24c7947eb70ee6a7d0e907187",
+    "preprocessing_comparator": "087911866cd0e204887cb2285a350c1413a8b07f124829b54b20a3e6ef334760"
+  },
+  "runtime": {
+    "allocated_cpus_per_allocation": 16,
+    "gpu_device_bytes": 85174583296,
+    "gpu_name": "NVIDIA A100-SXM4-80GB",
+    "gpus_per_allocation": 1,
+    "host_memory_limit_gib": 64,
+    "physical_cpu_cores_per_allocation": 8,
+    "python": "3.12.12",
+    "runtime_precision": {
+      "allow_bf16_reduced_precision_reduction": true,
+      "cuda_matmul_allow_tf32": false,
+      "cudnn_allow_tf32": true,
+      "environment": {
+        "NVIDIA_TF32_OVERRIDE": null,
+        "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE": null
+      },
+      "float32_matmul_precision": "highest",
+      "fp32_precision": {
+        "cuda_matmul": "none",
+        "cudnn": "none",
+        "cudnn_conv": "tf32",
+        "cudnn_rnn": "tf32",
+        "global": "none"
+      }
+    },
+    "torch_cuda": "12.8",
+    "torch_git_version": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+    "versions": {
+      "accelerate": "1.13.0",
+      "bitsandbytes": "0.49.2",
+      "safetensors": "0.8.0",
+      "torch": "2.11.0+cu128",
+      "torchcodec": "0.11.0+cpu",
+      "torchvision": "0.26.0+cu128",
+      "transformers": "5.8.1"
+    }
+  },
+  "scope": "BF16 four-update worker2 correctness and exact allocated cross-worker comparison with a common 3 GiB cache. Separate NF4 attempt cancelled before any optimizer update was recorded. No speed, task-quality, NF4 worker2 or long-run cache qualification.",
+  "workflow_revision": "be0ca36393a19e53832c3e329adb17c2589f3152"
+}

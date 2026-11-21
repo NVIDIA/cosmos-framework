@@ -1,0 +1,89 @@
+{
+  "actual_fixture_properties": {
+    "actual_delayed_thread_pidfd_wait": {
+      "attempts": 2,
+      "complete": true,
+      "sample_sha256": "9ebf5204ccb0eb96a6cc70f324e38ef33400dcead241fcfdc99250ec9e8336b2"
+    },
+    "actual_live_thread_shared_mm": {
+      "attempts": 1,
+      "complete": true,
+      "sample_sha256": "ce2a035f48f756e89d82524fef4a87ea986f5934b3883649b0b07bdc63145b99"
+    },
+    "actual_pidfd_thread_exit_recollection": {
+      "attempts": 2,
+      "complete": true,
+      "sample_sha256": "7fcfdbefca3d079e7d5b741b9eb0a3385f013e9011a5f4e5a06a12e4e976d30e"
+    },
+    "actual_reaped_thread_group_recollection": {
+      "attempts": 2,
+      "complete": true,
+      "sample_sha256": "23358ae2081592c16ceeb2a307eae82c1faa18af80d131f3d7d5180349e6df44"
+    }
+  },
+  "allocation_cost": {
+    "allocated_cpu_hours": 0.7377777777777778,
+    "allocated_cpu_seconds": 2656,
+    "allocated_cpus": 16,
+    "allocated_gpu_seconds": 0,
+    "elapsed_seconds": 166,
+    "scope": "This new v7 allocation only, including startup. Prior v6 failure/retry costs remain separately recorded and are not recharged here; queue/local analysis excluded.",
+    "selected_physical_cores": 8,
+    "state": "COMPLETED"
+  },
+  "collector_method": "proc-identity-state-read-attempts-v7",
+  "completed": true,
+  "exit_proof": {
+    "child_exit_reap_discovery_enoent_and_pidfd_release_actual": true,
+    "complete_recollection_required": true,
+    "delayed_wait_milliseconds": 25.525126000502496,
+    "failed_interval_contributes_memory": false,
+    "original_collection_deadline_milliseconds": 750,
+    "own_earlier_leader_identity_required": true,
+    "retry_reserve_milliseconds": 250,
+    "same_held_pidfd": true,
+    "thread_rollup_esrch_controlled": true,
+    "wait_cap_milliseconds": 350,
+    "whole_collection_attempts": 2
+  },
+  "historical_replay": {
+    "all_original_incomplete_flags_retained": true,
+    "legacy_v6_evidence_unchanged": true,
+    "raw_rows_repaired": false,
+    "rows": 7,
+    "versions": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "limitations": [
+    "Thread-rollup ESRCH is controlled; actual process exit/reap, discovery ENOENT and held-pidfd release validate the specific race, not every model shutdown.",
+    "Missing earlier identity, permission errors, changed identity, exec transitions, unproven release or exhausted recollection time remain incomplete.",
+    "Historical v1-v6 records retain their own interpretation; no retrospective memory or zero replacement is inferred.",
+    "Per-process PSS is sampled and excludes unmapped filesystem cache. This establishes neither a complete allocation host peak nor physical24GB support or model memory eligibility."
+  ],
+  "projection_source_sha256": "0f206fbabd02f3a08522451eec6557905a39f504c2bb2b45b1297d37a5c79402",
+  "protocol": "cosmos.native-qlora-host-collector-v7-cpu-evidence.v1",
+  "qualification_scope": "Actual CPU process fixtures on the recorded allocated Linux container. No model, media, CUDA, full-training, speed or release qualification.",
+  "release_qualified": false,
+  "source_revision": "bed3d03edaa5b3c030c71b3414e85465e5e5bfab",
+  "source_sha256": {
+    "capture": "8876ea6963f29ce8dee9420a8945d19a1c755ee90993a4b98572d91412918bb0",
+    "collector_source": "080cab9f5cbadce9b83819fb054409b99a69031f3a1dffec13ef97f9ee9f1095",
+    "collector_tests": "fde18b33781086c15bb9ff02127d3b4f48ae985409474eff4153dda0029615af",
+    "historical_row_manifest": "8133c3218138c7b6fabbb3d4b46032e7e605c5835d9f1c4a8ab4eca7c058a8ab",
+    "target_proof": "8d5cc8fcec3210fb475c20b062ecac7dfa57d90cf0a0d1f26f496c0fe0213396",
+    "target_xml": "70ee8ee06e2804d29932bb562901a823cd63ab0442ffc678d7fd6298df4306bc",
+    "terminal_review": "fbc0d0ae6a0abfe889756a0b305ba809a83688f2f7fc846e3bd8f105b3fbc49c"
+  },
+  "target": {
+    "errors": 0,
+    "failures": 0,
+    "kernel_release": "5.15.0-1032-oracle",
+    "skips": 0,
+    "tests": 132
+  }
+}

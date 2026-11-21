@@ -1,0 +1,1056 @@
+{
+  "allocation_cost": {
+    "allocated_cpu_hours": 11.626666666666667,
+    "allocated_cpu_seconds": 41856,
+    "gpu_hours": 0.7266666666666667,
+    "gpu_seconds": 2616,
+    "outside_stage_timer_seconds": 53.37408626195975,
+    "plan_labelled_bf16_stage_seconds": 2455.488553552015,
+    "plan_labelled_nf4_stage_seconds": 0.0,
+    "plan_labelled_shared_stage_seconds": 99.61122904304648,
+    "scope": "Every allocation second counted once. Nested lifecycle/phase timers are not added again; retained old20 training is not recharged. Queue and local review time excluded. The shared and unlabelled costs remain explicit.",
+    "unlabelled_allocation_preflight_seconds": 7.5261311429785565
+  },
+  "cells": [
+    {
+      "activation_checkpointing": "none",
+      "memory": {
+        "allocator_evidence_complete": true,
+        "allocator_peak_allocated_bytes": 23178879488,
+        "allocator_peak_reserved_bytes": 23672651776,
+        "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+        "phases": {
+          "checkpoint_write": {
+            "allocator_peak_allocated_bytes": 19076806144,
+            "allocator_peak_reserved_bytes": 23672651776,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 21.733220805996098,
+              "mean": 21.733220805996098,
+              "median": 21.733220805996098,
+              "p95": 21.733220805996098,
+              "sum": 21.733220805996098
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 24744296448
+          },
+          "first_update": {
+            "allocator_peak_allocated_bytes": 22199579648,
+            "allocator_peak_reserved_bytes": 22821208064,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 15.127669318986591,
+              "mean": 15.127669318986591,
+              "median": 15.127669318986591,
+              "p95": 15.127669318986591,
+              "sum": 15.127669318986591
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 23599251456
+          },
+          "initial_validation": {
+            "allocator_peak_allocated_bytes": 18079789568,
+            "allocator_peak_reserved_bytes": 18199085056,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 35.1134526830283,
+              "mean": 35.1134526830283,
+              "median": 35.1134526830283,
+              "p95": 35.1134526830283,
+              "sum": 35.1134526830283
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 19237175296
+          },
+          "loading": {
+            "allocator_peak_allocated_bytes": 17931589632,
+            "allocator_peak_reserved_bytes": 17966301184,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 26.36965216702083,
+              "mean": 26.36965216702083,
+              "median": 26.36965216702083,
+              "p95": 26.36965216702083,
+              "sum": 26.36965216702083
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 18956156928
+          },
+          "post_checkpoint_boundary": {
+            "allocator_peak_allocated_bytes": 19190407680,
+            "allocator_peak_reserved_bytes": 23672651776,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 12.34655398601899,
+              "mean": 12.34655398601899,
+              "median": 12.34655398601899,
+              "p95": 12.34655398601899,
+              "sum": 12.34655398601899
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 24744296448
+          },
+          "trainer_setup": {
+            "allocator_peak_allocated_bytes": 17931589632,
+            "allocator_peak_reserved_bytes": 17966301184,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 0.042801085975952446,
+              "mean": 0.042801085975952446,
+              "median": 0.042801085975952446,
+              "p95": 0.042801085975952446,
+              "sum": 0.042801085975952446
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_owned_device_process_peak_bytes": null
+          },
+          "updates": {
+            "allocator_peak_allocated_bytes": 23178879488,
+            "allocator_peak_reserved_bytes": 23672651776,
+            "interval_seconds": {
+              "count": 19,
+              "maximum": 14.455065929039847,
+              "mean": 10.657216523323624,
+              "median": 10.137684426037595,
+              "p95": 14.091483758937102,
+              "sum": 202.48711394314887
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 24744296448
+          },
+          "validation_or_boundary_overhead": {
+            "allocator_peak_allocated_bytes": 19110128128,
+            "allocator_peak_reserved_bytes": 23672651776,
+            "interval_seconds": {
+              "count": 20,
+              "maximum": 0.03380113100865856,
+              "mean": 0.018573585792910307,
+              "median": 0.016877579997526482,
+              "p95": 0.023804785398533576,
+              "sum": 0.37147171585820615
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_owned_device_process_peak_bytes": null
+          }
+        },
+        "sampled": {
+          "device_peak_bytes": 25478496256,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 6584461312,
+          "host_rss_sum_peak_bytes": 6828462080,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 387.195433139801,
+          "owned_device_process_peak_bytes": 24744296448,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 302,
+          "sampling_gap_seconds": {
+            "count": 301,
+            "maximum": 1.4961724281311035,
+            "mean": 1.2863635652485084,
+            "median": 1.2842237949371338,
+            "p95": 1.3259475231170654,
+            "sum": 387.195433139801
+          }
+        }
+      },
+      "native": {
+        "initial_validation_seconds": 35.08240339596523,
+        "no_skips_evidence": "Explicit per-update applied outcomes, zero rejection counters and matching optimizer/attempt clocks; checkpoint controls audited separately.",
+        "preprocessing_counter_scope": "Cumulative counters can include initial/in-loop validation. Processing and waiting overlap execution; never sum them into wall time.",
+        "preprocessing_last_cumulative_counters": {
+          "preprocessing_samples_bytes": 266654565.0,
+          "preprocessing_samples_hits": 0.0,
+          "preprocessing_samples_limit": 268435456.0,
+          "preprocessing_samples_misses": 224.0,
+          "preprocessing_timing_processing_calls": 224.0,
+          "preprocessing_timing_processing_seconds": 212.76483219617512,
+          "preprocessing_timing_wait_calls": 224.0,
+          "preprocessing_timing_wait_seconds": 181.69974794844165,
+          "preprocessing_videos_bytes": 749236395.0,
+          "preprocessing_videos_hits": 97.0,
+          "preprocessing_videos_limit": 805306368.0,
+          "preprocessing_videos_misses": 127.0
+        },
+        "scheduled_validation_seconds": 12.255577372037806,
+        "updates": [
+          {
+            "examples": 8,
+            "seconds": 15.126724215981085,
+            "step": 1,
+            "supervised_ce": 1.5679447503061965,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 12.818175424996298,
+            "step": 2,
+            "supervised_ce": 0.3651453356407046,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 12.8580078369705,
+            "step": 3,
+            "supervised_ce": 3.167050716234371,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 12.416582815989386,
+            "step": 4,
+            "supervised_ce": 1.1735653902569538,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 14.461108523013536,
+            "step": 5,
+            "supervised_ce": 0.8021406939587905,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 14.05264377797721,
+            "step": 6,
+            "supervised_ce": 1.6752150344538848,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 9.738348615996074,
+            "step": 7,
+            "supervised_ce": 2.504644998771255,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.984598339011427,
+            "step": 8,
+            "supervised_ce": 0.9655228836982133,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 11.776569087989628,
+            "step": 9,
+            "supervised_ce": 0.22609894482957316,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.0148979970254,
+            "step": 10,
+            "supervised_ce": 0.6527628835647192,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 6.633470467000734,
+            "step": 11,
+            "supervised_ce": 0.8425770276517142,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 9.824809360026848,
+            "step": 12,
+            "supervised_ce": 0.7063740768717253,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 8.186681667983066,
+            "step": 13,
+            "supervised_ce": 0.21594244294101372,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 10.13912867102772,
+            "step": 14,
+            "supervised_ce": 0.3775180783122778,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.035733961965889,
+            "step": 15,
+            "supervised_ce": 0.25267548352712765,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.477927088038996,
+            "step": 16,
+            "supervised_ce": 0.3856812007725239,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.055274565995205,
+            "step": 17,
+            "supervised_ce": 0.3369193938560784,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 8.6599488639622,
+            "step": 18,
+            "supervised_ce": 0.27791168552357703,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 8.899605825019535,
+            "step": 19,
+            "supervised_ce": 0.11080826225224882,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.504976212978363,
+            "step": 20,
+            "supervised_ce": 0.35467352357227355,
+            "supervised_tokens": 16
+          }
+        ],
+        "validation": [
+          {
+            "examples": 64.0,
+            "seconds": 35.08240339596523,
+            "step": 0,
+            "supervised_ce": 0.5005517458354092,
+            "supervised_tokens": 128.0
+          },
+          {
+            "examples": 64.0,
+            "seconds": 12.255577372037806,
+            "step": 20,
+            "supervised_ce": 0.11626114957653044,
+            "supervised_tokens": 128.0
+          }
+        ],
+        "windows": {
+          "updates_1_300": {
+            "complete": false
+          },
+          "updates_31_300": {
+            "complete": false
+          },
+          "updates_6_30": {
+            "complete": false
+          }
+        }
+      },
+      "native_command_seconds": 388.48678072099574,
+      "own_checkpoint": {
+        "adapter_tensors": 504,
+        "healthy_completed_boundary": true,
+        "optimizer_step": 20,
+        "parameter_dtype": "float32"
+      },
+      "own_checkpoint_inspection_seconds": 7.274580195022281,
+      "sampled_24gib_screen": {
+        "budget_bytes": 25769803776,
+        "eligible_for_higher_microbatch": true,
+        "evidence_complete": true,
+        "observed_peak_within_budget": true,
+        "observed_process_peak_lower_bound_bytes": 24744296448,
+        "reasons": [],
+        "sampled_peaks_are_lower_bounds": true,
+        "scope": "Observed owned-device-process peak during native training, including load, validation and checkpoint writes; not physical device capacity.",
+        "unseen_short_peaks_remain_possible": true
+      },
+      "update_seconds_sum": 217.6652133189491
+    },
+    {
+      "activation_checkpointing": "full",
+      "memory": {
+        "allocator_evidence_complete": true,
+        "allocator_peak_allocated_bytes": 19440862720,
+        "allocator_peak_reserved_bytes": 19855835136,
+        "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+        "phases": {
+          "checkpoint_write": {
+            "allocator_peak_allocated_bytes": 19080001024,
+            "allocator_peak_reserved_bytes": 19855835136,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 21.386810855998192,
+              "mean": 21.386810855998192,
+              "median": 21.386810855998192,
+              "p95": 21.386810855998192,
+              "sum": 21.386810855998192
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 20927479808
+          },
+          "first_update": {
+            "allocator_peak_allocated_bytes": 19072376320,
+            "allocator_peak_reserved_bytes": 19277021184,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 15.37336681096349,
+              "mean": 15.37336681096349,
+              "median": 15.37336681096349,
+              "p95": 15.37336681096349,
+              "sum": 15.37336681096349
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 19998441472
+          },
+          "initial_validation": {
+            "allocator_peak_allocated_bytes": 18079789568,
+            "allocator_peak_reserved_bytes": 18199085056,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 37.807479788025375,
+              "mean": 37.807479788025375,
+              "median": 37.807479788025375,
+              "p95": 37.807479788025375,
+              "sum": 37.807479788025375
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 19237175296
+          },
+          "loading": {
+            "allocator_peak_allocated_bytes": 17931589632,
+            "allocator_peak_reserved_bytes": 17966301184,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 25.076073900039773,
+              "mean": 25.076073900039773,
+              "median": 25.076073900039773,
+              "p95": 25.076073900039773,
+              "sum": 25.076073900039773
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 18956156928
+          },
+          "post_checkpoint_boundary": {
+            "allocator_peak_allocated_bytes": 19193807360,
+            "allocator_peak_reserved_bytes": 19855835136,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 13.176824519992806,
+              "mean": 13.176824519992806,
+              "median": 13.176824519992806,
+              "p95": 13.176824519992806,
+              "sum": 13.176824519992806
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 20927479808
+          },
+          "trainer_setup": {
+            "allocator_peak_allocated_bytes": 17931589632,
+            "allocator_peak_reserved_bytes": 17966301184,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 0.048142278974410146,
+              "mean": 0.048142278974410146,
+              "median": 0.048142278974410146,
+              "p95": 0.048142278974410146,
+              "sum": 0.048142278974410146
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_owned_device_process_peak_bytes": null
+          },
+          "updates": {
+            "allocator_peak_allocated_bytes": 19440862720,
+            "allocator_peak_reserved_bytes": 19855835136,
+            "interval_seconds": {
+              "count": 19,
+              "maximum": 14.632054484973196,
+              "mean": 11.019935596097065,
+              "median": 10.658884650969412,
+              "p95": 14.503593775175977,
+              "sum": 209.37877632584423
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 20927479808
+          },
+          "validation_or_boundary_overhead": {
+            "allocator_peak_allocated_bytes": 19123333632,
+            "allocator_peak_reserved_bytes": 19855835136,
+            "interval_seconds": {
+              "count": 20,
+              "maximum": 0.042025792005006224,
+              "mean": 0.02717306395934429,
+              "median": 0.025582524511264637,
+              "p95": 0.03273052557779011,
+              "sum": 0.5434612791868858
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_owned_device_process_peak_bytes": 20671627264
+          }
+        },
+        "sampled": {
+          "device_peak_bytes": 21661679616,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 6236521472,
+          "host_rss_sum_peak_bytes": 6467252224,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 385.9219434261322,
+          "owned_device_process_peak_bytes": 20927479808,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 299,
+          "sampling_gap_seconds": {
+            "count": 298,
+            "maximum": 1.568711519241333,
+            "mean": 1.295040078611182,
+            "median": 1.2961087226867676,
+            "p95": 1.3291453838348388,
+            "sum": 385.9219434261322
+          }
+        }
+      },
+      "native": {
+        "initial_validation_seconds": 37.7736926790094,
+        "no_skips_evidence": "Explicit per-update applied outcomes, zero rejection counters and matching optimizer/attempt clocks; checkpoint controls audited separately.",
+        "preprocessing_counter_scope": "Cumulative counters can include initial/in-loop validation. Processing and waiting overlap execution; never sum them into wall time.",
+        "preprocessing_last_cumulative_counters": {
+          "preprocessing_samples_bytes": 266654565.0,
+          "preprocessing_samples_hits": 0.0,
+          "preprocessing_samples_limit": 268435456.0,
+          "preprocessing_samples_misses": 224.0,
+          "preprocessing_timing_processing_calls": 224.0,
+          "preprocessing_timing_processing_seconds": 213.986998696113,
+          "preprocessing_timing_wait_calls": 224.0,
+          "preprocessing_timing_wait_seconds": 157.8730534305214,
+          "preprocessing_videos_bytes": 749236395.0,
+          "preprocessing_videos_hits": 97.0,
+          "preprocessing_videos_limit": 805306368.0,
+          "preprocessing_videos_misses": 127.0
+        },
+        "scheduled_validation_seconds": 13.085144687036518,
+        "updates": [
+          {
+            "examples": 8,
+            "seconds": 15.37381723098224,
+            "step": 1,
+            "supervised_ce": 1.5679447503061965,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.187155725958291,
+            "step": 2,
+            "supervised_ce": 0.3651453356407046,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 12.814069023996126,
+            "step": 3,
+            "supervised_ce": 3.167050716234371,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.06039984698873,
+            "step": 4,
+            "supervised_ce": 1.1735653902569538,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 14.630890158005059,
+            "step": 5,
+            "supervised_ce": 0.8021406939587905,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 14.496486323012505,
+            "step": 6,
+            "supervised_ce": 1.6752150344538848,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 10.284690231026616,
+            "step": 7,
+            "supervised_ce": 2.504644998771255,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 14.378429158008657,
+            "step": 8,
+            "supervised_ce": 0.9655228836982133,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 12.095677376026288,
+            "step": 9,
+            "supervised_ce": 0.22609894482957316,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 12.949586642964277,
+            "step": 10,
+            "supervised_ce": 0.6527628835647192,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.087808687007055,
+            "step": 11,
+            "supervised_ce": 0.8425770276517142,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 10.09943054098403,
+            "step": 12,
+            "supervised_ce": 0.7063740768717253,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 8.852730485028587,
+            "step": 13,
+            "supervised_ce": 0.21594244294101372,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 10.657838206971064,
+            "step": 14,
+            "supervised_ce": 0.3775180783122778,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.4135325539973564,
+            "step": 15,
+            "supervised_ce": 0.25267548352712765,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.865723703987896,
+            "step": 16,
+            "supervised_ce": 0.3856812007725239,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.499378587002866,
+            "step": 17,
+            "supervised_ce": 0.3369193938560784,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 8.984144232003018,
+            "step": 18,
+            "supervised_ce": 0.27791168552357703,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 9.207988083013333,
+            "step": 19,
+            "supervised_ce": 0.11080826225224882,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.858000626962166,
+            "step": 20,
+            "supervised_ce": 0.35467352357227355,
+            "supervised_tokens": 16
+          }
+        ],
+        "validation": [
+          {
+            "examples": 64.0,
+            "seconds": 37.7736926790094,
+            "step": 0,
+            "supervised_ce": 0.5005517458354092,
+            "supervised_tokens": 128.0
+          },
+          {
+            "examples": 64.0,
+            "seconds": 13.085144687036518,
+            "step": 20,
+            "supervised_ce": 0.11626114957653044,
+            "supervised_tokens": 128.0
+          }
+        ],
+        "windows": {
+          "updates_1_300": {
+            "complete": false
+          },
+          "updates_31_300": {
+            "complete": false
+          },
+          "updates_6_30": {
+            "complete": false
+          }
+        }
+      },
+      "native_command_seconds": 388.1265426009777,
+      "own_checkpoint": {
+        "adapter_tensors": 504,
+        "healthy_completed_boundary": true,
+        "optimizer_step": 20,
+        "parameter_dtype": "float32"
+      },
+      "own_checkpoint_inspection_seconds": 6.8250483149895445,
+      "sampled_24gib_screen": {
+        "budget_bytes": 25769803776,
+        "eligible_for_higher_microbatch": true,
+        "evidence_complete": true,
+        "observed_peak_within_budget": true,
+        "observed_process_peak_lower_bound_bytes": 20927479808,
+        "reasons": [],
+        "sampled_peaks_are_lower_bounds": true,
+        "scope": "Observed owned-device-process peak during native training, including load, validation and checkpoint writes; not physical device capacity.",
+        "unseen_short_peaks_remain_possible": true
+      },
+      "update_seconds_sum": 224.79777742392616
+    }
+  ],
+  "completed": true,
+  "configuration": {
+    "adapter_compute_dtype": "float32",
+    "adapter_dropout": 0,
+    "adapter_initialization": "kaiming_A_zero_B",
+    "adapter_parameter_gradient_optimizer_dtype": "float32",
+    "alpha": 64,
+    "base_precision": "bfloat16",
+    "compile": false,
+    "effective_batch": 8,
+    "full_logits": true,
+    "gradient_accumulation": 8,
+    "learning_rate": 0.0001,
+    "max_sequence_length": 4096,
+    "microbatch": 1,
+    "model": "Qwen/Qwen3-VL-8B-Instruct",
+    "preprocessing_cache_bytes": 1073741824,
+    "preprocessing_prefetch": true,
+    "preprocessing_workers": 1,
+    "profile_tracing": false,
+    "quantized_base": false,
+    "rank": 32,
+    "seed": 42,
+    "video_frames": 8,
+    "video_longest_edge": 524288,
+    "video_shortest_edge": 32768
+  },
+  "end_to_end_speed_qualified": false,
+  "gates": {
+    "actual_host_fixture_cases": 132,
+    "actual_host_properties": 4,
+    "host_fixture_skips_failures_errors": 0,
+    "outer_stages": 18,
+    "own_recovery_inner_stages": 15,
+    "sampler_exit_code": 0,
+    "unexpected_outer_failures": 0
+  },
+  "limitations": [
+    "No full584 quality comparison was performed by this job.",
+    "The20-update timing prefix remains within warmup; no steady300-update throughput qualification.",
+    "Own4-update process-interruption recovery and retained20-step reload are distinct; arbitrary crash timing and100/300-update recovery are not established.",
+    "No cross-activation-checkpointing payload normalization or production resume waiver.",
+    "The noAC update sum is lower, but native command totals are essentially equal; no end-to-end speed winner or10% time-to-quality target is established.",
+    "Original quality margins, prior negative results, and independent-final-data requirements remain unchanged."
+  ],
+  "memory": {
+    "collector_method": "proc-identity-state-read-attempts-v7",
+    "host_fixture_incomplete_samples": 10,
+    "incomplete_rows": [
+      {
+        "errors": [
+          "membership_transition_retry_exhausted"
+        ],
+        "row_index": 3,
+        "stage": "verify_actual_v7_host_fixtures"
+      },
+      {
+        "errors": [
+          "membership_transition_retry_exhausted"
+        ],
+        "row_index": 5,
+        "stage": "verify_actual_v7_host_fixtures"
+      },
+      {
+        "errors": [
+          "membership_transition_retry_exhausted"
+        ],
+        "row_index": 6,
+        "stage": "verify_actual_v7_host_fixtures"
+      },
+      {
+        "errors": [
+          "membership_transition_retry_exhausted"
+        ],
+        "row_index": 7,
+        "stage": "verify_actual_v7_host_fixtures"
+      },
+      {
+        "errors": [
+          "membership_transition_retry_exhausted"
+        ],
+        "row_index": 12,
+        "stage": "verify_actual_v7_host_fixtures"
+      },
+      {
+        "errors": [
+          "membership_transition_retry_exhausted"
+        ],
+        "row_index": 13,
+        "stage": "verify_actual_v7_host_fixtures"
+      },
+      {
+        "errors": [
+          "live_or_unknown_memory_unreadable",
+          "membership_transition_retry_exhausted",
+          "unproven_live_thread_memory"
+        ],
+        "row_index": 22,
+        "stage": "verify_actual_v7_host_fixtures"
+      },
+      {
+        "errors": [
+          "live_or_unknown_memory_unreadable",
+          "membership_transition_retry_exhausted",
+          "unproven_live_thread_memory"
+        ],
+        "row_index": 23,
+        "stage": "verify_actual_v7_host_fixtures"
+      },
+      {
+        "errors": [
+          "live_or_unknown_memory_unreadable",
+          "membership_transition_retry_exhausted",
+          "unproven_live_thread_memory"
+        ],
+        "row_index": 25,
+        "stage": "verify_actual_v7_host_fixtures"
+      },
+      {
+        "errors": [
+          "live_or_unknown_memory_unreadable",
+          "membership_transition_retry_exhausted",
+          "unproven_live_thread_memory"
+        ],
+        "row_index": 42,
+        "stage": "verify_actual_v7_host_fixtures"
+      },
+      {
+        "errors": [
+          "membership_transition_retry_exhausted"
+        ],
+        "row_index": 1776,
+        "stage": "bf16_none_own_recovery"
+      }
+    ],
+    "incomplete_samples": 11,
+    "own_recovery_incomplete_samples": 1,
+    "physical_24gb_support_qualified": false,
+    "raw_samples": 1978,
+    "scope": "All1978 raw receipts replayed under their original v7 method. Both timing phases have complete recorded host samples; eleven other rows remain false. Recorded allocator peaks and sampled owned-process NVML/PSS are distinct. Samples are lower bounds; short phase intervals with no sample remain unavailable. The24GiB envelope is a screening predicate on actual A10080 hardware, not a physical24GB cap.",
+    "timing_phases_sampled_host_complete": true,
+    "unmapped_filesystem_cache_included": false,
+    "whole_allocation_host_complete": false,
+    "whole_parent_sampled": {
+      "device_peak_bytes": 25568673792,
+      "errors": [
+        "incomplete_host_pss"
+      ],
+      "gpu_memory_evidence_valid": true,
+      "host_pss_complete": false,
+      "host_pss_sum_peak_bytes": 7152262144,
+      "host_rss_sum_peak_bytes": 7451095040,
+      "nvml_capacity_bytes": 85899345920,
+      "observed_span_seconds": 2556.33571600914,
+      "owned_device_process_peak_bytes": 24834473984,
+      "peaks_are_sampled_lower_bounds": true,
+      "samples": 1978,
+      "sampling_gap_seconds": {
+        "count": 1977,
+        "maximum": 1.8152775764465332,
+        "mean": 1.2930377926196965,
+        "median": 1.2846462726593018,
+        "p95": 1.3572845458984375,
+        "sum": 2556.33571600914
+      }
+    }
+  },
+  "native_revision": "1ac6a7ff975c3e7a2f8851b7495104ca9a1b1b77",
+  "native_wheel_sha256": "4b634e70f07968b3df0c69d2c5815179bbdd4bd84385ca05249cb97addaff400",
+  "own_no_ac_recovery": {
+    "all_504_fp32_exact_optimizer_membership": true,
+    "controls_rng_data_exact_recorded": true,
+    "fresh_reload_exact": true,
+    "inner_stages": 15,
+    "interruption_modes": [
+      "boundary",
+      "accumulation"
+    ],
+    "launcher_expected_exit_code": 1,
+    "maximum_reload_logit_or_loss_difference": 0,
+    "model_optimizer_max_abs": 0,
+    "outer_recovery_seconds": 1419.5783288870007,
+    "owned_interruption_markers_exit_code": 86,
+    "partial_gradient_checkpoint_rejected": true,
+    "reload_atol": 0,
+    "reload_modalities": [
+      "text",
+      "image",
+      "video"
+    ],
+    "reload_rtol": 0,
+    "resumed_steps": [
+      3,
+      4
+    ],
+    "reviewer_tensor_rereads": false,
+    "scope": "Own four-update noAC recovery only; no arbitrary crash timing or100/300-update qualification.",
+    "source_and_resumed_payload_comparisons": 6,
+    "source_step": 2,
+    "tensor_comparisons_executed_in_allocation": true
+  },
+  "prior_fixed_order_context": {
+    "all20_bf_numerical_updates_exact": true,
+    "bf_order": [
+      "full",
+      "none"
+    ],
+    "cells": [
+      {
+        "activation_checkpointing": "full",
+        "native_command_seconds": 398.6439419219969,
+        "sampled_host_complete": false,
+        "update_seconds_sum": 230.36958644510014
+      },
+      {
+        "activation_checkpointing": "none",
+        "native_command_seconds": 398.3551875889534,
+        "sampled_host_complete": true,
+        "update_seconds_sum": 221.3771655529854
+      }
+    ],
+    "related_public_evidence": "native_qlora_untraced_b1_1ac6a7f.json",
+    "scope": "Earlier four-cell fixed-order study retained separately. Its BFfull host gap stays false. Together the studies reverse order but are not an independently randomized performance estimate, cold-filesystem experiment or noAC speed qualification. No old recovery evidence or cost is invented or recharged."
+  },
+  "protocol": "cosmos.native-qlora-bf16-no-ac-finish-evidence.v1",
+  "qualification_scope": "BF16 rank32 no-AC reverse timing plus own bounded reload and recovery. Twenty-update metrics are exact across full/noAC; no cross-AC payload equality, speed winner, fixed-quality-target or release qualification is inferred.",
+  "quality_qualified": false,
+  "release_qualified": false,
+  "retained_twenty_update_checkpoint": {
+    "first_observed_payload_inventory_files": 7,
+    "fresh_dcp_and_portable_reload_exact": true,
+    "historical_payload_hashes_claimed": false,
+    "inspection_optimizer_step": 20,
+    "inventory_unchanged_at_end": true,
+    "maximum_reload_logit_or_loss_difference": 0,
+    "reload_atol": 0,
+    "reload_modalities": [
+      "text",
+      "image",
+      "video"
+    ],
+    "reload_rtol": 0,
+    "scope": "Existing filenames/sizes/latest pointer were previously captured. Payload hashes were first recorded inside this allocation and checked again at its end. This verifies that checkpoint reload; it does not establish noAC100/300-update recovery or cross-AC checkpoint interchangeability.",
+    "source": "Earlier completed BF16 noAC20 run, same native1ac build and its own recorded identity."
+  },
+  "reverse_pair_result": {
+    "all20_numerical_updates_exact": true,
+    "compared_fields": [
+      "train/loss_avg",
+      "train/grad_norm",
+      "train/learning_rate",
+      "train/valid_token_count",
+      "train/valid_sequence_count",
+      "optim/optimizer_step",
+      "optim/attempt_id",
+      "optim/nonfinite_gradient",
+      "optim/nonfinite_loss",
+      "optim/nonfinite_skips_total",
+      "optim/nonfinite_skips_consecutive",
+      "optim/step_skipped",
+      "optim/finite_gradient_check_enabled"
+    ],
+    "excluded_observational_metrics": [
+      "timer/*",
+      "train/preprocessing_*",
+      "train/grad_clip_fraction"
+    ],
+    "none_over_full_native_command_ratio": 1.000928146056706,
+    "none_update_sum_reduction_fraction": 0.03172880171108805,
+    "scope": "Numerical metrics only. Model, optimizer, control, RNG and data payload equality across activation-checkpointing modes was not tested.",
+    "speed_winner_selected": false
+  },
+  "source_sha256": {
+    "actual_host_proof": "30b1e5920dd1dc326ce7a38e10600f226aaeda4d28f03aee22b63304309b0e46",
+    "actual_host_xml": "b9a8040008cca2efb41af817bce40b37914c5d5f5baaf58ca4d52163c8566852",
+    "independent_lifecycle_review": "6b00109a2e16d32047be121965baaad57675b5dc46a936627dd5f1001b92e32a",
+    "independent_timing_memory_cost_review": "8dcda0f4900fb9e9e270bf4dd3580dadad60379951f3b3c06a6edb254b7d28b9",
+    "old20_first_observed_inventory": "ecf67f716e0e0f69b5c5d969f7f8306a25300cd8462a29ece84be9bc101cc876",
+    "own_recovery_completion": "d729853a549b5f3e5708e88ab3dce2279f7cbff5e96f72a776e7edaa5e911fbb",
+    "previous_fixed_order_review": "3f1e49968ee931592310d422e7a443b33d386a95f0980b01a35d22377ae7102b",
+    "projection_source": "404fa281362d5fbc6a31cc723a8224bd1f4c572d145a80623aa092f3b6769822",
+    "raw_host_samples": "4ff93eae6511f96db869eecf112fd52b8256b4eaea5bce2c0d024eb45809329d",
+    "submitted_plan": "55347f4ede1ba8fa7af6e6867d95d5146ecb95ce1c1f87b27d708af530cad0c7",
+    "terminal_capture": "2c27abe051c208e9b6805e5c2e0fabe49e8b92ce299784246019430fd7f120d6",
+    "terminal_review": "7252842c1077b7e4492af389a36d8b6cf9be97483e1cbafbdbf4cc66669a5fd5"
+  },
+  "timing_design": {
+    "all_updates_within_warmup": true,
+    "checkpoint_step": 20,
+    "development_source_rows": 584,
+    "order": [
+      "none",
+      "full"
+    ],
+    "quiet_window": "Both native timing commands and inspections finished before a separate mixed-correctness allocation was submitted. Later reload/recovery wall time is not claimed isolated.",
+    "randomized_repeated_comparison": false,
+    "schedule_cycle_steps": 300,
+    "scope": "One fresh process per run, cold in-process preprocessing caches, uncontrolled filesystem/page-cache warmth. Native command time includes startup/source checks/loading, initial64 validation,20updates,final64 validation and checkpoint publication. Parent preflight and separate inspection costs remain separate. Update/phase/preprocessing timers are nested or overlapping and must not be added to command time.",
+    "train_source_rows": 4611,
+    "training_sequences_per_run": 160,
+    "updates_per_run": 20,
+    "validation_examples_each": 64,
+    "validation_scope": "Exposed first64 development rows cover one group/four media. Their native supervised-token CE is not full584 task accuracy or an independent quality result.",
+    "validation_steps": [
+      0,
+      20
+    ],
+    "warmup_steps": 30
+  },
+  "workflow_revision": "bed3d03edaa5b3c030c71b3414e85465e5e5bfab"
+}

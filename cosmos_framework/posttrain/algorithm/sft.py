@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 import torch
@@ -20,6 +21,8 @@ from cosmos_framework.posttrain.algorithm.primitives.policy_forward import (
     forward_policy,
     policy_logits,
     prepare_policy_capability,
+    selected_sft_forward,
+    selected_sft_logits,
 )
 from cosmos_framework.posttrain.config.sft import SFT_SERVE_CONTRACT_DEFAULT, SFT_SERVE_CONTRACTS
 from cosmos_framework.posttrain.data.packer.base import DataPacker, PackerSemanticsIdentity
@@ -27,6 +30,7 @@ from cosmos_framework.posttrain.model.protocol import LoadBalancingPolicy
 from cosmos_framework.posttrain.schema import SFTTarget, Trajectory
 from cosmos_framework.posttrain.utils.dist import rank_sum_count, run_rank_converged, world_size_or_1
 from cosmos_framework.posttrain.utils.identity import normalize_json_dict
+from cosmos_framework.posttrain.utils.training_profile import profile_range
 
 _IGNORE_LABEL = -100
 _METRIC_ADAPTER = MetricAdapter(
@@ -81,6 +85,7 @@ def make_objective(
     packer: DataPacker,
     *,
     ce_exponent: float = 0.0,
+    wts_answer_smoothing: float = 0.0,
     moe_lbl_coeff: float = 0.0,
     moe_lbl_method: str = "global",
     serve_contract: str = SFT_SERVE_CONTRACT_DEFAULT,
@@ -97,6 +102,13 @@ def make_objective(
     of the same forward, read through the model's ``LoadBalancingPolicy`` capability (``model/protocol.py``:
     ``begin_lbl_collection`` before the forward, ``collect_lbl_metadata`` after it); a policy without the
     capability is refused with ``TypeError`` before any forward, and this module imports no model module.
+
+    ``wts_answer_smoothing>0`` is a training-only WTS objective: at the first
+    answer token, mix the gold target with uniform mass over the actual two to
+    four choices. The denominator remains the full vocabulary; termination is
+    ordinary CE. Strict row/token alignment is checked before the forward.
+    Evaluation and ``loss_avg`` always report hard-gold CE; ``objective`` reports
+    the regularized training loss. Zero preserves the original computation.
 
     ``{train,val}/loss_avg`` is a LOCAL token mean, weighted by
     ``{train,val}/valid_token_count``. Both valid counts are LOCAL sums, to be summed
@@ -123,9 +135,18 @@ def make_objective(
         raise ValueError(f"SFT moe_lbl_coeff={moe_lbl_coeff!r} must be a real in [0, 1)")
     if moe_lbl_method not in ("local", "global"):
         raise ValueError(f"SFT moe_lbl_method={moe_lbl_method!r} must be 'local' or 'global'")
+    if (
+        isinstance(wts_answer_smoothing, bool)
+        or not isinstance(wts_answer_smoothing, (int, float))
+        or not 0.0 <= float(wts_answer_smoothing) < 1.0
+    ):
+        raise ValueError("SFT wts_answer_smoothing must be a finite real in [0, 1)")
+    if wts_answer_smoothing and (ce_exponent != 0 or moe_lbl_coeff != 0):
+        raise ValueError("WTS answer smoothing requires ordinary supervised-token normalization without MoE loss")
     if serve_contract not in SFT_SERVE_CONTRACTS:
         raise ValueError(f"SFT serve_contract={serve_contract!r} must be one of {SFT_SERVE_CONTRACTS}")
     ce_exponent, moe_lbl_coeff = float(ce_exponent), float(moe_lbl_coeff)
+    wts_answer_smoothing = float(wts_answer_smoothing)
     weighted = ce_exponent != 0.0
     identity = normalize_json_dict(
         {
@@ -139,33 +160,54 @@ def make_objective(
                 else "global_supervised_token_mean"
             ),
             **({"ce_exponent": ce_exponent} if weighted else {}),
+            **(
+                {
+                    "wts_answer_smoothing": {
+                        "version": 1,
+                        "epsilon": wts_answer_smoothing,
+                        "distribution": "gold_plus_uniform_actual_2_to_4_choices",
+                        "denominator": "full_vocabulary_log_softmax",
+                        "alignment": "context_stable_first_answer_after_native_assistant_header_v1",
+                        "supervision": "single_answer_and_im_end",
+                        "scope": "training_only_first_answer",
+                        "remaining_tokens_and_evaluation": "hard_gold_cross_entropy",
+                    }
+                }
+                if wts_answer_smoothing
+                else {}
+            ),
             **({"moe_lbl": {"coeff": moe_lbl_coeff, "method": moe_lbl_method}} if moe_lbl_coeff > 0 else {}),
             # The serve contract the run declared (``rl.serve_contract``): present
             # only when it is not the default, so every existing run's identity is unchanged.
             **({"serve_contract": serve_contract} if serve_contract != SFT_SERVE_CONTRACT_DEFAULT else {}),
-            "packer_class": f"{type(packer).__module__}.{type(packer).__qualname__}",
+            "packer_class": getattr(
+                packer, "semantic_packer_class", f"{type(packer).__module__}.{type(packer).__qualname__}"
+            ),
             "packer": packer.validation_semantics_identity(),
         },
         context="SFT objective identity",
     )
 
     def objective(model: Any, trajectories: list[Trajectory]) -> tuple[torch.Tensor, dict[str, Any]]:
-        def prepare() -> tuple[Any, dict[str, Any], torch.Tensor, torch.Tensor, int, int, torch.Tensor]:
+        smoothing_rows: list[tuple[int, tuple[int, ...]]] = []
+
+        def prepare() -> tuple[Any, dict[str, Any], torch.Tensor, torch.Tensor, int, int, torch.Tensor, Any]:
             if not trajectories:
                 raise ValueError("SFT requires a nonempty physical batch on every rank")
             metadata = read_validation_batch_metadata(trajectories)
             weights = metadata.sample_weights or [1.0] * len(trajectories)
             if any(weight not in (0.0, 1.0) for weight in weights):
                 raise ValueError("SFT validation_weight must be 0 or 1")
-            samples = []
-            for trajectory in trajectories:
-                if len(trajectory.transitions) != 1:
-                    raise ValueError("SFT requires exactly one transition per trajectory")
-                target = trajectory.transitions[0].targets
-                if not isinstance(target, SFTTarget):
-                    raise TypeError("SFT requires Transition.targets to be an SFTTarget")
-                samples.append(packer.sft_process_sample(target))
-            batch = dict(packer.sft_collate_fn(samples, packer.sft_compute_max_len(samples), _IGNORE_LABEL))
+            with profile_range("sft.preprocess_and_collate"):
+                samples = []
+                for trajectory in trajectories:
+                    if len(trajectory.transitions) != 1:
+                        raise ValueError("SFT requires exactly one transition per trajectory")
+                    target = trajectory.transitions[0].targets
+                    if not isinstance(target, SFTTarget):
+                        raise TypeError("SFT requires Transition.targets to be an SFTTarget")
+                    samples.append(packer.sft_process_sample(target))
+                batch = dict(packer.sft_collate_fn(samples, packer.sft_compute_max_len(samples), _IGNORE_LABEL))
             for key in ("input_ids", "labels", "attention_mask"):
                 value = batch.get(key)
                 if not isinstance(value, torch.Tensor) or value.ndim != 2 or value.device.type != "cpu":
@@ -191,14 +233,30 @@ def make_objective(
             token_count = int(valid.sum().item())
             sequence_count = int(valid.any(dim=1).sum().item())
             net = getattr(model, "net", model)
+            if wts_answer_smoothing and net.training:
+                smoothing_rows.extend(
+                    _wts_answer_rows(packer, trajectories, samples, input_ids, labels, attention, valid)
+                )
             device = next(net.parameters()).device
-            batch["input_ids"] = input_ids.to(device)  # [B,L]
-            prepared = prepare_policy_capability(model, batch)
-            return net, prepared, input_ids, labels[:, 1:].to(device), token_count, sequence_count, valid.to(device)
+            with profile_range("sft.transfers_and_policy_preparation"):
+                batch["input_ids"] = input_ids.to(device)  # [B,L]
+                prepared = prepare_policy_capability(model, batch)
+                selected_forward = selected_sft_forward(model)
+                return (
+                    net,
+                    prepared,
+                    input_ids,
+                    labels[:, 1:].to(device),
+                    token_count,
+                    sequence_count,
+                    valid.to(device),
+                    selected_forward,
+                )
 
-        net, prepared, input_ids, labels, token_count, sequence_count, valid = run_rank_converged(
-            prepare, "SFT objective preparation"
-        )
+        with profile_range("sft.prepare"):
+            net, prepared, input_ids, labels, token_count, sequence_count, valid, selected_forward = run_rank_converged(
+                prepare, "SFT objective preparation"
+            )
         # Count in int64 before forming the DP mean; large token batches must not
         # round their denominator through the default float32 collective dtype.
         global_tokens = rank_sum_count(token_count, labels.device)
@@ -224,7 +282,12 @@ def make_objective(
                     "(LoadBalancingPolicy.begin_lbl_collection switched 0 blocks)"
                 )
         # Collective-bearing forwards are not wrapped in a recoverable-error consensus.
-        output = forward_policy(model, net, prepared)
+        with profile_range("sft.forward"):
+            output = (
+                selected_forward(prepared, valid)
+                if selected_forward is not None
+                else forward_policy(model, net, prepared)
+            )
         lbl_term: torch.Tensor | None = None
         load_max_rel: torch.Tensor | None = None
         if moe_lbl_coeff > 0:
@@ -235,21 +298,35 @@ def make_objective(
             lbl_term, load_max_rel = load_balancing_loss(per_layer, coeff=moe_lbl_coeff, method=moe_lbl_method)
 
         def finalize() -> tuple[torch.Tensor, dict[str, Any]]:
-            logits = policy_logits(output, input_ids, owner="SFT policy")  # [B,L,V]
-            selected_logits = logits[:, :-1][valid].float()  # [N,V]
+            if selected_forward is not None:
+                selected_logits = selected_sft_logits(output, token_count).float()  # [N,V]
+            else:
+                logits = policy_logits(output, input_ids, owner="SFT policy")  # [B,L,V]
+                selected_logits = logits[:, :-1][valid].float()  # [N,V]
             selected_labels = labels[valid]  # [N]
             # Sum reduction on an empty local selection yields a graph-connected zero.
             per_token = F.cross_entropy(selected_logits, selected_labels, reduction="none")  # [N]
             numerator = per_token.sum()  # []
+            training_per_token = per_token
+            if smoothing_rows:
+                training_per_token = per_token.clone()
+                for index, candidates in smoothing_rows:
+                    scores = selected_logits[index]  # [V], full vocabulary
+                    if any(not 0 <= token < scores.shape[0] for token in candidates):
+                        raise ValueError("WTS answer token is outside model vocabulary")
+                    uniform_ce = torch.logsumexp(scores, dim=0) - scores[list(candidates)].mean()
+                    training_per_token[index] = (1.0 - wts_answer_smoothing) * per_token[
+                        index
+                    ] + wts_answer_smoothing * uniform_ce
             if weighted:
                 rows = torch.nonzero(valid)[:, 0]  # [N] the row of every selected token, in selection order
                 row_sums = torch.zeros(valid.shape[0], dtype=per_token.dtype, device=per_token.device).scatter_add(
-                    0, rows, per_token
+                    0, rows, training_per_token
                 )  # [B]
                 counts = row_counts.to(per_token.dtype)  # [B]
                 objective_value = (row_sums / counts.clamp(min=1).pow(ce_exponent) * (counts > 0)).sum() / denominator
             else:
-                objective_value = numerator / denominator
+                objective_value = (training_per_token.sum() if smoothing_rows else numerator) / denominator
             metrics: dict[str, Any] = {
                 "sft_loss": numerator.detach() / max(token_count, 1),
                 "sft_valid_tokens": token_count,
@@ -261,13 +338,98 @@ def make_objective(
                 loss = objective_value + lbl_term
                 metrics["sft_lbl_loss"] = lbl_term.detach()
                 metrics["sft_moe_load_max_rel"] = load_max_rel
-            if weighted or lbl_term is not None:
+            if weighted or lbl_term is not None or smoothing_rows:
                 metrics["sft_objective"] = loss.detach()
             return loss, metrics
 
-        return run_rank_converged(finalize, "SFT objective finalization")
+        with profile_range("sft.loss"):
+            return run_rank_converged(finalize, "SFT objective finalization")
 
-    return Objective(objective, reduction=Reduction.TOKEN_SUM, metric_adapter=_METRIC_ADAPTER, identity=identity)
+    prepare_window = getattr(packer, "prepare_window", None)
+
+    def prepare_input_window(batches: list[list[Trajectory]]) -> None:
+        targets = []
+        for batch in batches:
+            for trajectory in batch:
+                if len(trajectory.transitions) != 1 or not isinstance(trajectory.transitions[0].targets, SFTTarget):
+                    raise ValueError("SFT preprocessing windows require one SFTTarget transition per row")
+                targets.append(trajectory.transitions[0].targets)
+        prepare_window(targets)
+
+    return Objective(
+        objective,
+        reduction=Reduction.TOKEN_SUM,
+        metric_adapter=_METRIC_ADAPTER,
+        identity=identity,
+        prepare_window=prepare_input_window if callable(prepare_window) else None,
+        finish_window=getattr(packer, "finish_window", None),
+        close=getattr(packer, "close", None),
+        pipeline_stats=(lambda: deepcopy(packer.preprocessing_stats))
+        if hasattr(packer, "preprocessing_stats")
+        else None,
+    )
+
+
+def _wts_answer_rows(
+    packer: DataPacker,
+    trajectories: list[Trajectory],
+    samples: list[Any],
+    input_ids: torch.Tensor,
+    labels: torch.Tensor,
+    attention: torch.Tensor,
+    valid: torch.Tensor,
+) -> list[tuple[int, tuple[int, ...]]]:
+    """Map strict unpadded WTS answer positions to the native selected-token order.
+
+    Reuse the scorer's option parser and tokenizer round-trip contract. No
+    candidate token IDs are guessed from isolated letters or target contents.
+    """
+    from cosmos_framework.posttrain.roles.trainer.validation.wts import answer_alignment, validate_wts
+
+    tokenizer = getattr(packer, "tokenizer", None)
+    if tokenizer is None:
+        raise TypeError("WTS answer smoothing requires the native packer's tokenizer")
+    result = []
+    offset = 0
+    for row, (trajectory, sample) in enumerate(zip(trajectories, samples, strict=True)):
+        target = trajectory.transitions[0].targets
+        _, answer, choices, _ = validate_wts(
+            {
+                "id": str(row),
+                "messages": target.messages,
+                "tools": target.tools,
+                "supervise": target.supervise,
+                "opener": target.opener,
+            }
+        )
+        position, candidates = answer_alignment(tokenizer, sample.input_ids, sample.labels, answer, choices=choices)
+        supervised = [i for i, token in enumerate(sample.labels) if token != _IGNORE_LABEL]
+        if (
+            supervised != [position, position + 1]
+            or sample.input_ids[position + 1] != sample.labels[position + 1]
+            or tokenizer.decode(
+                [sample.labels[position + 1]], skip_special_tokens=False, clean_up_tokenization_spaces=False
+            )
+            != "<|im_end|>"
+        ):
+            raise ValueError("WTS answer smoothing requires the complete single answer and supervised im_end token")
+        occupied = torch.nonzero(attention[row]).flatten()
+        if (
+            occupied.numel() != len(sample.input_ids)
+            or not torch.equal(occupied, torch.arange(int(occupied[0]), int(occupied[0]) + len(sample.input_ids)))
+            or input_ids[row, occupied].tolist() != sample.input_ids
+            or labels[row, occupied].tolist() != sample.labels
+        ):
+            raise ValueError("WTS collation changed the native token/label alignment")
+        prediction = int(occupied[position]) - 1
+        count = int(valid[row].sum())
+        if count:
+            if count != 2 or not bool(valid[row, prediction]) or not bool(valid[row, prediction + 1]):
+                raise ValueError("WTS attention/mask lost the answer or termination prediction")
+            selected_index = offset + int(valid[row, :prediction].sum())
+            result.append((selected_index, tuple(candidates.values())))
+        offset += count
+    return result
 
 
 def _dp_mean(local_value: float, device: torch.device) -> float:

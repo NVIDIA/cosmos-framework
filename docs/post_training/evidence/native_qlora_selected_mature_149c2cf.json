@@ -1,0 +1,410 @@
+{
+  "attempts": [
+    {
+      "checkpoint_tensor_bytes_copied_for_review": 0,
+      "cost": {
+        "allocated_cpu_seconds": 1248,
+        "allocation_cost_sum_once": true,
+        "exploration_debit_seconds": 78,
+        "gpu_allocation_seconds": 78,
+        "outer_phase_seconds_nonadditive": "35.6802767140325185",
+        "outside_outer_phase_seconds": "42.3197232859674815",
+        "per_arm_measured_clock_claimed": false,
+        "per_precision_opportunity_seconds": {
+          "bf16": "39",
+          "nf4": "39"
+        },
+        "shared_allocation_seconds": "78"
+      },
+      "exit_code": "1:0",
+      "failure_cause": "one actual NUMA node required",
+      "failure_checks_are_not_accelerator_recovery_qualification": true,
+      "failure_metadata_cpu_checks": 33,
+      "failure_site": "allocation placement before per-arm stages",
+      "inherited_distinct_physical_cores_by_numa": {
+        "0": 6,
+        "1": 4,
+        "3": 4
+      },
+      "job_id": "38310827",
+      "neither_arm_entered": true,
+      "operationally_censored": true,
+      "recovered_updates": 0,
+      "scientific_success_or_quality_or_resume_claimed": false,
+      "selected_distinct_physical_cores_by_numa": {
+        "0": 6,
+        "1": 2
+      },
+      "source_sha256": {
+        "closed_capture": "40b70f84f38c63b0da36d110e1a67e920375faf63916ee17d97f8a0da276f046",
+        "failure_only_reader": "759f1090d426a7ea83dc2a18d1b4e7ee265b6ce0f49e3541afdb4675bb36a655",
+        "failure_only_review": "2e713ad6aa961be55668289c97b779180bb99be5d72ef6e6fe8a561a898a6499",
+        "issued_plan": "cbedc311678a1910e8ca6bc3e8fb210072ef27828924f1e5c9986a72e3cc2fa7",
+        "unchanged_producer": "3c16e352eba8f2bc2959db9a74d6ffd763cb63799b5e5651a825342c347aaa09"
+      },
+      "state": "FAILED",
+      "success_only_reader_refusal_preserved": true,
+      "valid_eight_core_single_numa_subset_existed": false
+    },
+    {
+      "cases": {
+        "bf16": {
+          "adapter_tensor_count": 504,
+          "all50_predeclared_numerical_metrics_exact": true,
+          "clip_fraction_reporting_history": {
+            "differences": 50,
+            "first": {
+              "fresh_attempt": 1.0,
+              "original": 0.4063745019920319,
+              "step": 251
+            },
+            "last": {
+              "fresh_attempt": 0.34,
+              "original": 0.3933333333333333,
+              "step": 300
+            },
+            "scope": "The attempt-local cumulative reporting fraction restarts after resume; it is an explicitly excluded observational metric, not an optimizer-state mismatch or exact reporting-history claim."
+          },
+          "cross_policy_resume_qualified": false,
+          "current_whole_interval_provenance_stable": true,
+          "declared_numerical_metric_fields": [
+            "optim/attempt_id",
+            "optim/finite_gradient_check_enabled",
+            "optim/nonfinite_gradient",
+            "optim/nonfinite_loss",
+            "optim/nonfinite_skips_consecutive",
+            "optim/nonfinite_skips_total",
+            "optim/optimizer_step",
+            "optim/step_skipped",
+            "train/grad_norm",
+            "train/learning_rate",
+            "train/loss_avg",
+            "train/valid_sequence_count",
+            "train/valid_token_count"
+          ],
+          "different_host_observed": true,
+          "final64_validation_exact": {
+            "excluded": [
+              "timer/*",
+              "time",
+              "train/grad_clip_fraction",
+              "train/preprocessing_*"
+            ],
+            "numerical_metrics": {
+              "val/loss_avg": 0.014052071210244321,
+              "val/valid_sequence_count": 64.0,
+              "val/valid_token_count": 128.0
+            },
+            "optimizer_step": 300,
+            "passed": true
+          },
+          "final_optimizer_step": 300,
+          "full_state_comparison": {
+            "atol": 0,
+            "controls_rng_and_data_exact": true,
+            "excluded_storage_identity_fields": [
+              "validation.publication.destination",
+              "validation.publication.id",
+              "validation.publication.manifest"
+            ],
+            "maximum_tensor_difference": {
+              "model": 0.0,
+              "optim": 0.0
+            },
+            "passed": true,
+            "rtol": 0
+          },
+          "general_host_migration_qualified": false,
+          "host_identifiers_omitted": true,
+          "new_applied_updates": 50,
+          "new_update_range": [
+            251,
+            300
+          ],
+          "original250_scope": "captured membership plus fresh allocated inspection; no original250 tensor-byte proof",
+          "original300_descriptor_exact": true,
+          "original504_adapter_byte_inventory_sha256": "a691296efb3dc99743ff97c7b11b5210df6ce3eb30d0d4b083e7ff0b7bbe7290",
+          "original_optimizer_raw_bytes_claimed": false,
+          "original_optimizer_raw_shard_byte_identity_claimed": false,
+          "reporting_exclusions": [
+            "timer/*",
+            "train/preprocessing_*",
+            "train/grad_clip_fraction"
+          ],
+          "resume_optimizer_step": 250,
+          "resumed504_adapter_tensor_bytes_exact": true,
+          "same_world_size": true,
+          "selected_policy": "none",
+          "serialized_dcp_identity_claimed": false,
+          "source_case": "bf16_none",
+          "world_size": 1
+        },
+        "nf4": {
+          "adapter_tensor_count": 504,
+          "all50_predeclared_numerical_metrics_exact": true,
+          "clip_fraction_reporting_history": {
+            "differences": 50,
+            "first": {
+              "fresh_attempt": 1.0,
+              "original": 0.4103585657370518,
+              "step": 251
+            },
+            "last": {
+              "fresh_attempt": 0.32,
+              "original": 0.3933333333333333,
+              "step": 300
+            },
+            "scope": "The attempt-local cumulative reporting fraction restarts after resume; it is an explicitly excluded observational metric, not an optimizer-state mismatch or exact reporting-history claim."
+          },
+          "cross_policy_resume_qualified": false,
+          "current_whole_interval_provenance_stable": true,
+          "declared_numerical_metric_fields": [
+            "optim/attempt_id",
+            "optim/finite_gradient_check_enabled",
+            "optim/nonfinite_gradient",
+            "optim/nonfinite_loss",
+            "optim/nonfinite_skips_consecutive",
+            "optim/nonfinite_skips_total",
+            "optim/optimizer_step",
+            "optim/step_skipped",
+            "train/grad_norm",
+            "train/learning_rate",
+            "train/loss_avg",
+            "train/valid_sequence_count",
+            "train/valid_token_count"
+          ],
+          "different_host_observed": true,
+          "final64_validation_exact": {
+            "excluded": [
+              "timer/*",
+              "time",
+              "train/grad_clip_fraction",
+              "train/preprocessing_*"
+            ],
+            "numerical_metrics": {
+              "val/loss_avg": 0.014494177400564467,
+              "val/valid_sequence_count": 64.0,
+              "val/valid_token_count": 128.0
+            },
+            "optimizer_step": 300,
+            "passed": true
+          },
+          "final_optimizer_step": 300,
+          "full_state_comparison": {
+            "atol": 0,
+            "controls_rng_and_data_exact": true,
+            "excluded_storage_identity_fields": [
+              "validation.publication.destination",
+              "validation.publication.id",
+              "validation.publication.manifest"
+            ],
+            "maximum_tensor_difference": {
+              "model": 0.0,
+              "optim": 0.0
+            },
+            "passed": true,
+            "rtol": 0
+          },
+          "general_host_migration_qualified": false,
+          "host_identifiers_omitted": true,
+          "new_applied_updates": 50,
+          "new_update_range": [
+            251,
+            300
+          ],
+          "original250_scope": "captured membership plus fresh allocated inspection; no original250 tensor-byte proof",
+          "original300_descriptor_exact": true,
+          "original504_adapter_byte_inventory_sha256": "bb981148231b23c4ff054cba60002f632dc854dd21e3afa1331de6a3620d707e",
+          "original_optimizer_raw_bytes_claimed": false,
+          "original_optimizer_raw_shard_byte_identity_claimed": false,
+          "reporting_exclusions": [
+            "timer/*",
+            "train/preprocessing_*",
+            "train/grad_clip_fraction"
+          ],
+          "resume_optimizer_step": 250,
+          "resumed504_adapter_tensor_bytes_exact": true,
+          "same_world_size": true,
+          "selected_policy": "none",
+          "serialized_dcp_identity_claimed": false,
+          "source_case": "nf4_none",
+          "world_size": 1
+        }
+      },
+      "checkpoint_tensor_bytes_read_locally": 0,
+      "complete_metadata_replay": true,
+      "cost": {
+        "allocated_cpu_seconds": 19808,
+        "exploration_debit_seconds": 1238,
+        "gpu_allocation_seconds": 1238,
+        "nested_phase_clocks_nonadditive": true,
+        "own_phase_seconds": {
+          "bf16": "565.138418788032142",
+          "nf4": "592.030687895981827"
+        },
+        "per_precision_opportunity_seconds": {
+          "bf16": "605.5538654460251575",
+          "nf4": "632.4461345539748425"
+        },
+        "shared_allocation_residual_seconds": "80.830893315986031",
+        "shared_residual_attribution": "half to each precision; descriptive opportunity attribution, not measured standalone arm allocation"
+      },
+      "exit_code": "0:0",
+      "local_reader_correction": {
+        "additional_gpu_allocation_seconds": 0,
+        "cause": "The original local reader passed the workflow receipt where the unchanged producer expected the native build receipt.",
+        "corrected_reader_sha256": "b9ba71efbd442c1d57ffb073cd055e5d2d6c222803142fb5416df81e9e5656b1",
+        "correction": "Use the pinned native build receipt and require its native revision and wheel hash; scientific assertions are unchanged.",
+        "correction_receipt_sha256": "24e66e5a5af060acf392a9684ed700f05638e17298240780bde7ce266e5c3bec",
+        "cpu_metadata_tests_passed": 9,
+        "cpu_tests_xml_sha256": "b47136c6a5082b580cc8fb2474e3045729e4429e6bea0df65640c3c5e582fcea",
+        "missing_key": "wheel_sha256",
+        "native_training_or_capture_rerun": false,
+        "original_exception_type": "KeyError",
+        "original_failure_receipt_sha256": "c17ecc3f959b10f07e53935273cc57fddc2682694f040bdeef67b38b5b028e15",
+        "original_failure_wrote_canonical_report": false,
+        "original_reader_preserved": true,
+        "original_reader_sha256": "06982ad126305bd233aaae19243490bb1376db37d61b8c1c4d9f87122d1186f6",
+        "original_streams_not_separately_saved": true
+      },
+      "memory_peak_analysis_performed": false,
+      "new_584_row_scoring_export_or_three_modal_reload_performed": false,
+      "operationally_censored": false,
+      "phase_clocks_nonadditive": true,
+      "phase_outcomes": [
+        {
+          "elapsed_seconds": 10.380169993994059,
+          "exit_code": 0,
+          "name": "nf4_source"
+        },
+        {
+          "elapsed_seconds": 565.3118965709873,
+          "exit_code": 0,
+          "name": "nf4_resume"
+        },
+        {
+          "elapsed_seconds": 16.338621331000468,
+          "exit_code": 0,
+          "name": "nf4_compare"
+        },
+        {
+          "elapsed_seconds": 10.37973529601004,
+          "exit_code": 0,
+          "name": "bf16_source"
+        },
+        {
+          "elapsed_seconds": 536.4651377889968,
+          "exit_code": 0,
+          "name": "bf16_resume"
+        },
+        {
+          "elapsed_seconds": 18.293545703025302,
+          "exit_code": 0,
+          "name": "bf16_compare"
+        }
+      ],
+      "runtime": {
+        "allocated_cpus": 16,
+        "device_bytes": 85174583296,
+        "gpus": 1,
+        "host_memory_limit_bytes": 68719476736,
+        "name": "NVIDIA A100-SXM4-80GB",
+        "physical_cpu_cores": 8,
+        "python": "3.12.12 (main, Feb 12 2026, 00:42:14) [Clang 21.1.4 ]",
+        "runtime_precision": {
+          "allow_bf16_reduced_precision_reduction": true,
+          "cuda_matmul_allow_tf32": false,
+          "cudnn_allow_tf32": true,
+          "environment": {
+            "NVIDIA_TF32_OVERRIDE": null,
+            "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE": null
+          },
+          "float32_matmul_precision": "highest",
+          "fp32_precision": {
+            "cuda_matmul": "none",
+            "cudnn": "none",
+            "cudnn_conv": "tf32",
+            "cudnn_rnn": "tf32",
+            "global": "none"
+          }
+        },
+        "thread_environment": {
+          "MKL_NUM_THREADS": null,
+          "OMP_NUM_THREADS": "8",
+          "OPENBLAS_NUM_THREADS": null,
+          "TOKENIZERS_PARALLELISM": "false"
+        },
+        "torch_cuda": "12.8",
+        "torch_git_version": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+        "versions": {
+          "accelerate": "1.13.0",
+          "bitsandbytes": "0.49.2",
+          "safetensors": "0.8.0",
+          "torch": "2.11.0+cu128",
+          "torchcodec": "0.11.0+cpu",
+          "torchvision": "0.26.0+cu128",
+          "transformers": "5.8.1"
+        }
+      },
+      "scope": "Own selected E1 seed42 unchanged-policy250-to300 recovery;50 new numerical update metrics/final64 validation, native0-tolerance adapter/optimizer values and RNG/data/control, original504 adapter tensor bytes. Original300 opaque provenance exact; no raw optimizer-shard identity, policy-interchangeable resume, general migration, new584score/export/reload, speed or quality claim.",
+      "selected_policy_mature_recovery_accepted": true,
+      "source_sha256": {
+        "bf16_compare_outcome": "957db26158f6ed2df331d522b82e371ddf20715cdd61a02d64bbf37ebeddf283",
+        "bf16_comparison_metadata": "33be9bf1d60f5753c0425828c14623c1fb1a0c4364da151282e3405da9e919fd",
+        "bf16_resume_outcome": "753f5977f15313a168bdce8b80c0f5f8f5910e68a2b6d6c82a0d8055a8e9f9ab",
+        "bf16_source_outcome": "18f1ec1b22a512ccac2c2a24002f463aa75b210516f3bb7dd398e7da778a22e4",
+        "canonical_reader": "b9ba71efbd442c1d57ffb073cd055e5d2d6c222803142fb5416df81e9e5656b1",
+        "closed_capture": "5eaa9e25fc72e3556913ee4c1b0956ee60472210c9d5c909c72817e4127afdde",
+        "closed_report": "ddb960a83721e31f85ee80aee9c0ec41cc050cc61dcf25bea446e0c7b363d6ba",
+        "issued_plan": "bebe61ac564fa53126b8f98a8eb168621db71d4dbf87585c93e03c13f74faa24",
+        "native_build_receipt": "0b2adf88105cb10899f530e00b289436cf26d99f504efdfb444123ddfd821e88",
+        "nf4_compare_outcome": "29b1c3a3658249e33be351c7dbc113009e994e17f6c17b92c9a02659531bc77e",
+        "nf4_comparison_metadata": "fb6bfea4e17e06a30e9a00e3d26d792b65a83d8af1d2b48f2d2383b2b121e325",
+        "nf4_resume_outcome": "537fc720518b6e1b19ec63652b8d8b8b46a9cef01cb3cc008b5628c52307a733",
+        "nf4_source_outcome": "e11fd9ad14aac11cce8d3cad0a819e55f89b50cca7e928f1257ae78759f8a6ca",
+        "original_e1_capture": "e790f5e73a02a35a721f4075bb485700f2211ff2081c3d3096615a8c78ed5798",
+        "original_e1_report": "6a1af98c2c5e038444be7bfe9f22e5df0a3a1f0baedbede3448a6ccd24c8140a",
+        "policy_lock": "52f4e0f6773cb9a036bc118d18f0af32148c302a300b7236a9f2401779c4455a",
+        "runtime_sampling_allowlist_helper": "ae6e0931cde33f7fe7e3b81b298ca5f9a1d6513e2794fe4b074bef9da8b2d56e",
+        "unchanged_producer": "3c16e352eba8f2bc2959db9a74d6ffd763cb63799b5e5651a825342c347aaa09",
+        "workflow_receipt": "be110896253b92d7ca181ac470096af5e1109f08ed88f3053e69f87c3ee9066a"
+      },
+      "state": "COMPLETED"
+    }
+  ],
+  "cost_across_mature_attempts": {
+    "allocated_cpu_seconds": 21056,
+    "allocation_cost_sum_once": true,
+    "exploration_debit_seconds": 1316,
+    "gpu_allocation_seconds": 1316,
+    "includes_failed_placement": true,
+    "local_reader_correction_added_gpu_cost": 0,
+    "nested_phase_clocks_nonadditive": true,
+    "per_precision_opportunity_seconds": {
+      "bf16": "644.5538654460251575",
+      "nf4": "671.4461345539748425"
+    },
+    "prior_e1_e2_and_development_costs_charged_again": false
+  },
+  "execution_policy_promoted_for_measured_workload": true,
+  "independent_quality_confirmation_complete": false,
+  "measurement_limits": [
+    "Native zero-tolerance model/optimizer tensor values and exact RNG/data/control are distinct from per-adapter raw tensor-byte equality. Optimizer raw-shard and serialized DCP identity are not claimed.",
+    "The source300 descriptor is exactly retained, and whole source/resumed comparison provenance is stable during this later allocation. Source250 has captured membership plus fresh inspection, not an original tensor-byte proof.",
+    "Each arm executes50 new committed updates and exact final64-example validation. Attempt-local clip-fraction reporting history differs after resume and remains explicitly excluded alongside timers and preprocessing counters.",
+    "This is same-world-size, same-policy recovery on an observed different host, not policy-interchangeable resume or a general host/world-size migration qualification.",
+    "No new584-row scoring, export, three-modal reload, speed, memory-peak, long-context, full4611-row census, independent quality or TTQ claim is supplied by this recovery. Prior endpoint and own-reload evidence retains its separate scope."
+  ],
+  "native_revision": "149c2cf1a147caa8956fed1b319b140f958e8731",
+  "native_wheel_sha256": "6f3550c37b408a8a11c5b651a0b413e696a39bcb655858aa6fea0c1cceb9783b",
+  "policy_lock_sha256": "52f4e0f6773cb9a036bc118d18f0af32148c302a300b7236a9f2401779c4455a",
+  "protocol": "cosmos.native-qlora-selected-mature-evidence.v1",
+  "quality_release_or_full_recipe_promoted": false,
+  "scope": "Selected none/none checkpointing is qualified for this native149, seed-42, rank-32, 3 GiB-cache WTS workload: own update-250-to-300 recovery at world size 1, observed on another host. The first placement failure remains charged and supplies no recovery evidence. No release, independent quality, total TTQ, cross-policy resume or general migration qualification is implied.",
+  "selected_checkpointing": {
+    "bf16": "none",
+    "nf4": "none"
+  },
+  "selected_policy_late_recovery_qualified": true,
+  "time_to_quality_complete": false
+}

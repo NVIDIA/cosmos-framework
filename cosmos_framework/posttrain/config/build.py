@@ -36,6 +36,7 @@ from cosmos_framework.posttrain.config.model import (
     HFModelConfig,
     NativePolicyBuildSpec,
     NativePolicyParallelismConfig,
+    Qwen3VLModelConfig,
 )
 from cosmos_framework.posttrain.config.rl import (
     OPTIMIZER_NAMES,
@@ -349,6 +350,34 @@ def build_sft_lr_scheduler(
     constant; ``None`` at warmup 0, the pre-existing path); ``cosine`` = :func:`build_warmup_cosine_lr_scheduler` (the
     backbone's warmup + cosine, cycle = ``schedule.cycle_steps`` or ``max_steps``).
     """
+    from cosmos_framework.posttrain.config.gr00t_official import (
+        Gr00tOfficialHeadSchedule,
+        validate_official_head_optimizer,
+    )
+
+    if isinstance(schedule, Gr00tOfficialHeadSchedule):
+        from transformers import get_cosine_schedule_with_warmup
+
+        schedule.__post_init__()
+        validate_official_head_optimizer(opt_cfg)
+        horizon = schedule.cycle_steps or max_steps
+        if type(horizon) is not int or horizon <= 0:
+            raise ValueError("official GR00T schedule requires a positive update horizon")
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer, num_warmup_steps=opt_cfg.warmup_steps, num_training_steps=horizon
+        )
+        bind_scheduler_resume_identity(
+            scheduler,
+            {
+                "version": 1,
+                "kind": "gr00t_official_hf_cosine_v1",
+                "step_timing": "after_applied_optimizer_update_v1",
+                "warm_up_steps": opt_cfg.warmup_steps,
+                "cycle_length": horizon,
+                "num_cycles": 0.5,
+            },
+        )
+        return scheduler
     if schedule.kind == "constant":
         return build_lr_scheduler(optimizer, opt_cfg)
     cycle = int(schedule.cycle_steps or max_steps)
@@ -541,6 +570,18 @@ def build_optimizer(
     # over `net.named_parameters()` is correct. Mesh-aware per-bucket optimizers (grouping
     # params by device_mesh) are a follow-up for multi-mesh parallelism (TP/EP).
     net = getattr(model, "net", model)
+    adapter_parameters = getattr(net, "_cosmos_adapter_parameters", None)
+    if adapter_parameters is not None:
+        _validate_native_adapter_optimizer(opt_cfg, net=net)
+        expected = list(adapter_parameters.values())
+        expected_ids = {id(p) for p in expected}
+        actual_ids = {id(p) for p in net.parameters() if p.requires_grad}
+        if not expected or len(expected_ids) != len(expected) or actual_ids != expected_ids:
+            raise ValueError("native adapter optimizer membership must equal exactly the final adapter parameters")
+        if any(p.dtype != torch.float32 or not p.requires_grad for p in expected):
+            raise ValueError("native adapter optimizer requires materialized, trainable FP32 adapter parameters")
+        if any(p.is_meta for p in expected):
+            raise ValueError("native adapter optimizer cannot contain unmaterialized meta parameters")
     # An explicit partition is complete by construction; the train-key and decay-group paths
     # below see already-populated groups (and validated-empty knobs) and leave them alone.
     params: list = [] if parameter_groups is None else _explicit_parameter_groups(net, opt_cfg, parameter_groups)
@@ -648,7 +689,7 @@ def build_optimizer(
         kernel["foreach"] = True
     elif impl == "for-loop":
         kernel["foreach"] = False
-    return torch.optim.AdamW(
+    optimizer = torch.optim.AdamW(
         params,
         lr=opt_cfg.lr,
         weight_decay=opt_cfg.weight_decay,
@@ -656,6 +697,67 @@ def build_optimizer(
         eps=opt_cfg.eps,
         **kernel,
     )
+    if adapter_parameters is not None:
+        members = [p for group in optimizer.param_groups for p in group["params"]]
+        if len(members) != len(expected_ids) or {id(p) for p in members} != expected_ids:
+            raise ValueError(
+                "native adapter optimizer groups must contain every adapter exactly once and no base weights"
+            )
+    return optimizer
+
+
+def _validate_native_adapter_optimizer(opt_cfg: OptimizerConfig, *, net: Any = None) -> None:
+    """Keep the initial paired recipes on one explicitly qualified optimizer path."""
+    from cosmos_framework.posttrain.config.gr00t_official import (
+        OFFICIAL_HEAD_PROFILE,
+        validate_official_head_optimizer,
+    )
+
+    profile = getattr(net, "_cosmos_adapter_optimizer_profile", None)
+    if profile is not None:
+        identity = getattr(net, "_cosmos_adapter_metadata", {})
+        parameters = getattr(net, "_cosmos_adapter_parameters", {})
+        if (
+            profile != OFFICIAL_HEAD_PROFILE
+            or identity.get("format") != "cosmos.gr00t-official-head.v1"
+            or identity.get("optimizer_profile") != OFFICIAL_HEAD_PROFILE
+            or not parameters
+            or set(identity.get("auxiliary_parameters", ())) != set(parameters)
+            or any(not name.startswith("action_head.") or ".lora_" in name for name in parameters)
+        ):
+            raise ValueError("official optimizer profile requires the explicit GR00T head-only task identity")
+        validate_official_head_optimizer(opt_cfg)
+        return
+    if opt_cfg.name != "adamw" or opt_cfg.impl != "fused":
+        raise ValueError("native LoRA requires OptimizerConfig(name='adamw', impl='fused')")
+    if opt_cfg.train_keys:
+        raise ValueError("native LoRA requires train_keys=[]; the builder owns the exact trainability policy")
+    if opt_cfg.decay_groups:
+        raise ValueError("native LoRA requires no decay_groups in the initial capability")
+    if opt_cfg.lr_multipliers:
+        _validate_native_auxiliary_lr_multipliers(opt_cfg, net)
+
+
+def _validate_native_auxiliary_lr_multipliers(opt_cfg: OptimizerConfig, net: Any) -> None:
+    """Allow per-group learning rates only for explicitly trained non-LoRA auxiliary modules.
+
+    Every LoRA factor keeps the recipe's base learning rate, and every pattern must select at least one trained
+    auxiliary parameter (for example Alpamayo's ``expert.`` and action projections), so a typo or a pattern that
+    would rescale adapters is refused before any optimizer exists.
+    """
+    parameters = getattr(net, "_cosmos_adapter_parameters", None) if net is not None else None
+    identity = getattr(net, "_cosmos_adapter_metadata", {}) if net is not None else {}
+    auxiliary = set(identity.get("auxiliary_parameters", ())) if isinstance(identity, Mapping) else set()
+    if not parameters or not auxiliary or not auxiliary <= set(parameters):
+        raise ValueError(
+            "native LoRA lr_multipliers require a constructed model with explicitly trained auxiliary parameters"
+        )
+    for name in parameters:
+        if lr_multiplier_for(name, opt_cfg.lr_multipliers) != 1.0 and (".lora_" in name or name not in auxiliary):
+            raise ValueError(f"native LoRA lr_multipliers may scale only trained auxiliary parameters, not {name!r}")
+    for pattern in opt_cfg.lr_multipliers:
+        if not any(pattern in name and lr_multiplier_for(name, opt_cfg.lr_multipliers) != 1.0 for name in auxiliary):
+            raise ValueError(f"native LoRA lr_multipliers pattern {pattern!r} selects no trained auxiliary parameter")
 
 
 def refuse_rounding_or_unavailable_optimizer(config: Any, opt_cfg: OptimizerConfig) -> None:
@@ -677,8 +779,21 @@ def refuse_rounding_or_unavailable_optimizer(config: Any, opt_cfg: OptimizerConf
         storage = str(resolve_precision(config).master)
         seat = "the HF seat (rl.master_dtype, else rl.param_dtype, else model_hf.dtype)"
     elif selection.native_spec is not None:
-        storage = str(getattr(selection.native_spec.model_config, "dtype", "") or "the model dtype")
-        seat = "the native seat (Qwen3VLModelConfig.dtype is the builder's FSDP master dtype)"
+        model_cfg = selection.native_spec.model_config
+        if (
+            selection.native_spec.builder == _QWEN3_VL_NATIVE_BUILDER
+            and isinstance(model_cfg, Qwen3VLModelConfig)
+            and model_cfg.adapter is not None
+        ):
+            model_cfg.__post_init__()
+            _validate_native_adapter_optimizer(opt_cfg)
+            # Only the adapters are trainable. Their explicit FP32 storage, rather than
+            # the frozen BF16/packed base, determines AdamW update and moment precision.
+            storage = model_cfg.adapter.parameter_dtype
+            seat = "the native adapter seat (NativeLoRAConfig.parameter_dtype)"
+        else:
+            storage = str(getattr(model_cfg, "dtype", "") or "the model dtype")
+            seat = "the native seat (Qwen3VLModelConfig.dtype is the builder's FSDP master dtype)"
     else:
         return
     name = getattr(opt_cfg, "name", "adamw")

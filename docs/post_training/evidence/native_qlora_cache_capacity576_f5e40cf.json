@@ -1,0 +1,183 @@
+{
+  "allocation": {
+    "allocated_cpu_core_hours": 5.1866666666666665,
+    "allocated_cpu_seconds": 18672,
+    "allocated_cpus": 16,
+    "allocated_gpus": 0,
+    "elapsed_seconds": 1167,
+    "exit_code": "0:0",
+    "gpu_seconds": 0,
+    "host_allocation_gib": 64,
+    "outside_two_case_command_seconds": 129.71814993489534,
+    "physical_cpus_used": 8,
+    "state": "COMPLETED"
+  },
+  "case_order": [
+    "cache1gib",
+    "cache3gib"
+  ],
+  "cases": {
+    "cache1gib": {
+      "cache_bytes": 1073741824,
+      "command_wall_seconds": 620.9224188642111,
+      "final_cache": {
+        "samples": {
+          "bytes": 266659389,
+          "hits": 0,
+          "limit": 268435456,
+          "misses": 576
+        },
+        "videos": {
+          "bytes": 802331908,
+          "hits": 225,
+          "limit": 805306368,
+          "misses": 351
+        }
+      },
+      "gnu_system_cpu_seconds": 66.0,
+      "gnu_user_cpu_seconds": 2060.0,
+      "peak_observed_worker_pss_bytes": 3315303424,
+      "peak_observed_worker_pss_gib": 3.0876169204711914,
+      "pretrim_replay_seconds": 487.93621683400124,
+      "rows": 576,
+      "supervised_tokens": 1152
+    },
+    "cache3gib": {
+      "cache_bytes": 3221225472,
+      "command_wall_seconds": 416.3594312008936,
+      "final_cache": {
+        "samples": {
+          "bytes": 799980999,
+          "hits": 0,
+          "limit": 805306368,
+          "misses": 576
+        },
+        "videos": {
+          "bytes": 1433578315,
+          "hits": 333,
+          "limit": 2415919104,
+          "misses": 243
+        }
+      },
+      "gnu_system_cpu_seconds": 52.24,
+      "gnu_user_cpu_seconds": 1470.95,
+      "peak_observed_worker_pss_bytes": 4533698560,
+      "peak_observed_worker_pss_gib": 4.2223358154296875,
+      "pretrim_replay_seconds": 350.178268634947,
+      "rows": 576,
+      "supervised_tokens": 1152
+    }
+  },
+  "correctness": {
+    "case_timeouts": 0,
+    "complete_case_processes": 2,
+    "cross_worker_initial_rng_equality_claimed": false,
+    "end_only_gc_trim_cache_and_rng_preserved": true,
+    "independent_tensor_payload_reread": false,
+    "native_data_cursor_equal": true,
+    "parent_rng_equal_between_cases_and_unchanged_within_each": true,
+    "prepared_row_records_byte_equal": true,
+    "prepared_tensor_fingerprints_labels_masks_order_equal": true,
+    "same_sealed_comparator_replay": true,
+    "worker_rng_unchanged_within_each_case": true
+  },
+  "limitations": [
+    "Fresh application caches in fixed1GiB then3GiB order; OS/filesystem cache coldness was not controlled. No counterbalanced repeats or confidence interval.",
+    "Observed worker boundary PSS and retained legacy process-tree samples are sampled lower bounds, not complete host/cgroup/filesystem-cache or physical residency measurements.",
+    "This576-row prefix covers243 distinct media. Miss counts and final retained bytes do not prove all275 source videos remain resident.",
+    "No concurrent model/GPU training, task quality, end-to-end training speed, recovery or quantization-specific advantage was tested. Generic cache capacity changes must be offered to both precision arms.",
+    "The end-only GC/trim diagnostic does not qualify a production allocator policy. Original failed or incomplete historical evidence remains unchanged."
+  ],
+  "native_revision": "f5e40cf0d27091abc85af23799a9f59b75761353",
+  "observed_changes_3gib_vs_1gib": {
+    "command_wall_reduction_fraction": 0.32945015584636694,
+    "pretrim_replay_reduction_fraction": 0.2823277786037356,
+    "sample_cache_hits_both_cases": 0,
+    "video_cache_hits": {
+      "cache1gib": 225,
+      "cache3gib": 333
+    },
+    "video_cache_misses": {
+      "cache1gib": 351,
+      "cache3gib": 243,
+      "difference": -108
+    },
+    "worker_boundary_peak_pss_increase_bytes": 1218395136,
+    "worker_boundary_peak_pss_increase_gib": 1.134718894958496
+  },
+  "previous_attempt": {
+    "allocated_cpu_seconds": 0,
+    "allocation_started": false,
+    "gpu_seconds": 0,
+    "preserved": true,
+    "scientific_result_exists": false,
+    "state": "CANCELLED"
+  },
+  "product_objective_qualified": false,
+  "protocol": "cosmos.native-cache-capacity576-cpu-diagnostic.v1",
+  "receipt_sha256": {
+    "capture": "025f4e69683137abed6e875a0e0345ae50b6279a791109b7f7d02a4e4d0e9c45",
+    "comparison": "209fe1e65f03f6ea952df2574ca23d5a01d7fbf54761905b0a82d7fd140914c6",
+    "completion": "19c256d02b3df15d87564b47977e9cab8baacf71bfcf195074d4e359509614f1",
+    "cursor_manifest": "62da22ae54005fd1caf5ff677850b7e1ab95e2da12e7305b3a015120f5641b02",
+    "native_worker_memory": "0b0d06e655150b67801d06a057da2b5cfc009a40e441550e53e6416edb3331b7",
+    "plan": "b9a4ba45b43699414bf11bb7e61db3f924c4d9e5e9330d9272447bbad6e746bf",
+    "prepared_rows_both_cases": "5b333408d864cd3081e9b721e11876c936935f3c778464155a79d81724aec2be",
+    "previous_unallocated_cancel_review": "36749653291b49e2dd23e6d6f84e0b4b233c7ba9b31f992440c2e9576cbb2ac8",
+    "producer_launch": "2d204f78e116fb87b5fb456e8cde7d6b5481cdcb1764d3255ad3ae094c161324",
+    "review_source": "895c28aa8c64068faab57be607cb870e2b166df31f388f0cc29a135a1b60ae56",
+    "terminal_review": "d44d53b4fd46f7eba872a30dd7d07e3122b349052c6b98ad3082183458fbd817"
+  },
+  "scope": "One ordered CPU-only input-preparation comparison, applicable to both NF4 and BF16. No model, GPU, optimizer or training execution; no quantization-specific speed or production cache-policy qualification.",
+  "timing_scopes": {
+    "allocation": "Includes both commands plus container/bootstrap, verification and teardown; queue wait excluded.",
+    "command_wall": "Fresh process startup, source/media checks, native replay, end-only GC/trim diagnostic and shutdown; one observation per capacity.",
+    "pretrim_replay": "Existing timer through the final drained576-row snapshot, before the end-only GC/trim diagnostic. Nested within command wall, not an additional allocation cost."
+  },
+  "workflow_revision": "be0ca36393a19e53832c3e329adb17c2589f3152",
+  "workload": {
+    "cache_quota_split": {
+      "samples_fraction": 0.25,
+      "videos_fraction": 0.75
+    },
+    "consumer_delay_seconds": 0,
+    "distinct_prefix_media": 243,
+    "native_sequence_limit": 4096,
+    "prefetch": true,
+    "preprocessing_workers": 1,
+    "processed_shapes": {
+      "pixel_values_videos_shape": [
+        960,
+        1536
+      ],
+      "processed_tensor_dtypes": null,
+      "provenance": "Identical retained per-row preparation metadata in both cases; no tensor payload reread.",
+      "sequence_tokens": {
+        "distinct_lengths": 29,
+        "maximum": 360,
+        "median": 331.0,
+        "minimum": 317
+      },
+      "source_frame_indices_or_timestamps": null,
+      "text_tensor_shapes": {
+        "attention_mask": "[1, sequence_tokens]",
+        "input_ids": "[1, sequence_tokens]",
+        "labels": "[1, sequence_tokens]",
+        "mm_token_type_ids": "[1, sequence_tokens]"
+      },
+      "video_grid_thw_shape": [
+        1,
+        3
+      ],
+      "video_grid_thw_values": null
+    },
+    "requested_frames_are_not_verified_distinct_source_frames": true,
+    "requested_video_frames": 8,
+    "rows_per_case": 576,
+    "same_processor_source_and_cursor": true,
+    "seed": 42,
+    "supervised_tokens_per_case": 1152,
+    "supervised_tokens_per_row": 2,
+    "window_rows": 8
+  }
+}

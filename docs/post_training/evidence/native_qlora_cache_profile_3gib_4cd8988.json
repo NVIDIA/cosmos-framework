@@ -1,0 +1,1017 @@
+{
+  "accounting": {
+    "allocated_cpu_seconds": 35872,
+    "exploration_debit_seconds": 2242,
+    "gpu_allocation_seconds": 2242,
+    "scope": "Three distinct diagnostic allocations charged once:115+1078+1049GPU seconds; coupled CPU cost is16times each allocation. Nested stage/worker/trace times are not additional cost. The separate native149 qualification and tail allocations are excluded.",
+    "separate_allocated_cpu_only_seconds": 0
+  },
+  "attempts": [
+    {
+      "allocated_cpu_seconds": 1840,
+      "bf16_started": false,
+      "exit_code": "1:0",
+      "failure": {
+        "artifact_name": "generation_config.json",
+        "guard": "_sha256 stable-open-file metadata check",
+        "log_sha256": "3e2cbccbc2ce3ecb43699e0a78b975cb5da208959617f25fb7a158bf5e6cc18c",
+        "scope": "The sealed guard compares st_dev/st_ino/size/mtime_ns/ctime_ns before and after the same open-file read. The exception proves a tuple difference, but captured logs do not identify the changed field or establish content corruption. atime is excluded. Failure occurred during native configuration/source verification before training.",
+        "type": "RuntimeError"
+      },
+      "gpu_allocation_seconds": 115,
+      "gpu_reservation_seconds": 2400,
+      "native_updates_or_traces_present": false,
+      "original_source_before_after_unchanged": false,
+      "role": "initial_attempt",
+      "scheduler_seconds": 2280,
+      "terminal_state": "FAILED"
+    },
+    {
+      "allocated_cpu_seconds": 17248,
+      "bf16_started": false,
+      "checkpoint_inspection_passed": false,
+      "exit_code": "1:0",
+      "failure": {
+        "child_wait_cap_seconds": 20,
+        "inspection_output_log_empty": true,
+        "interrupted_elapsed_seconds": 20.009462721995078,
+        "stage": "checkpoint_inspection",
+        "type": "TimeoutExpired"
+      },
+      "gpu_allocation_seconds": 1078,
+      "gpu_reservation_seconds": 2400,
+      "later_fresh_checkpoint_inspection_performed_at_original_closure": false,
+      "native_updates": 42,
+      "nf4_training_command_seconds": 969.3743254269939,
+      "nf4_training_exit_code": 0,
+      "original_source_before_after_unchanged": false,
+      "raw_trace_windows": 1,
+      "role": "retry",
+      "scheduler_seconds": 2280,
+      "terminal_state": "FAILED"
+    },
+    {
+      "allocated_cpu_seconds": 16784,
+      "exit_code": "0:0",
+      "fresh_bf_checkpoint_inspection_passed": true,
+      "fresh_bf_native_updates": 42,
+      "fresh_bf_outcomes": [
+        {
+          "elapsed_seconds": 9.128083797055297,
+          "exit_code": 0,
+          "name": "preflight"
+        },
+        {
+          "elapsed_seconds": 901.6004976100521,
+          "exit_code": 0,
+          "name": "train"
+        },
+        {
+          "elapsed_seconds": 22.64622654300183,
+          "exit_code": 0,
+          "name": "inspect"
+        },
+        {
+          "elapsed_seconds": 36.710639316006564,
+          "exit_code": 0,
+          "name": "profile_analysis"
+        }
+      ],
+      "gpu_allocation_seconds": 1049,
+      "gpu_reservation_seconds": 2280,
+      "later_nf_inspection_passed": true,
+      "nf4_training_repeated": false,
+      "raw_bf_trace_windows": 1,
+      "role": "later_nf_inspection_and_fresh_bf_completion",
+      "same_allocation_pair": false,
+      "scheduler_seconds": 2160,
+      "source_before_after_unchanged": true,
+      "terminal_state": "COMPLETED"
+    }
+  ],
+  "cases": {
+    "bf16": {
+      "actual_operator_geometry": {
+        "conv3d_operands": [
+          {
+            "event_count": 16,
+            "input_dimensions": [
+              [
+                960,
+                3,
+                2,
+                16,
+                16
+              ],
+              [
+                1152,
+                3,
+                2,
+                16,
+                16
+              ],
+              [
+                1152
+              ],
+              [],
+              [],
+              [],
+              []
+            ],
+            "input_types": [
+              "c10::BFloat16",
+              "c10::BFloat16",
+              "c10::BFloat16",
+              "ScalarList",
+              "ScalarList",
+              "ScalarList",
+              "Scalar"
+            ],
+            "operator": "aten::conv3d"
+          }
+        ],
+        "language_embedding_input_shapes": [
+          {
+            "event_count": 2,
+            "input_shape": [
+              1,
+              321
+            ]
+          },
+          {
+            "event_count": 3,
+            "input_shape": [
+              1,
+              324
+            ]
+          },
+          {
+            "event_count": 1,
+            "input_shape": [
+              1,
+              329
+            ]
+          },
+          {
+            "event_count": 1,
+            "input_shape": [
+              1,
+              330
+            ]
+          },
+          {
+            "event_count": 1,
+            "input_shape": [
+              1,
+              332
+            ]
+          },
+          {
+            "event_count": 1,
+            "input_shape": [
+              1,
+              333
+            ]
+          },
+          {
+            "event_count": 2,
+            "input_shape": [
+              1,
+              337
+            ]
+          },
+          {
+            "event_count": 2,
+            "input_shape": [
+              1,
+              339
+            ]
+          },
+          {
+            "event_count": 1,
+            "input_shape": [
+              1,
+              340
+            ]
+          },
+          {
+            "event_count": 2,
+            "input_shape": [
+              1,
+              345
+            ]
+          }
+        ],
+        "microbatches": 16,
+        "scope": "Exact recorded operator operands within the traced41\u201342 window. Includes model-weight and intermediate shapes, not a per-row processor census, pixel/grid-value proof or source-frame uniqueness."
+      },
+      "legacy_v1_trace_summary": {
+        "cpu_phases": {
+          "sft.data_fetch": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 322.6767578125,
+            "inclusive_wall_us": 322.6767578125
+          },
+          "sft.forward": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 2071761.9497070312,
+            "inclusive_wall_us": 5586248.7421875
+          },
+          "sft.loss": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 41465.5048828125,
+            "inclusive_wall_us": 41465.5048828125
+          },
+          "sft.microbatch": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 309953.06396484375,
+            "inclusive_wall_us": 20817673.857910156
+          },
+          "sft.module.adapter_a.forward": {
+            "calls": 8064,
+            "exclusive_named_phase_wall_us": 1290427.7529296875,
+            "inclusive_wall_us": 1290427.7529296875
+          },
+          "sft.module.adapter_b.forward": {
+            "calls": 8064,
+            "exclusive_named_phase_wall_us": 1164496.966796875,
+            "inclusive_wall_us": 1164496.966796875
+          },
+          "sft.module.attention.forward": {
+            "calls": 1584,
+            "exclusive_named_phase_wall_us": 3761717.5581054688,
+            "inclusive_wall_us": 5193740.02734375
+          },
+          "sft.module.output_projection.forward": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 2234.75048828125,
+            "inclusive_wall_us": 2234.75048828125
+          },
+          "sft.prefetch_wait": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 5601929.055175781,
+            "inclusive_wall_us": 5601929.055175781
+          },
+          "sft.prefetch_window": {
+            "calls": 2,
+            "exclusive_named_phase_wall_us": 10441.8740234375,
+            "inclusive_wall_us": 10441.8740234375
+          },
+          "sft.prepare": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 28760.28759765625,
+            "inclusive_wall_us": 5775017.904785156
+          },
+          "sft.preprocess_and_collate": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 127470.33837890625,
+            "inclusive_wall_us": 5729399.3935546875
+          },
+          "sft.transfers_and_policy_preparation": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 16858.2236328125,
+            "inclusive_wall_us": 16858.2236328125
+          },
+          "trainer.backward": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 9096880.512695312,
+            "inclusive_wall_us": 9096880.512695312
+          },
+          "trainer.objective": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 2764.0849609375,
+            "inclusive_wall_us": 11405496.236816406
+          },
+          "trainer.optimizer": {
+            "calls": 2,
+            "exclusive_named_phase_wall_us": 5344.04443359375,
+            "inclusive_wall_us": 5344.04443359375
+          }
+        },
+        "device_observation_union_us": {
+          "0": 3388564.3754882812
+        },
+        "device_operations": {
+          "device_memset": {
+            "count": 3216,
+            "summed_duration_us": 3597.75048828125,
+            "wall_union_us": 3597.75048828125
+          },
+          "sft.module.adapter_a.forward": {
+            "count": 16128,
+            "summed_duration_us": 165377.103515625,
+            "wall_union_us": 165377.103515625
+          },
+          "sft.module.adapter_b.forward": {
+            "count": 7488,
+            "summed_duration_us": 112265.802734375,
+            "wall_union_us": 112265.802734375
+          },
+          "sft.module.attention.forward": {
+            "count": 98204,
+            "summed_duration_us": 678574.6796875,
+            "wall_union_us": 678574.6796875
+          },
+          "sft.module.output_projection.forward": {
+            "count": 16,
+            "summed_duration_us": 27646.82763671875,
+            "wall_union_us": 27646.82763671875
+          },
+          "trainer.backward": {
+            "count": 48,
+            "summed_duration_us": 70.6923828125,
+            "wall_union_us": 70.6923828125
+          },
+          "trainer.optimizer": {
+            "count": 38,
+            "summed_duration_us": 3309.43994140625,
+            "wall_union_us": 3309.43994140625
+          },
+          "transfers": {
+            "count": 5086,
+            "summed_duration_us": 25413.35791015625,
+            "wall_union_us": 25413.35791015625
+          },
+          "unattributed_kernel": {
+            "count": 194792,
+            "summed_duration_us": 2372308.7211914062,
+            "wall_union_us": 2372308.7211914062
+          }
+        },
+        "diagnostic_only": true,
+        "end_to_end_speed_evidence": false,
+        "limitations": [
+          "CPU ranges are wall time, including waits; inclusive parent/child values must not be added.",
+          "Device class unions can overlap each other; summed operation durations can exceed elapsed time across streams.",
+          "GPU attribution requires one unique CPU external ID and its enclosing module range; unmatched kernels remain unattributed.",
+          "Traced measurements cannot establish end-to-end speed or quality; retain cold and untraced complete runs separately."
+        ],
+        "protocol": "cosmos.native-qlora-trace-accounting.v1",
+        "unattributed_kernel_count": 194792
+      },
+      "memory": {
+        "native_train_allocator_evidence_complete": true,
+        "native_train_allocator_peak_allocated_bytes": 19440862720,
+        "native_train_allocator_peak_reserved_bytes": 19855835136,
+        "native_train_phase_sample_gaps": [
+          {
+            "phase": "trainer_setup",
+            "sampled_errors": [
+              "no_samples"
+            ]
+          },
+          {
+            "phase": "validation_or_boundary_overhead",
+            "sampled_errors": [
+              "no_samples"
+            ]
+          }
+        ],
+        "parent_incomplete_rows": [],
+        "parent_raw_samples": 748,
+        "scope": "Sampled peaks are lower bounds for the owned process tree/device observations, not full-host watermarks. Short phases without samples remain gaps. CPU NUMA affinity is controlled; explicit host-memory binding or residency is not proved.",
+        "whole_parent_sampled": {
+          "device_peak_bytes": 21674262528,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 20562834432,
+          "host_rss_sum_peak_bytes": 20584120320,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 978.4956815242767,
+          "owned_device_process_peak_bytes": 20940062720,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 748,
+          "sampling_gap_seconds": {
+            "count": 747,
+            "maximum": 1.62992262840271,
+            "mean": 1.3099005107420036,
+            "median": 1.2994914054870605,
+            "p95": 1.3763546466827392,
+            "sum": 978.4956815242767
+          }
+        }
+      },
+      "native_updates": 42,
+      "placement": {
+        "allocated_logical_cpus": 16,
+        "device_capacity_bytes": 85174583296,
+        "explicit_host_memory_membind_or_residency_proven": false,
+        "math_precision": {
+          "allow_bf16_reduced_precision_reduction": true,
+          "cuda_matmul_allow_tf32": false,
+          "cudnn_allow_tf32": true,
+          "environment": {
+            "NVIDIA_TF32_OVERRIDE": null,
+            "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE": null
+          },
+          "float32_matmul_precision": "highest",
+          "fp32_precision": {
+            "cuda_matmul": "none",
+            "cudnn": "none",
+            "cudnn_conv": "tf32",
+            "cudnn_rnn": "tf32",
+            "global": "none"
+          }
+        },
+        "physical_cpu_cores": 8,
+        "single_cpu_numa_node": true
+      },
+      "postwarmup_windows": {
+        "31_39": {
+          "counter_deltas": {
+            "train/preprocessing_samples_hits": 0.0,
+            "train/preprocessing_samples_misses": 72.0,
+            "train/preprocessing_timing_processing_calls": 72.0,
+            "train/preprocessing_timing_processing_seconds": 42.95971703180112,
+            "train/preprocessing_timing_wait_calls": 72.0,
+            "train/preprocessing_timing_wait_seconds": 18.20301209052559,
+            "train/preprocessing_videos_hits": 48.0,
+            "train/preprocessing_videos_misses": 24.0
+          },
+          "scope": "31\u201339 is outside Torch profiler warmup/active;40 is warmup and41\u201342 active. Whole-run CPU annotations remain enabled. Counters overlap update/worker time and are not additive components; update timers exclude profiler.step callback/export overhead.",
+          "update_seconds": 62.58408885705285,
+          "updates": 9
+        },
+        "31_42": {
+          "counter_deltas": {
+            "train/preprocessing_samples_hits": 0.0,
+            "train/preprocessing_samples_misses": 96.0,
+            "train/preprocessing_timing_processing_calls": 96.0,
+            "train/preprocessing_timing_processing_seconds": 58.550254687899724,
+            "train/preprocessing_timing_wait_calls": 96.0,
+            "train/preprocessing_timing_wait_seconds": 25.086264095501974,
+            "train/preprocessing_videos_hits": 64.0,
+            "train/preprocessing_videos_misses": 32.0
+          },
+          "scope": "31\u201339 is outside Torch profiler warmup/active;40 is warmup and41\u201342 active. Whole-run CPU annotations remain enabled. Counters overlap update/worker time and are not additive components; update timers exclude profiler.step callback/export overhead.",
+          "update_seconds": 90.64069030806422,
+          "updates": 12
+        },
+        "41_42": {
+          "counter_deltas": {
+            "train/preprocessing_samples_hits": 0.0,
+            "train/preprocessing_samples_misses": 16.0,
+            "train/preprocessing_timing_processing_calls": 16.0,
+            "train/preprocessing_timing_processing_seconds": 11.046940336120315,
+            "train/preprocessing_timing_wait_calls": 16.0,
+            "train/preprocessing_timing_wait_seconds": 5.60274604591541,
+            "train/preprocessing_videos_hits": 10.0,
+            "train/preprocessing_videos_misses": 6.0
+          },
+          "scope": "31\u201339 is outside Torch profiler warmup/active;40 is warmup and41\u201342 active. Whole-run CPU annotations remain enabled. Counters overlap update/worker time and are not additive components; update timers exclude profiler.step callback/export overhead.",
+          "update_seconds": 20.870935284998268,
+          "updates": 2
+        }
+      },
+      "recorded_trace_intervals": {
+        "device_union_seconds": 3.388564375488281,
+        "native_updates": [
+          41,
+          42
+        ],
+        "prefetch_wait_union_seconds": 5.601929055175781,
+        "scope": "One recorded device per trace; CPU spans and device/category unions overlap and are not additive.",
+        "step_wall_union_seconds": 20.905765489746095,
+        "zero_based_profiler_steps": [
+          40,
+          41
+        ]
+      },
+      "supplementary_attribution": {
+        "all_recorded_autograd_ancestry": {
+          "kernel_count": 195407,
+          "summed_duration_seconds": 2.13956595703125
+        },
+        "dequantization_with_recorded_autograd_ancestry": {
+          "kernel_count": 0,
+          "summed_duration_seconds": 0.0
+        },
+        "legacy_v1_fields_preserved_exactly": true,
+        "limitations": [
+          "Original v1 labels, buckets and totals are unchanged; no missing module identity is inferred.",
+          "CPU correlation requires one unique recorded External id. Ambiguous or missing links stay unresolved.",
+          "Named ranges and autograd ancestry require unambiguous full containment on the same CPU process/thread.",
+          "Python ContextVar phase labels need not propagate to autograd workers: a recorded .forward module range can occur inside an explicit autograd engine event. Its literal label is retained, not a pure-forward claim.",
+          "Absent ancestry means no such enclosing record, not proof of forward execution. No cross-thread ancestry or critical-path causality is inferred from overlapping timestamps.",
+          "Group unions may overlap across streams; do not add this breakdown to the original device totals."
+        ],
+        "literal_forward_named_ranges_with_recorded_autograd_ancestry": {
+          "kernel_count": 48960,
+          "summed_duration_seconds": 0.4097733828125
+        },
+        "originally_unattributed_with_recorded_autograd_ancestry": {
+          "kernel_count": 146447,
+          "summed_duration_seconds": 1.72979257421875
+        },
+        "scope": "An alternative grouping of the same kernel events, not additional device or CPU wall time."
+      }
+    },
+    "nf4": {
+      "actual_operator_geometry": {
+        "conv3d_operands": [
+          {
+            "event_count": 16,
+            "input_dimensions": [
+              [
+                960,
+                3,
+                2,
+                16,
+                16
+              ],
+              [
+                1152,
+                3,
+                2,
+                16,
+                16
+              ],
+              [
+                1152
+              ],
+              [],
+              [],
+              [],
+              []
+            ],
+            "input_types": [
+              "c10::BFloat16",
+              "c10::BFloat16",
+              "c10::BFloat16",
+              "ScalarList",
+              "ScalarList",
+              "ScalarList",
+              "Scalar"
+            ],
+            "operator": "aten::conv3d"
+          }
+        ],
+        "language_embedding_input_shapes": [
+          {
+            "event_count": 2,
+            "input_shape": [
+              1,
+              321
+            ]
+          },
+          {
+            "event_count": 3,
+            "input_shape": [
+              1,
+              324
+            ]
+          },
+          {
+            "event_count": 1,
+            "input_shape": [
+              1,
+              329
+            ]
+          },
+          {
+            "event_count": 1,
+            "input_shape": [
+              1,
+              330
+            ]
+          },
+          {
+            "event_count": 1,
+            "input_shape": [
+              1,
+              332
+            ]
+          },
+          {
+            "event_count": 1,
+            "input_shape": [
+              1,
+              333
+            ]
+          },
+          {
+            "event_count": 2,
+            "input_shape": [
+              1,
+              337
+            ]
+          },
+          {
+            "event_count": 2,
+            "input_shape": [
+              1,
+              339
+            ]
+          },
+          {
+            "event_count": 1,
+            "input_shape": [
+              1,
+              340
+            ]
+          },
+          {
+            "event_count": 2,
+            "input_shape": [
+              1,
+              345
+            ]
+          }
+        ],
+        "microbatches": 16,
+        "scope": "Exact recorded operator operands within the traced41\u201342 window. Includes model-weight and intermediate shapes, not a per-row processor census, pixel/grid-value proof or source-frame uniqueness."
+      },
+      "legacy_v1_trace_summary": {
+        "cpu_phases": {
+          "sft.data_fetch": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 257.26416015625,
+            "inclusive_wall_us": 257.26416015625
+          },
+          "sft.forward": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 2250496.8720703125,
+            "inclusive_wall_us": 6710731.010253906
+          },
+          "sft.loss": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 41717.71630859375,
+            "inclusive_wall_us": 41717.71630859375
+          },
+          "sft.microbatch": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 312940.19970703125,
+            "inclusive_wall_us": 22705047.639648438
+          },
+          "sft.module.adapter_a.forward": {
+            "calls": 8064,
+            "exclusive_named_phase_wall_us": 1347558.509765625,
+            "inclusive_wall_us": 1347558.509765625
+          },
+          "sft.module.adapter_b.forward": {
+            "calls": 8064,
+            "exclusive_named_phase_wall_us": 1206374.7724609375,
+            "inclusive_wall_us": 1206374.7724609375
+          },
+          "sft.module.attention.forward": {
+            "calls": 1584,
+            "exclusive_named_phase_wall_us": 5424909.62109375,
+            "inclusive_wall_us": 6879083.1767578125
+          },
+          "sft.module.output_projection.forward": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 2247.04736328125,
+            "inclusive_wall_us": 2247.04736328125
+          },
+          "sft.prefetch_wait": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 4091824.2822265625,
+            "inclusive_wall_us": 4091824.2822265625
+          },
+          "sft.prefetch_window": {
+            "calls": 2,
+            "exclusive_named_phase_wall_us": 10266.740234375,
+            "inclusive_wall_us": 10266.740234375
+          },
+          "sft.prepare": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 25664.22607421875,
+            "inclusive_wall_us": 4244905.203125
+          },
+          "sft.preprocess_and_collate": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 111052.78759765625,
+            "inclusive_wall_us": 4202877.069824219
+          },
+          "sft.transfers_and_policy_preparation": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 16363.9072265625,
+            "inclusive_wall_us": 16363.9072265625
+          },
+          "trainer.backward": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 11386686.124023438,
+            "inclusive_wall_us": 11386686.124023438
+          },
+          "trainer.objective": {
+            "calls": 16,
+            "exclusive_named_phase_wall_us": 2764.7158203125,
+            "inclusive_wall_us": 11000118.645507812
+          },
+          "trainer.optimizer": {
+            "calls": 2,
+            "exclusive_named_phase_wall_us": 5302.67041015625,
+            "inclusive_wall_us": 5302.67041015625
+          }
+        },
+        "device_observation_union_us": {
+          "0": 4585523.412109375
+        },
+        "device_operations": {
+          "dequantization": {
+            "count": 24096,
+            "summed_duration_us": 750292.9584960938,
+            "wall_union_us": 750292.9584960938
+          },
+          "device_memset": {
+            "count": 3216,
+            "summed_duration_us": 3641.15771484375,
+            "wall_union_us": 3641.15771484375
+          },
+          "sft.module.adapter_a.forward": {
+            "count": 16127,
+            "summed_duration_us": 165592.86279296875,
+            "wall_union_us": 165592.86279296875
+          },
+          "sft.module.adapter_b.forward": {
+            "count": 7488,
+            "summed_duration_us": 112752.083984375,
+            "wall_union_us": 112752.083984375
+          },
+          "sft.module.attention.forward": {
+            "count": 112028,
+            "summed_duration_us": 760387.9326171875,
+            "wall_union_us": 760387.9326171875
+          },
+          "sft.module.output_projection.forward": {
+            "count": 16,
+            "summed_duration_us": 27745.51416015625,
+            "wall_union_us": 27745.51416015625
+          },
+          "trainer.backward": {
+            "count": 48,
+            "summed_duration_us": 71.52197265625,
+            "wall_union_us": 71.52197265625
+          },
+          "trainer.optimizer": {
+            "count": 38,
+            "summed_duration_us": 3308.41552734375,
+            "wall_union_us": 3308.41552734375
+          },
+          "transfers": {
+            "count": 5086,
+            "summed_duration_us": 25100.88818359375,
+            "wall_union_us": 25100.88818359375
+          },
+          "unattributed_kernel": {
+            "count": 217113,
+            "summed_duration_us": 2736630.0766601562,
+            "wall_union_us": 2736630.0766601562
+          }
+        },
+        "diagnostic_only": true,
+        "end_to_end_speed_evidence": false,
+        "limitations": [
+          "CPU ranges are wall time, including waits; inclusive parent/child values must not be added.",
+          "Device class unions can overlap each other; summed operation durations can exceed elapsed time across streams.",
+          "GPU attribution requires one unique CPU external ID and its enclosing module range; unmatched kernels remain unattributed.",
+          "Traced measurements cannot establish end-to-end speed or quality; retain cold and untraced complete runs separately."
+        ],
+        "protocol": "cosmos.native-qlora-trace-accounting.v1",
+        "unattributed_kernel_count": 217113
+      },
+      "memory": {
+        "native_train_allocator_evidence_complete": true,
+        "native_train_allocator_peak_allocated_bytes": 9106409984,
+        "native_train_allocator_peak_reserved_bytes": 9525264384,
+        "native_train_phase_sample_gaps": [
+          {
+            "phase": "trainer_setup",
+            "sampled_errors": [
+              "no_samples"
+            ]
+          },
+          {
+            "phase": "validation_or_boundary_overhead",
+            "sampled_errors": [
+              "no_samples"
+            ]
+          }
+        ],
+        "parent_incomplete_rows": [],
+        "parent_raw_samples": 746,
+        "scope": "Sampled peaks are lower bounds for the owned process tree/device observations, not full-host watermarks. Short phases without samples remain gaps. CPU NUMA affinity is controlled; explicit host-memory binding or residency is not proved.",
+        "whole_parent_sampled": {
+          "device_peak_bytes": 11343691776,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 23094269952,
+          "host_rss_sum_peak_bytes": 23111258112,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 998.7818076610565,
+          "owned_device_process_peak_bytes": 10609491968,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 746,
+          "sampling_gap_seconds": {
+            "count": 745,
+            "maximum": 1.8937053680419922,
+            "mean": 1.3406467216926934,
+            "median": 1.3065543174743652,
+            "p95": 1.4555962562561036,
+            "sum": 998.7818076610565
+          }
+        }
+      },
+      "native_updates": 42,
+      "placement": {
+        "allocated_logical_cpus": 16,
+        "device_capacity_bytes": 85174583296,
+        "explicit_host_memory_membind_or_residency_proven": false,
+        "math_precision": {
+          "allow_bf16_reduced_precision_reduction": true,
+          "cuda_matmul_allow_tf32": false,
+          "cudnn_allow_tf32": true,
+          "environment": {
+            "NVIDIA_TF32_OVERRIDE": null,
+            "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE": null
+          },
+          "float32_matmul_precision": "highest",
+          "fp32_precision": {
+            "cuda_matmul": "none",
+            "cudnn": "none",
+            "cudnn_conv": "tf32",
+            "cudnn_rnn": "tf32",
+            "global": "none"
+          }
+        },
+        "physical_cpu_cores": 8,
+        "single_cpu_numa_node": true
+      },
+      "postwarmup_windows": {
+        "31_39": {
+          "counter_deltas": {
+            "train/preprocessing_samples_hits": 0.0,
+            "train/preprocessing_samples_misses": 72.0,
+            "train/preprocessing_timing_processing_calls": 72.0,
+            "train/preprocessing_timing_processing_seconds": 40.57778181519825,
+            "train/preprocessing_timing_wait_calls": 72.0,
+            "train/preprocessing_timing_wait_seconds": 12.314828669186682,
+            "train/preprocessing_videos_hits": 48.0,
+            "train/preprocessing_videos_misses": 24.0
+          },
+          "update_seconds": 68.34986108890735,
+          "updates": 9
+        },
+        "41_42": {
+          "counter_deltas": {
+            "train/preprocessing_samples_hits": 0.0,
+            "train/preprocessing_samples_misses": 16.0,
+            "train/preprocessing_timing_processing_calls": 16.0,
+            "train/preprocessing_timing_processing_seconds": 10.484024322940968,
+            "train/preprocessing_timing_wait_calls": 16.0,
+            "train/preprocessing_timing_wait_seconds": 4.092623902950436,
+            "train/preprocessing_videos_hits": 10.0,
+            "train/preprocessing_videos_misses": 6.0
+          },
+          "update_seconds": 22.778478454099968,
+          "updates": 2
+        }
+      },
+      "recorded_trace_intervals": {
+        "device_union_seconds": 4.585523412109375,
+        "native_updates": [
+          41,
+          42
+        ],
+        "prefetch_wait_union_seconds": 4.091824282226563,
+        "scope": "One recorded device per trace; CPU spans and device/category unions overlap and are not additive.",
+        "step_wall_union_seconds": 22.825036279785156,
+        "zero_based_profiler_steps": [
+          40,
+          41
+        ]
+      },
+      "supplementary_attribution": {
+        "all_recorded_autograd_ancestry": {
+          "kernel_count": 235488,
+          "summed_duration_seconds": 2.9386813818359374
+        },
+        "dequantization_with_recorded_autograd_ancestry": {
+          "kernel_count": 16032,
+          "summed_duration_seconds": 0.5000343676757812
+        },
+        "legacy_v1_fields_preserved_exactly": true,
+        "limitations": [
+          "Original v1 labels, buckets and totals are unchanged; no missing module identity is inferred.",
+          "CPU correlation requires one unique recorded External id. Ambiguous or missing links stay unresolved.",
+          "Named ranges and autograd ancestry require unambiguous full containment on the same CPU process/thread.",
+          "Python ContextVar phase labels need not propagate to autograd workers: a recorded .forward module range can occur inside an explicit autograd engine event. Its literal label is retained, not a pure-forward claim.",
+          "Absent ancestry means no such enclosing record, not proof of forward execution. No cross-thread ancestry or critical-path causality is inferred from overlapping timestamps.",
+          "Group unions may overlap across streams; do not add this breakdown to the original device totals."
+        ],
+        "literal_forward_named_ranges_with_recorded_autograd_ancestry": {
+          "kernel_count": 60480,
+          "summed_duration_seconds": 0.514972810546875
+        },
+        "originally_unattributed_with_recorded_autograd_ancestry": {
+          "kernel_count": 163584,
+          "summed_duration_seconds": 1.9875349658203125
+        },
+        "scope": "An alternative grouping of the same kernel events, not additional device or CPU wall time."
+      }
+    }
+  },
+  "configuration": {
+    "activation_checkpointing": "full_nonreentrant",
+    "adapter_alpha": 64,
+    "adapter_compute_dtype": "float32",
+    "adapter_initialization": "kaiming_A_zero_B",
+    "adapter_rank": 32,
+    "gradient_accumulation": 8,
+    "lr_schedule_cycle_steps": 300,
+    "lr_warmup_steps": 30,
+    "microbatch": 1,
+    "native_revision": "4cd898878a73a77aba3ddbb0b108a44bfd0e54bf",
+    "native_updates": 42,
+    "native_wheel_sha256": "8afc1543b23b27bcb836ae8b0bf50edbf8f9ef9bd0cd8aa41da91b832f9e67e5",
+    "preprocessing_cache_bytes": 3221225472,
+    "preprocessing_workers": 1,
+    "profiler_schedule": {
+      "active": 2,
+      "wait": 39,
+      "warmup": 1
+    },
+    "quantized_linear_execution": "bnb",
+    "seed": 42,
+    "sft_logits_mode": "full",
+    "traced_native_updates": [
+      41,
+      42
+    ]
+  },
+  "historical_mature_cache_context": {
+    "arms": {
+      "bf16_3gib": {
+        "counter_calls": 928.0,
+        "counter_scope": "Last cumulative snapshot minus preceding snapshot; includes scheduled validation, unlike the sum of native applied-update timers.",
+        "mean_update_seconds": 4.440562910050794,
+        "preprocessing_wait_seconds": 3.2517702032637317,
+        "update_seconds": 444.0562910050794,
+        "updates": 100,
+        "video_cache_hits": 927.0,
+        "video_cache_misses": 1.0
+      },
+      "nf4_3gib": {
+        "counter_calls": 928.0,
+        "counter_scope": "Last cumulative snapshot minus preceding snapshot; includes scheduled validation, unlike the sum of native applied-update timers.",
+        "mean_update_seconds": 5.728345290919387,
+        "preprocessing_wait_seconds": 3.7433679050882347,
+        "update_seconds": 572.8345290919387,
+        "updates": 100,
+        "video_cache_hits": 927.0,
+        "video_cache_misses": 1.0
+      }
+    },
+    "matched_same_allocation": true,
+    "native_update_window": [
+      201,
+      300
+    ],
+    "nf4_minus_bf16_update_seconds": 128.77823808685935,
+    "nf4_minus_bf16_wait_counter_seconds": 0.491597701824503,
+    "scope": "Descriptive retained 300-update execution on the same native build, with the selected3GiB cache. These are different allocations from the new profile. Counter and update-timer scopes differ; their difference is not a GPU-kernel attribution or causal decomposition."
+  },
+  "interpretation": {
+    "critical_path_saving_estimated": false,
+    "evidence_backed_next_hypothesis": "Test disabling activation checkpointing to reduce repeated forward execution/dispatch, subject to exact-state, memory, full-workflow and quality checks.",
+    "limits": [
+      "Current41\u201342 traces are instrumented early-cache-fill; untraced31\u201339 still has24video misses per72calls in each arm. Neither is a mature resident-cache profile.",
+      "NF and BF profiles used separate allocations; do not infer a matched speed ratio from their times.",
+      "Retained historical matched300 windows support late low preparation wait but are a separate experiment, not current trace residency proof.",
+      "Forward-labelled ranges within explicit autograd ancestry are measured execution context, not all recomputation or guaranteed removable critical time. All-autograd includes necessary gradients; overlapping groups are not additive.",
+      "Original115s and1078s failures and false source-final-check flags remain. The NF42 inspection is a later fresh validation without an original raw-shard anchor.",
+      "Local consumers read metadata/traces only. Native checkpoint inspections occurred on allocations. No full payload equality or new quality result is claimed.",
+      "Operator inputs are not a source-frame or processor-output census; raw traces, CPU spans, row identities, paths, hosts, GPU identifiers and scheduler identifiers stay private."
+    ],
+    "measured_intervention_benefit": false,
+    "performance_or_quality_qualified": false,
+    "same_allocation_paired_profile": false,
+    "two_arm_diagnostics_available": true
+  },
+  "later_nf_checkpoint_inspection": {
+    "elapsed_seconds": 7.876739116036333,
+    "healthy_completed_boundary": true,
+    "later_fresh_validation_only": true,
+    "optimizer_step": 42,
+    "original_failed_attempt_reclassified": false,
+    "original_raw_shard_hash_available": false,
+    "passed": true
+  },
+  "protocol": "cosmos.native-qlora-3gib-profile-diagnostic.v2",
+  "source_sha256": {
+    "completion_capture": "1354792cfa330ecb14cb290e6b568049ed1cf6f086429c99f81791e4851d0b7c",
+    "completion_review": "e2ef69417349bc4e4052cf26f0fd1fc19911ca7d73d9c6d8c2f96d8965719936",
+    "completion_review_source": "cf54ca92b94a0db666b99ee0ef2320c2bf2a470967ee3e64f2f6c204c7769a12",
+    "completion_source": "8d7fe6b39e3c7697406dc5ec046b7f37064f1f3aae7ee139d0571b7da9559475",
+    "initial_failed_review": "edef1bdd2a77837ec62a619ee45ad5b239ba398c9e89d827b059685f7fc285b4",
+    "mature_matched_block_review": "e3e160ae87b4ed4490bc4611261e11d8c2722f02860d1670f8e4d53d61c98349",
+    "partial_public_draft": "84c31839e5d400d72cac980615baf7d19ce1bd9ab539b59245dc7d10433d133c",
+    "partial_review_source": "515baaf6be7e565897d052c4b7d463f153b5a715dacf9ee51f2f432ae27c6211",
+    "retry_capture": "80fa3d26f658ca5ad97c2d6f37b8da8a921ca87c36ad5b81f78c4da43a7a067b",
+    "retry_failed_review": "6e3d3b459c63aac9608d8f9f4306d41e372b2ea45f122fa6263bccc6de90162b",
+    "supplementary_analyzer_source": "c66f7248760faf89ce03d326303417884594194cc56c3b700000b32861e230bf"
+  },
+  "status": "Both native42 diagnostics available from separate allocations; original failures preserved and NF checkpoint inspected later."
+}

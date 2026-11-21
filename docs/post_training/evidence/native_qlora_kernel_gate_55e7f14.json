@@ -1,0 +1,136 @@
+{
+  "build": {
+    "code_revision": "55e7f14dfeca84002d0324108808a0e682579842",
+    "created_utc": "2026-10-30T19:24:48.263699+00:00",
+    "package_files": 1863,
+    "posttrain_environment_lock_sha256": "954754303608470edd6715bb5b175088437a192149e689e24a4d1373aa480694",
+    "verified_source_bytes": true,
+    "wheel_file": "cosmos_framework-1.2.2-py3-none-any.whl",
+    "wheel_sha256": "4939262dbf2de43be0b3f9d579b0bc2fbf72ab84250852397b0dc14087b5792b"
+  },
+  "completed": true,
+  "cpu_allocation_hours": 0.8977777777777778,
+  "earlier_attempts": [
+    {
+      "gpu_seconds": 54,
+      "reason": "Pinned standalone Python omitted pidfd wrappers; Linux LP64 pidfd backend added and tested.",
+      "result": "failed_before_tests"
+    },
+    {
+      "gpu_seconds": 194,
+      "reason": "Scheduler mask exposed sixteen physical cores despite eight-core request; exact preflight refused it. Private launcher now narrows allocation explicitly.",
+      "result": "failed_before_tests"
+    }
+  ],
+  "gate_completion_sha256": "040294fec14f3da910872af9a2f9679190a01eb7177bc82237fc0d31899cadfd",
+  "gpu_allocation_hours": 0.05611111111111111,
+  "pending": [
+    "Fresh native WTS training/evaluation, frozen baselines and development selection",
+    "Selected and controlled paired-seed quality and performance evidence",
+    "Long-sequence/larger-video runtime, reload and recovery evidence",
+    "Independent untouched final data remain unavailable"
+  ],
+  "placement": {
+    "isolated_node_or_smt_sibling_ownership_claimed": false,
+    "policy": "Before framework imports, narrow only inherited allocated CPUs to one logical thread per eight distinct physical cores; prefer compact NUMA/package placement. Record and verify parent/child affinity and topology.",
+    "private_runner_receipt_sha256": "b3cbc4eacc486883e11c5a6141241e26c52a720668f173e0f6c18d6541ee72a4",
+    "scheduler_allocated_cpus": 16,
+    "selected_logical_cpus": 8,
+    "selected_physical_cores": 8,
+    "visible_gpus": 1
+  },
+  "process_cleanup_validation": {
+    "allocated_container_process_tests": 19,
+    "allocated_container_skipped_failed_errors": 0,
+    "completion_sha256": "a0dfffbcb70fa6a30e4f76f4f5ddff22cb94e1ad7bb078dd8d742b525211448c",
+    "fixed_race": "A previously observed stable descendant may be reparented between proc reads; known PID/start-time/UID/cgroup identity remains required. Unknown, reused or moved processes remain rejected.",
+    "junit_sha256": "26139de627954ef83b5675d1b26bb3e75439688f56483ba99296a02aa6844c32",
+    "local_full_workflow_skipped_failed_errors": 0,
+    "local_full_workflow_tests": 301,
+    "prior_failure_retained": "Earlier combined local suite had one reparent-race failure and295passes; fixed suite has301passes."
+  },
+  "protocol": "cosmos.native-qlora-continuation-kernel-evidence.v1",
+  "release_qualified": false,
+  "runtime": {
+    "device_bytes": 85174583296,
+    "name": "NVIDIA A100-SXM4-80GB",
+    "physical_cpu_cores": 8,
+    "python": "3.12.12 (main, Feb 12 2026, 00:42:14) [Clang 21.1.4 ]",
+    "runtime_precision": {
+      "allow_bf16_reduced_precision_reduction": true,
+      "cuda_matmul_allow_tf32": false,
+      "cudnn_allow_tf32": true,
+      "environment": {
+        "NVIDIA_TF32_OVERRIDE": null,
+        "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE": null
+      },
+      "float32_matmul_precision": "highest",
+      "fp32_precision": {
+        "cuda_matmul": "none",
+        "cudnn": "none",
+        "cudnn_conv": "tf32",
+        "cudnn_rnn": "tf32",
+        "global": "none"
+      }
+    },
+    "thread_environment": {
+      "MKL_NUM_THREADS": null,
+      "OMP_NUM_THREADS": "8",
+      "OPENBLAS_NUM_THREADS": null,
+      "TOKENIZERS_PARALLELISM": "false"
+    },
+    "torch_cuda": "12.8",
+    "torch_git_version": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+    "versions": {
+      "accelerate": "1.13.0",
+      "bitsandbytes": "0.49.2",
+      "safetensors": "0.8.0",
+      "torch": "2.11.0+cu128",
+      "torchcodec": "0.11.0+cpu",
+      "torchvision": "0.26.0+cu128",
+      "transformers": "5.8.1"
+    }
+  },
+  "scope": "Real CUDA kernel/lifecycle unit tests and existing higher-precision native CPU regression for the exact training wheel; not a completed WTS development or quality result.",
+  "slurm_elapsed_seconds": 202,
+  "stage_elapsed_seconds": {
+    "higher_precision_multimodal_regression": 37.16822729000705,
+    "preflight": 24.09713045199169,
+    "real_cuda_kernels": 82.17047108299448
+  },
+  "suites": [
+    {
+      "junit_sha256": "fb648f9b018ba62cb9d1ded3ad4fbd4e560ae8907f1ab8057f6909e7935570ff",
+      "name": "real_cuda",
+      "passed": 14,
+      "skipped_failed_errors": 0,
+      "test_names": [
+        "test_nf4_kernel_training_canary_preserves_rng_and_global_flags[eager-adapter_compute_dtype0]",
+        "test_nf4_kernel_training_canary_preserves_rng_and_global_flags[eager-adapter_compute_dtype1]",
+        "test_nf4_kernel_training_canary_preserves_rng_and_global_flags[compiled-adapter_compute_dtype0]",
+        "test_nf4_kernel_training_canary_preserves_rng_and_global_flags[compiled-adapter_compute_dtype1]",
+        "test_strict_flash_sdpa_repeats_bf16_forward_and_backward_exactly[language]",
+        "test_strict_flash_sdpa_repeats_bf16_forward_and_backward_exactly[vision_chunk]",
+        "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[eager-none]",
+        "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[eager-full]",
+        "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[eager-selective]",
+        "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[inductor-none]",
+        "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[inductor-full]",
+        "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[inductor-selective]",
+        "test_native_selected_head_preserves_quantized_backbone_and_adapter_gradients[bf16]",
+        "test_native_selected_head_preserves_quantized_backbone_and_adapter_gradients[nf4]"
+      ]
+    },
+    {
+      "junit_sha256": "af0cdaa7cc115f4f4e513d857bc34fd1f03ca2dfbed8b7983a2c4ae4f8051f89",
+      "name": "higher_precision_native_cpu",
+      "passed": 1,
+      "skipped_failed_errors": 0,
+      "test_names": [
+        "test_real_qwen_multimodal_recipe_cpu"
+      ]
+    }
+  ],
+  "workflow_receipt_sha256": "8cbdb6fcc866cdb5990a8d6b26492f4fbd3e74302361e6aa09c4c9c9976990b7",
+  "workflow_revision": "941b6458f99c4be730192c3e6a2ecff81a794275"
+}

@@ -54,10 +54,12 @@ from cosmos_framework.posttrain.utils.identity import json_identity_equal, norma
 from cosmos_framework.posttrain.utils.log import info0
 from cosmos_framework.posttrain.utils.profile import ProfileRecord, live_cuda_tensor_summary
 from cosmos_framework.posttrain.utils.residency import HostOffload, make_offload
+from cosmos_framework.posttrain.utils.training_profile import ensure_profile_model, profile_backward, profile_range
 
 if TYPE_CHECKING:
     from cosmos_framework.posttrain.checkpoint.store import CheckpointStore
     from cosmos_framework.posttrain.comm.weight_transfer import WeightPayload, WeightWitnessSpec
+    from cosmos_framework.posttrain.model.checkpoint import AdapterCheckpointCodec
 
 
 def concat_batches(batches: list) -> list:
@@ -261,6 +263,7 @@ class LLMTrainer(BaseTrainer):
         validation_normalizer: Callable[[dict], dict] = normalize_rollout_validation_identity,
         validation_state: ValidationState | None = None,
         objective_evaluator: Callable[[Any, Objective, list[Trajectory]], dict[str, Any]] | None = None,
+        development_evaluator: Any | None = None,
     ) -> None:
         from cosmos_framework.posttrain.callbacks.base import CallbackList
 
@@ -315,6 +318,8 @@ class LLMTrainer(BaseTrainer):
         # COLLECTED-BATCH clock (once per n_mini attempts), matching cosmos-rl, so a batch's n_mini
         # sequential updates all run at one LR. Zero-gradient skips still consume an attempt.
         self._sched_accum = 0
+        self._input_window_active = False
+        self._input_window_start_update: int | None = None
         self.callbacks = callbacks if isinstance(callbacks, CallbackList) else CallbackList(callbacks)
         # Gradient clipping is DTensor-aware; finite checks reject the whole window.
         self.max_grad_norm = float(max_grad_norm)
@@ -341,6 +346,7 @@ class LLMTrainer(BaseTrainer):
             objective_evaluator
         )
         self.validation_publication = PublicationJournal(self.validation_state)
+        self.development_evaluator = development_evaluator
         # The colocated hand-off is deliberately split in two. Update-only state moves first while
         # policy shards remain on GPU as the direct IPC weight-sync source; the policy moves only
         # after publication. This changes ordering, not transfer volume.
@@ -348,10 +354,34 @@ class LLMTrainer(BaseTrainer):
         self._offload = make_offload()
         self._parked_update_mib = 0.0
         # The optimizer iteration is the durable, idempotent weight-stream version.
+        codec = self._adapter_checkpoint_codec()
+        if codec is not None:
+            self._validate_adapter_checkpoint_policy()
+            codec.assert_live(self._net(), self.opt)
+            codec.optimizer_identity(self.opt)
+            if self.n_mini != 1 or len(self.residency) or self.forward_replay is not None:
+                raise ValueError("adapter training v1 requires SFT with n_mini=1 and no auxiliary models or replay")
 
     def _net(self) -> torch.nn.Module:
         """Return the raw model or a model body's trainable ``.net``."""
         return getattr(self.model, "net", self.model)
+
+    def _adapter_checkpoint_codec(self) -> AdapterCheckpointCodec | None:
+        """Optional frozen-base capability installed by the model builder after transformations."""
+        return getattr(self._net(), "_cosmos_adapter_checkpoint_codec", None)
+
+    def _validate_adapter_checkpoint_policy(self) -> None:
+        if self.checkpoint_format != "dcp" or self.checkpoint_manager.store.is_object_store:
+            raise ValueError("adapter training v1 requires local DCP checkpoints")
+        if self.save_async:
+            raise ValueError("adapter training v1 requires synchronous checkpoint writes")
+
+    def _checkpoint_state_net(self) -> torch.nn.Module:
+        codec = self._adapter_checkpoint_codec()
+        if codec is not None:
+            codec.assert_live(self._net(), self.opt)
+            return codec.view
+        return self._net()
 
     def _prepare_update_model(self) -> None:
         """Apply the engine's model-mode policy immediately before an update forward."""
@@ -639,6 +669,47 @@ class LLMTrainer(BaseTrainer):
         # every rank agrees; a run where no rank held data re-probes on the next batch.
         self._forward_determinism_checked = rank_any(compared)
 
+    def prepare_input_window(self, batches: list[list[Trajectory]]) -> None:
+        """Prefetch only caller-owned batches in the next optimizer update."""
+        self._raise_if_partial_update_poisoned()
+        if torch.distributed.is_initialized() and torch.distributed.get_world_size() != 1:
+            raise ValueError("input prefetch currently supports one training rank")
+        if (
+            self._input_window_active
+            or self._accum != 0
+            or len(batches) != self.grad_accum
+            or any(not batch for batch in batches)
+        ):
+            raise ValueError("input prefetch requires one nonempty complete optimizer-update window")
+        if self.objective.prepare_window is None:
+            raise ValueError("this objective does not support input prefetch")
+        # Cursor acquisition already happened in the driver. Even a failed CPU
+        # preparation must remain uncheckpointable until a fresh-process restore.
+        self._input_window_active = True
+        self._input_window_start_update = self._iter
+        self.objective.prepare_window(batches)
+
+    def finish_input_window(self) -> None:
+        """No queued input may cross a completed-update checkpoint boundary."""
+        self._raise_if_partial_update_poisoned()
+        if self._accum != 0:
+            raise RuntimeError("input window cannot finish inside gradient accumulation")
+        if not self._input_window_active:
+            raise RuntimeError("no prepared input window is active")
+        if self._input_window_start_update is None or self._iter != self._input_window_start_update + 1:
+            raise RuntimeError("input window requires exactly one completed optimizer update")
+        if self.objective.finish_window is not None:
+            self.objective.finish_window()
+        self._input_window_active = False
+        self._input_window_start_update = None
+
+    def close_input_pipeline(self) -> None:
+        if self.objective.close is not None:
+            self.objective.close()
+
+    def input_pipeline_stats(self) -> dict[str, Any]:
+        return {} if self.objective.pipeline_stats is None else self.objective.pipeline_stats()
+
     def train(self, batch: list[Trajectory]) -> dict[str, Any]:
         """Objective → backward → (deferred normalize) → clip → step, one call per micro-batch.
 
@@ -672,6 +743,7 @@ class LLMTrainer(BaseTrainer):
                 cache.skip_chunk()
             return self._outcome_metrics("discarded")
         net = self._net()
+        ensure_profile_model(net)
         self._prepare_update_model()
         # The π_old record -> replay transition is NOT done here. It happens ONCE per collected batch
         # in `begin_replay_window()`, which the driver calls on EVERY cell after the ahead pass. Doing
@@ -681,7 +753,8 @@ class LLMTrainer(BaseTrainer):
         # objective's `old_for`. No ahead pass ⇒ cache mode stays "off" ⇒ the objective falls back to
         # `cur.detach()`, which is exact at n_mini == 1 and is the pre-change behaviour everywhere else.
         self._begin_update_attempt()
-        loss, metrics = self.objective(self.model, batch)
+        with profile_range("trainer.objective"):
+            loss, metrics = self.objective(self.model, batch)
         self._replay_pinned(active=bool(batch))
         metrics.update(self._replay_metrics())
         # Consensus precedes FSDP backward so a bad rank cannot strand its peers.
@@ -690,7 +763,8 @@ class LLMTrainer(BaseTrainer):
         # The reduction owns normalize+backprop (TOKEN_SUM: as-is at grad_accum==1, else the
         # chunk SUM recovered via the objective's own divisor; MEAN: /grad_accum).
         denom = metrics.get(OBJECTIVE_WEIGHT_SUM)
-        reduce_backward(loss, self.objective.reduction, self.grad_accum, denom)
+        with profile_backward():
+            reduce_backward(loss, self.objective.reduction, self.grad_accum, denom)
         self._accum += 1
         self._denom_accum += float(denom or 0.0)
         if self._accum == self.grad_accum:
@@ -748,7 +822,8 @@ class LLMTrainer(BaseTrainer):
                 metrics["train/learning_rate"] = update_learning_rate
                 metrics.update(self._outcome_metrics("skipped"))
                 return metrics
-            self._run_partial_update_stage(stage="optimizer_step", action=self.opt.step)
+            with profile_range("trainer.optimizer"):
+                self._run_partial_update_stage(stage="optimizer_step", action=self.opt.step)
             self._run_partial_update_stage(
                 stage="post_optimizer_step",
                 action=self._validate_post_optimizer_step,
@@ -957,6 +1032,8 @@ class LLMTrainer(BaseTrainer):
         Returns:
             MiB newly moved off the device.
         """
+        if self._adapter_checkpoint_codec() is not None:
+            raise ValueError("adapter training v1 does not support weight sync or optimizer offload")
         if self._offload.offloaded:
             raise RuntimeError("prepare_weight_sync requires the policy to be resident; call onload() first")
         if self._update_offload.offloaded:
@@ -982,6 +1059,8 @@ class LLMTrainer(BaseTrainer):
         Returns:
             MiB of total trainer state parked on the host by this hand-off.
         """
+        if self._adapter_checkpoint_codec() is not None:
+            raise ValueError("adapter training v1 keeps the frozen base resident; offload is unsupported")
         if self._offload.offloaded:
             return 0.0
         profile = ProfileRecord("trainer_offload")
@@ -1004,6 +1083,12 @@ class LLMTrainer(BaseTrainer):
 
     def onload(self) -> float:
         """Restore policy first, then its update-only state. Returns total MiB moved."""
+        codec = self._adapter_checkpoint_codec()
+        if codec is not None:
+            if self._offload.offloaded or self._update_offload.offloaded:
+                raise RuntimeError("adapter training v1 cannot restore an offloaded quantized model")
+            codec.assert_live(self._net(), self.opt)
+            return 0.0
         policy_mib = self._offload.onload()
         update_mib = self._update_offload.onload()
         self._parked_update_mib = 0.0
@@ -1011,6 +1096,8 @@ class LLMTrainer(BaseTrainer):
 
     def push_weights(self, target=None) -> None:
         """Stream buckets to the routed rollout after every policy rank enters the same gather."""
+        if self._adapter_checkpoint_codec() is not None:
+            raise ValueError("adapter training v1 does not support serving weight publication")
         # Shared-model edges already expose current weights and transfer no bytes.
         be = getattr(self, "_weight_backend", None)
         if be is None:
@@ -1135,13 +1222,50 @@ class LLMTrainer(BaseTrainer):
             extra_fields_by_version={
                 1: frozenset(),
                 2: frozenset({"publication"}),
+                3: frozenset({"publication", "wts"}),
             },
         )
         if restored_extra is not None:
+            if self.development_evaluator is not None and self._resumed_from_checkpoint:
+                if "wts" not in restored_extra:
+                    raise RuntimeError("exact resume requires the WTS evaluation journal")
+                self.development_evaluator.load_state_dict(
+                    restored_extra["wts"],
+                    iteration=self._iter,
+                    pending_step=self.validation_state.progress.pending_step,
+                )
+            elif "wts" in restored_extra:
+                raise RuntimeError("exact resume cannot disable WTS evaluation")
             self.validation_publication.restore(
                 restored_extra.get("publication"),
                 iteration=self._iter,
             )
+
+    def evaluate_development(self, model_step: int) -> dict[str, int | float]:
+        self._require_checkpoint_boundary()
+        if self.development_evaluator is None or model_step != self._iter:
+            raise RuntimeError("WTS evaluation requires its configured committed model step")
+        return self.development_evaluator.evaluate(self.model, self.opt, model_step)
+
+    def publish_development_result(self, *, step: int, checkpoint: str, started_at: float, resumed: bool) -> Any:
+        self._require_checkpoint_boundary()
+        evaluator = self.development_evaluator
+        if evaluator is None or step != self._iter:
+            raise RuntimeError("WTS result requires its configured model step")
+        if (
+            self.validation_state.progress.pending_step is not None
+            or self.validation_publication.pending_step is not None
+        ):
+            raise RuntimeError("WTS target result requires committed validation publication")
+        if not evaluator.history or evaluator.history[-1]["step"] != step:
+            return None
+        self.finalize_checkpoints()
+        evaluator.verify_checkpoint(checkpoint, self.checkpoint_manager, self.model, self.opt)
+        return evaluator.publish(step=step, checkpoint=checkpoint, started_at=started_at, resumed=resumed)
+
+    def close_development_evaluation(self) -> None:
+        if self.development_evaluator is not None:
+            self.development_evaluator.close()
 
     def _require_validation_enabled(self) -> None:
         self.validation_state.require_enabled("model validation is not enabled/configured on this trainer")
@@ -1195,16 +1319,20 @@ class LLMTrainer(BaseTrainer):
         self.validation_state.progress.complete(model_step)
 
     def _require_checkpoint_boundary(self) -> None:
-        """Reject checkpoints while a poisoned mini-batch still has chunks to discard."""
+        """Reject checkpoints with prefetched inputs or poisoned chunks still outstanding."""
         super()._require_checkpoint_boundary()
         from cosmos_framework.posttrain.utils.dist import raise_if_any_rank_failed
 
         error = (
-            RuntimeError(
-                f"checkpoint save requires the poisoned mini-batch to finish; skip_remaining={self._skip_remaining}"
+            RuntimeError("cannot checkpoint while a prefetched input window is uncommitted")
+            if self._input_window_active
+            else (
+                RuntimeError(
+                    f"checkpoint save requires the poisoned mini-batch to finish; skip_remaining={self._skip_remaining}"
+                )
+                if self._skip_remaining
+                else None
             )
-            if self._skip_remaining
-            else None
         )
         raise_if_any_rank_failed(error, "LLM trainer checkpoint boundary")
 
@@ -1220,13 +1348,22 @@ class LLMTrainer(BaseTrainer):
                 "rng": rng_state,
                 "objective_identity": dict(self.objective_identity),
             }
+            if self._adapter_checkpoint_codec() is not None:
+                state["adapter_training"] = self._adapter_training_identity()
             if self.validation_state.restored_state is not None and not self.validation_state.configured:
                 raise RuntimeError("configure validation before saving a restored LLMTrainer checkpoint")
             if self.validation_state.configured:
                 self.validation_publication.validate_checkpoint_state()
                 state["validation"] = self.validation_state.state_dict(
-                    version=2,
-                    extra={"publication": self.validation_publication.checkpoint_record()},
+                    version=3 if self.development_evaluator is not None else 2,
+                    extra={
+                        "publication": self.validation_publication.checkpoint_record(),
+                        **(
+                            {"wts": self.development_evaluator.state_dict()}
+                            if self.development_evaluator is not None
+                            else {}
+                        ),
+                    },
                 )
             if self.lr_scheduler is not None:
                 # Persist scheduler progress so resume does not replay warmup.
@@ -1259,6 +1396,11 @@ class LLMTrainer(BaseTrainer):
         cross-world-size DCP resume does NOT hold for a padded parameter -- the pad width is the
         shard count, so a different world wants a different padding."""
         self._require_checkpoint_boundary()
+        if self._adapter_checkpoint_codec() is not None:
+            self._save_adapter_checkpoint(
+                path, publish=publish, update_latest=update_latest, components=components, data_state=data_state
+            )
+            return
         # State-dict extraction gathers over the device mesh, so offloaded shards must come back first.
         self.onload()
         component_plan = self.checkpoint_manager.component_plan(components)
@@ -1390,6 +1532,84 @@ class LLMTrainer(BaseTrainer):
         if publish:
             self.callbacks.on_checkpoint(self, location)
 
+    def _adapter_training_identity(self) -> dict[str, Any]:
+        """Static engine policy; recipe-owned schedule/data semantics also belong in model identity."""
+        scheduler = self.lr_scheduler
+        return {
+            "grad_accum": self.grad_accum,
+            "n_mini": self.n_mini,
+            "max_grad_norm": self.max_grad_norm,
+            "force_finite_grads": self.force_finite_grads,
+            "require_gradients": self.require_gradients,
+            "nonfinite_update": self.nonfinite_update,
+            "skip_zero_grad": self.skip_zero_grad,
+            "scheduler_class": None
+            if scheduler is None
+            else f"{type(scheduler).__module__}.{type(scheduler).__qualname__}",
+        }
+
+    def _save_adapter_checkpoint(
+        self,
+        path: str,
+        *,
+        publish: bool,
+        update_latest: bool,
+        components: Iterable[str] | CheckpointComponentPlan | None,
+        data_state: dict[str, Any] | None,
+    ) -> None:
+        """Extract only the adapter view, then reuse the native synchronous DCP transaction."""
+        from torch.distributed.checkpoint.state_dict import get_model_state_dict, get_optimizer_state_dict
+
+        from cosmos_framework.posttrain.checkpoint.adapter import MODEL_METADATA_COMPONENT, save_adapter_artifact
+        from cosmos_framework.posttrain.utils.qlora_metrics import record_qlora_phase
+        from cosmos_framework.posttrain.utils.rank_state import state_for_current_rank
+
+        self._validate_adapter_checkpoint_policy()
+        self.onload()  # Resident capability check only: never call Module.to on packed weights.
+        codec = self._adapter_checkpoint_codec()
+        if codec is None:
+            raise AssertionError("adapter checkpoint save requires an installed codec")
+        plan = self.checkpoint_manager.component_plan(components)
+        if not plan.is_full and plan.names != ("model",):
+            raise ValueError("adapter checkpoints support full resume state or model-only adapter artifacts")
+        if plan.is_full and state_for_current_rank(data_state) is None:
+            raise ValueError("adapter resume checkpoints require an exact native data cursor")
+        record_qlora_phase("checkpoint_begin", reset_peak=True)
+        codec.validate_frozen_base()
+        model_state = get_model_state_dict(codec.view)
+        if not plan.is_full:
+            location = save_adapter_artifact(
+                path, model_state, codec.metadata(), manager=self.checkpoint_manager, publish=publish
+            )
+            record_qlora_phase("checkpoint_complete", reset_peak=True)
+            if publish:
+                self.callbacks.on_checkpoint(self, location)
+            return
+        optimizer_state = None
+        if plan.is_full:
+            with self._preserved_pristine_optimizer() as guard:
+                optimizer_state = get_optimizer_state_dict(codec.view, self.opt)
+            optimizer_state = guard.sanitized(optimizer_state)
+        controls = {MODEL_METADATA_COMPONENT: codec.metadata(self.opt if plan.is_full else None)}
+        if plan.is_full:
+            # The trainer component is the local completion marker: write metadata and data first.
+            controls["data"] = data_state
+            controls["trainer"] = self._trainer_state()
+        location = self.checkpoint_manager.save_dcp(
+            path,
+            {"model": model_state, "optim": optimizer_state},
+            controls,
+            # DCP's control tail can otherwise run asynchronously even with save_async=False.
+            async_safe_snapshot=False,
+            publish=publish,
+            update_latest=update_latest,
+            component_plan=plan,
+        )
+        codec.assert_live(self._net(), self.opt)
+        record_qlora_phase("checkpoint_complete", reset_peak=True)
+        if publish:
+            self.callbacks.on_checkpoint(self, location)
+
     @staticmethod
     def _log_host_memory(event: str, component_plan: CheckpointComponentPlan) -> None:
         """Log this rank's host-memory reading before a host-side gather (every rank).
@@ -1419,6 +1639,17 @@ class LLMTrainer(BaseTrainer):
         """Restore model, optimizer, and exact trainer state."""
         import os
 
+        if self._input_window_active:
+            raise RuntimeError("cannot load during an active input window; restore in a fresh trainer")
+
+        if self._adapter_checkpoint_codec() is not None:
+            resumed = self._load_adapter_checkpoint(path)
+            self._resumed_from_checkpoint = True
+            return resumed
+        if os.path.isdir(path) and self.checkpoint_manager.load_component(path, "model_metadata") is not None:
+            raise ValueError(
+                "adapter checkpoints require adapter-capable model construction; dense loading is forbidden"
+            )
         if self.checkpoint_manager.has_dcp_component(path, "model"):
             resumed = self._load_dcp(path)
             self._resumed_from_checkpoint = True
@@ -1483,6 +1714,80 @@ class LLMTrainer(BaseTrainer):
         self._resumed_from_checkpoint = True
         return resumed
 
+    def _load_adapter_checkpoint(self, path: str) -> int:
+        """Validate the full identity before restoring adapters, optimizer, RNG, and clocks."""
+        from torch.distributed.checkpoint.state_dict import get_model_state_dict, set_model_state_dict
+
+        from cosmos_framework.posttrain.checkpoint.adapter import (
+            read_adapter_metadata,
+            validate_dcp_target_inventory,
+        )
+        from cosmos_framework.posttrain.utils.rank_state import select_rank_state, state_for_current_rank
+
+        self._validate_adapter_checkpoint_policy()
+        self.onload()
+        codec = self._adapter_checkpoint_codec()
+        if codec is None:
+            raise AssertionError("adapter checkpoint restore requires an installed codec")
+        metadata = read_adapter_metadata(path, manager=self.checkpoint_manager, require_resume=True)
+        codec.validate_metadata(metadata, self.opt, purpose="resume")
+        trainer_state = self.checkpoint_manager.load_component(path, "trainer")
+        data_state = self.checkpoint_manager.load_component(path, "data")
+        if not isinstance(trainer_state, dict) or state_for_current_rank(data_state) is None:
+            raise RuntimeError("adapter resume requires complete native trainer and data state")
+        required = {
+            "iter",
+            "optimizer_step",
+            "attempt_id",
+            "accum",
+            "n_mini",
+            "nonfinite_skips_total",
+            "nonfinite_skips_consecutive",
+            "rng",
+            "objective_identity",
+            "adapter_training",
+        }
+        if not required.issubset(trainer_state):
+            raise RuntimeError(f"adapter trainer state is incomplete: missing {sorted(required - set(trainer_state))}")
+        self._validate_objective_identity(trainer_state)
+        self._parse_update_state(trainer_state)
+        if trainer_state["adapter_training"] != self._adapter_training_identity():
+            raise ValueError("adapter checkpoint training policy differs from the configured trainer")
+        rng = select_rank_state(trainer_state["rng"], on_world_size_mismatch="raise")
+        required_rng = {"python", "numpy", "torch"}
+        if next(iter(codec.parameters.values())).device.type == "cuda":
+            required_rng.add("cuda")
+        if not isinstance(rng, dict) or not required_rng.issubset(rng):
+            raise RuntimeError("adapter checkpoint is missing required process RNG streams")
+        if self.lr_scheduler is not None and (
+            "lr_scheduler" not in trainer_state
+            or trainer_state.get("lr_scheduler_clock") != self._scheduler_clock_name()
+        ):
+            raise RuntimeError("adapter checkpoint is missing compatible scheduler state")
+        # Validate optimizer tensor names/shapes/dtypes before the first model tensor can be copied.
+        # This extraction is confined to the adapter view and rolls back its pristine probe state.
+        from torch.distributed.checkpoint.state_dict import get_optimizer_state_dict
+
+        with self._preserved_pristine_optimizer():
+            optimizer_target = get_optimizer_state_dict(codec.view, self.opt)
+            if self._checkpoint_recorded_pristine_optimizer(trainer_state):
+                optimizer_target = {**optimizer_target, "state": {}}
+            validate_dcp_target_inventory(path, "optim", optimizer_target)
+        # A pristine optimizer's inventory extraction creates temporary moments.
+        # The guard clears optimizer.state, but this dictionary still owns those
+        # tensors. Release it before restoring the live moments, especially when
+        # the adapter view includes a large trained action head.
+        del optimizer_target
+        model_state = get_model_state_dict(codec.view)
+        validate_dcp_target_inventory(path, "model", model_state)
+        if not self.checkpoint_manager.load_dcp_component(path, "model", model_state):
+            raise RuntimeError("adapter checkpoint model component is missing")
+        set_model_state_dict(codec.view, model_state)
+        self._restore_sharded_optimizer(path, trainer_state)
+        codec.assert_live(self._net(), self.opt)
+        codec.validate_frozen_base()
+        return self._restore_trainer_state(trainer_state)
+
     def _load_dcp(self, path: str) -> int:
         """Restore live DCP state with topology resharding."""
         from torch.distributed.checkpoint.state_dict import get_model_state_dict, set_model_state_dict
@@ -1516,7 +1821,7 @@ class LLMTrainer(BaseTrainer):
         """
         from torch.distributed.checkpoint.state_dict import get_optimizer_state_dict, set_optimizer_state_dict
 
-        net = run_rank_converged(self._net, "LLM sharded optimizer restore network extraction")
+        net = run_rank_converged(self._checkpoint_state_net, "LLM sharded optimizer restore network extraction")
         if self._checkpoint_recorded_pristine_optimizer(trainer_state):
             # Resuming inside a frozen-actor stretch: there are no moments on disk to restore, but
             # `param_groups` still carries the learning rate and the other options. Shaping a load
@@ -1534,6 +1839,10 @@ class LLMTrainer(BaseTrainer):
                     lambda: guard.sanitized(get_optimizer_state_dict(net, self.opt)),
                     "LLM DCP pristine optimizer group extraction",
                 )
+                if self._adapter_checkpoint_codec() is not None:
+                    from cosmos_framework.posttrain.checkpoint.adapter import validate_dcp_target_inventory
+
+                    validate_dcp_target_inventory(path, "optim", opt_state)
                 if not self.checkpoint_manager.load_dcp_component(path, "optim", opt_state):
                     raise RuntimeError(f"training resume requires optimizer state in DCP checkpoint {path!r}")
             run_rank_converged(
@@ -1545,6 +1854,10 @@ class LLMTrainer(BaseTrainer):
             lambda: get_optimizer_state_dict(net, self.opt),
             "LLM DCP optimizer target extraction",
         )
+        if self._adapter_checkpoint_codec() is not None:
+            from cosmos_framework.posttrain.checkpoint.adapter import validate_dcp_target_inventory
+
+            validate_dcp_target_inventory(path, "optim", opt_state)
         if not self.checkpoint_manager.load_dcp_component(path, "optim", opt_state):
             raise RuntimeError(f"training resume requires optimizer state in DCP checkpoint {path!r}")
         run_rank_converged(

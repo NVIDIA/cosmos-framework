@@ -1,0 +1,320 @@
+{
+  "allocation_cost": {
+    "allocated_cpu_seconds": 3856,
+    "allocated_cpus": 16,
+    "allocated_gpu_seconds": 241,
+    "allocated_gpus": 1,
+    "elapsed_seconds": 241,
+    "measured_outer_buckets_seconds": {
+      "allocation_preflight": 23.502181889023632,
+      "gate": 159.57515098003205,
+      "outside_stage_timers": 57.92266713094432
+    },
+    "memory_limit_gib": 64,
+    "nested_gate_seconds_not_additional_cost": {
+      "existing_kernel_gate": 126.11068318702746,
+      "saved_dequant_canary": 12.229992237058468,
+      "selected_dequant_cuda": 20.74142267892603
+    },
+    "opportunity_debit": {
+      "additional_global_cost": false,
+      "arm": "nf4",
+      "seconds": 241
+    },
+    "scope": "The whole allocation includes startup and cleanup and is counted once. Nested command timers are descriptive subsets; no comparative speed conclusion.",
+    "state": "COMPLETED"
+  },
+  "completed": true,
+  "composition_correctness": {
+    "checkpoint_contexts": "Production forward/recompute contexts observed for all 14 linears; ownership context is empty after each backward and completed replay.",
+    "exact_three_update_comparison": [
+      "selected logits",
+      "cross entropy",
+      "all adapter gradients",
+      "updated adapter tensors",
+      "optimizer state",
+      "CPU and CUDA RNG state"
+    ],
+    "fixture_scope": "Two tiny language blocks, all seven LoRA targets per block (14 NF4 linears), rank 32, alpha 64, FP32 adapters and fused torch AdamW.",
+    "fresh_boundary_replay": "Fresh model construction followed by adapter, optimizer and RNG restoration after update 1; updates 2 and 3 reproduce exactly. This is a fixture replay, not native DCP interruption recovery.",
+    "frozen_state": "All nontrainable parameters, buffers, packed nested NF4 state and in-instance storage/object aliases remain unchanged; frozen gradients remain absent.",
+    "full_vs_selected_bitwise_equality_claimed": false,
+    "full_vs_selected_tolerances": {
+      "adapter_gradients": {
+        "atol": 1e-05,
+        "rtol": 0.03
+      },
+      "cross_entropy": {
+        "atol": 0.002,
+        "rtol": 0.002
+      },
+      "logits": {
+        "atol": 0.002,
+        "rtol": 0.02
+      }
+    },
+    "full_vs_selected_tolerances_unchanged": true,
+    "optimizer": "Adapter parameters only; fused torch AdamW; exact membership, FP32 finite step/moment state, no embedding or output-head trainables.",
+    "selected_head_control": "Ordinary bitsandbytes selected-head execution versus checkpointed_dequant selected-head execution with identical initial trainable and frozen tensor values, shapes and batch.",
+    "source_references": [
+      "cosmos_framework/posttrain/tests/test_qlora_selected_dequant_gpu.py:173",
+      "cosmos_framework/posttrain/tests/test_qlora_selected_dequant_gpu.py:194",
+      "cosmos_framework/posttrain/tests/test_qlora_selected_dequant_gpu.py:245",
+      "cosmos_framework/posttrain/config/model.py:307",
+      "cosmos_framework/posttrain/config/model.py:334"
+    ]
+  },
+  "date_utc": "2026-11-04",
+  "local_reduction_scope": {
+    "captured_bytes": 3896016,
+    "captured_files_verified": 65,
+    "checkpoint_tensor_bytes_read": 0,
+    "new_target_execution": false
+  },
+  "memory_observation": {
+    "cgroup_peak_bytes": null,
+    "incomplete_raw_samples": 0,
+    "outer_stage_coverage": {
+      "allocation_preflight": {
+        "allocator_evidence_complete": false,
+        "allocator_peak_allocated_bytes": null,
+        "allocator_peak_reserved_bytes": null,
+        "allocator_phase_records": 0,
+        "elapsed_seconds": 23.502181889023632,
+        "incomplete_host_rows": 0,
+        "observed_span_seconds": 0,
+        "samples": 1
+      },
+      "selected_head_dequant_gate": {
+        "allocator_evidence_complete": false,
+        "allocator_peak_allocated_bytes": null,
+        "allocator_peak_reserved_bytes": null,
+        "allocator_phase_records": 0,
+        "elapsed_seconds": 159.57515098003205,
+        "incomplete_host_rows": 0,
+        "observed_span_seconds": 158.42691278457642,
+        "samples": 125
+      }
+    },
+    "physical_total_host_peak_bytes": null,
+    "raw_samples": 126,
+    "sampled": {
+      "device_peak_bytes": 1503854592,
+      "errors": [],
+      "gpu_memory_evidence_valid": true,
+      "host_pss_complete": true,
+      "host_pss_sum_peak_bytes": 2860626944,
+      "host_rss_sum_peak_bytes": 6265331712,
+      "nvml_capacity_bytes": 85899345920,
+      "observed_span_seconds": 159.69092082977295,
+      "owned_device_process_peak_bytes": 769654784,
+      "peaks_are_sampled_lower_bounds": true,
+      "samples": 126,
+      "sampling_gap_seconds": {
+        "count": 125,
+        "maximum": 1.5527925491333008,
+        "mean": 1.2775273666381837,
+        "median": 1.26395845413208,
+        "p95": 1.3416244983673096,
+        "sum": 159.69092082977295
+      }
+    },
+    "scope": "All 126 recorded host rows are complete, but their approximately 159.69-second span does not cover the full 241-second allocation. Device/process/host peaks are sampled lower bounds; device-wide usage is separate from owned-process usage. No allocator phase peaks, per-test peaks, whole-job cgroup/physical host peak, or workload memory comparison is established.",
+    "whole_allocation_continuously_observed": false
+  },
+  "prospective_release_scope": {
+    "accuracy_absolute_noninferiority_limit": 0.01,
+    "accuracy_limit_units": "fraction (one percentage point)",
+    "historical_outcomes_reclassified": false,
+    "mandatory_quality_superiority": false,
+    "mandatory_ten_percent_speedup": false,
+    "nll_relative_noninferiority_limit": 0.02,
+    "release_qualified_by_this_gate": false,
+    "scope": "The user prospectively removed mandatory 10% speedup and quality superiority while retaining the 2% NLL and one-percentage-point accuracy non-inferiority guards. Historical gate failures and data limitations remain unchanged; this correctness gate evaluates neither task-quality guard."
+  },
+  "protocol": "cosmos.native-selected-dequant-gate-evidence.v1",
+  "qualification": "Tiny native CUDA composition and higher-precision CPU correctness gate passed; production lifecycle and timing remain unqualified by this evidence.",
+  "qualification_limits": {
+    "cross_head_resume_equivalence_claimed": false,
+    "native_thirty_six_block_composition_qualified": false,
+    "own_four_step_native_interruption_recovery_qualified": false,
+    "production_memory_or_speed_claimed": false,
+    "quality_noninferiority_evaluated": false,
+    "scope": "Strict baseline source, tensor and optimizer checks remain intact. The combined gate adds no identity normalization and does not waive mode identity for production checkpoints. Native own-four-step lifecycle and later timing require their separate closed evidence; the tiny replay cannot substitute for them.",
+    "twenty_update_timing_qualified": false
+  },
+  "runtime": {
+    "device_bytes": 85174583296,
+    "name": "NVIDIA A100-SXM4-80GB",
+    "physical_cpu_cores": 8,
+    "python": "3.12.12 (main, Feb 12 2026, 00:42:14) [Clang 21.1.4 ]",
+    "runtime_precision": {
+      "allow_bf16_reduced_precision_reduction": true,
+      "cuda_matmul_allow_tf32": false,
+      "cudnn_allow_tf32": true,
+      "environment": {
+        "NVIDIA_TF32_OVERRIDE": null,
+        "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE": null
+      },
+      "float32_matmul_precision": "highest",
+      "fp32_precision": {
+        "cuda_matmul": "none",
+        "cudnn": "none",
+        "cudnn_conv": "tf32",
+        "cudnn_rnn": "tf32",
+        "global": "none"
+      }
+    },
+    "thread_environment": {
+      "MKL_NUM_THREADS": null,
+      "OMP_NUM_THREADS": "8",
+      "OPENBLAS_NUM_THREADS": null,
+      "TOKENIZERS_PARALLELISM": "false"
+    },
+    "torch_cuda": "12.8",
+    "torch_git_version": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+    "versions": {
+      "accelerate": "1.13.0",
+      "bitsandbytes": "0.49.2",
+      "safetensors": "0.8.0",
+      "torch": "2.11.0+cu128",
+      "torchcodec": "0.11.0+cpu",
+      "torchvision": "0.26.0+cu128",
+      "transformers": "5.8.1"
+    }
+  },
+  "source_evidence_sha256": {
+    "actual_plan": "1d494b0fd5f6f5145de3eaa6abc9d9d9aab1a8d87861e7514211994867f20be4",
+    "actual_runtime": "8b955ac21cdf4da549a9d772b0c199ce3f0441306af4460e9b90ff968de1e661",
+    "gate_driver": "8472fd220ae9dcd1bd22bf941b4147b6de9ae81bd21ccb703c87f76945989682",
+    "independent_terminal_review": "ec414cb078424f1893cdd2e9757fbc77ec756fb47bcfda5f272deb9b35fda209",
+    "terminal_capture": "1193be086afff34df23ef89ac55d0ebeac27accb2799b54528808b8497b3349d",
+    "terminal_review": "4f14add6778bb2f3cab9e0bd8a1ec00d59f6a2d31214f49e57fd94863fea5b1c",
+    "terminal_reviewer": "e37b77edb97227be2c430b3e034fb69df60b0c3de5f83ef49b969c01acc05cc6"
+  },
+  "source_identity": {
+    "build_receipt_sha256": "d9a4f056a12908b01af93e138bd95fcd6a2ac0e612b232df027348f1055dcbfa",
+    "core_sources_sha256": {
+      "cosmos_framework/posttrain/config/model.py": "32e884690bafe27565cd548f6d63f4e1b37c3a6715418c973f2b7f070aefa920",
+      "cosmos_framework/posttrain/model/quantization/bnb.py": "6dcf433d938b14a5d72151fa20ebf817d3afefd68d0235422d2f98afeb12bb13",
+      "cosmos_framework/posttrain/model/quantization/loader.py": "3409a1ba088a413db4b526f71892607cf15141022cef377cc2bd0feb28bacea6",
+      "cosmos_framework/posttrain/model/qwen3_vl.py": "57662dc95f656e536b1b57c9fbef2eb63eed8762821ea6e51ff8e35d0de7499b"
+    },
+    "dependency_identity_scope": "Sealed environment-lock hash and actual runtime package versions. Installed dependency binary hashes were not collected by this gate.",
+    "native_package_files_verified": 1875,
+    "native_revision": "e6e383bfc4c27e3428f35d5505588cd17480d358",
+    "native_wheel_sha256": "c2a7793d05fbe54e82d9875c5edebe1a52e56b00872dba93fa028ef3089755c6",
+    "posttrain_environment_lock_sha256": "954754303608470edd6715bb5b175088437a192149e689e24a4d1373aa480694",
+    "preserved_baseline": {
+      "canary_source_scope": "The separate canary uses the inherited environment-restoration correction; it is not included in the four byte-identical baseline files.",
+      "four_baseline_test_files_byte_identical": [
+        "test_model_qwen3_vl_qlora_gpu.py",
+        "test_native_adapter_execution_gpu.py",
+        "test_sft_selected_logits_gpu.py",
+        "test_entrypoints_sft.py"
+      ],
+      "native_revision": "f5e40cf0d27091abc85af23799a9f59b75761353",
+      "original_cuda_case_count": 14,
+      "original_cuda_inventory_unchanged": true
+    },
+    "test_sources_sha256": {
+      "cosmos_framework/posttrain/tests/test_entrypoints_sft.py": "2a90678c90dd44d7de6c8d956ef686f245a04fffd51e9eaa90870f9c5614ee28",
+      "cosmos_framework/posttrain/tests/test_model_qwen3_vl_qlora_gpu.py": "8fd27324a3971732531856da8edf08cefa2435e0f4b084304a74ef85a9e23f46",
+      "cosmos_framework/posttrain/tests/test_native_adapter_execution_gpu.py": "bf0ada612525a1e339abaa84f1225a57c247b14faae93cb0c241576059c71072",
+      "cosmos_framework/posttrain/tests/test_qlora_checkpointed_dequant.py": "f8b51f70c38152506f1f7e04ead4a77bccf054408814bab8b3b0fc009aaa2758",
+      "cosmos_framework/posttrain/tests/test_qlora_selected_dequant_gpu.py": "51ca3c0647fe15f0218edd5b2512608d2ab411b71c43fd3e9f52f6b059ac65f7",
+      "cosmos_framework/posttrain/tests/test_sft_selected_logits_gpu.py": "a05b5b8e107a75421c4831ad926d0823d48f40bc1f723fa1d6bfda8bf5a1b1b6"
+    },
+    "workflow_receipt_sha256": "d497c8a5ab1d0e09bea855ac9a47d376db53ab346ffaccf07948fc1e76a8e9d8",
+    "workflow_source_archive_sha256": "c8f1ca35362719bdb8df7a3883b4a59c4367c33c4b09e1a7cfb5114fa81d4b78"
+  },
+  "test_results": {
+    "checks": {
+      "existing_kernel_gate": {
+        "completed": true,
+        "cuda": {
+          "errors": 0,
+          "failures": 0,
+          "skipped": 0,
+          "test_names": [
+            "test_nf4_kernel_training_canary_preserves_rng_and_global_flags[eager-adapter_compute_dtype0]",
+            "test_nf4_kernel_training_canary_preserves_rng_and_global_flags[eager-adapter_compute_dtype1]",
+            "test_nf4_kernel_training_canary_preserves_rng_and_global_flags[compiled-adapter_compute_dtype0]",
+            "test_nf4_kernel_training_canary_preserves_rng_and_global_flags[compiled-adapter_compute_dtype1]",
+            "test_strict_flash_sdpa_repeats_bf16_forward_and_backward_exactly[language]",
+            "test_strict_flash_sdpa_repeats_bf16_forward_and_backward_exactly[vision_chunk]",
+            "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[eager-none]",
+            "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[eager-full]",
+            "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[eager-selective]",
+            "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[inductor-none]",
+            "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[inductor-full]",
+            "test_nf4_bf16_adapter_ac_compile_preserves_frozen_state_and_repeated_updates[inductor-selective]",
+            "test_native_selected_head_preserves_quantized_backbone_and_adapter_gradients[bf16]",
+            "test_native_selected_head_preserves_quantized_backbone_and_adapter_gradients[nf4]"
+          ],
+          "tests": 14,
+          "xml_sha256": "cb16396a8b354b5323d307baf0c4e28e4f0209a10a7f4c10a018b3242fda4b64"
+        },
+        "higher_precision_cpu": {
+          "errors": 0,
+          "failures": 0,
+          "skipped": 0,
+          "test_names": [
+            "test_real_qwen_multimodal_recipe_cpu"
+          ],
+          "tests": 1,
+          "xml_sha256": "6693cba98a6e4fcb747904f471b60fb28f0cb1966df08f721524bc13f73b8c68"
+        }
+      },
+      "saved_dequant_canary": {
+        "actual_saved_dequant": {
+          "adapter_compute_dtype": "float32",
+          "backend": "bitsandbytes",
+          "compiled": false,
+          "forward_max_abs": 0.0,
+          "input_gradient_max_abs": 0.0,
+          "quantized_linear_execution": "checkpointed_dequant",
+          "steps": 3,
+          "version": "0.49.2"
+        },
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "test_names": [
+          "test_actual_checkpointed_dequant_kernel_canary"
+        ],
+        "tests": 1,
+        "xml_sha256": "69ba5c5804042644525675222afdbd6e2b7d23c7d8f93309b128c2f91858f64f"
+      },
+      "selected_dequant_cuda": {
+        "actual_composition": {
+          "all_14_linears_forward_and_recompute_observed": "True",
+          "exact_selected_updates": "3",
+          "fresh_boundary_replayed_updates": "2",
+          "frozen_parameters_buffers_packed_nested_state_exact": "True",
+          "full_selected_tolerances": "logits=.02/.002;ce=.002/.002;gradients=.03/1e-5",
+          "optimizer_adapter_only_fp32_state_exact": "True",
+          "selected_dequant_scope": "tiny_native_vlm_2_blocks_14_nf4_linears_r32_alpha64_fp32_fused_adamw"
+        },
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "test_names": [
+          "test_selected_dequant_native_multistep_and_boundary_replay"
+        ],
+        "tests": 1,
+        "xml_sha256": "3b08453694071c4e7ab6b9343d31c818434156935d7d6598eee30166937e7225"
+      }
+    },
+    "classification": {
+      "existing_kernel_gate.cuda": "14 unchanged ordinary NF4, strict attention, activation-checkpoint/compile and selected-head BF16/NF4 baseline cases.",
+      "existing_kernel_gate.higher_precision_cpu": "One real higher-precision multimodal recipe CPU regression.",
+      "saved_dequant_canary": "One actual saved-dequant CUDA canary.",
+      "selected_dequant_cuda": "One new combined tiny native CUDA multi-update and fresh-boundary replay fixture."
+    },
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "total_cases": 17
+  }
+}

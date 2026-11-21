@@ -80,12 +80,40 @@ def sft_policy_source(config: Any) -> tuple[str, bool]:
             "SFT with model_backend='native' requires config.model=NativePolicyBuildSpec for the Qwen3-VL native "
             "seat; legacy native model trees are not supported"
         )
+    from cosmos_framework.posttrain.utils.adapter_source import prepare_sft_adapter_source
+
+    prepare_sft_adapter_source(spec)
     return resolve_native_sft_source(spec)
 
 
 def enabled_sources(rl: SFTConfig) -> list[SFTDatasetConfig]:
     """The training source, then the held-out source when validation is enabled."""
-    return [rl.data, *([rl.validation.data] if rl.validation.enabled else [])]
+    return [
+        rl.data,
+        *([rl.validation.data] if rl.validation.enabled else []),
+        *([rl.validation.wts.data] if rl.validation.wts.enabled else []),
+    ]
+
+
+def _validate_determinism(config: Any) -> bool:
+    """Return whether native adapters require strict execution, rejecting an opt-out early."""
+    from cosmos_framework.posttrain.config.build import select_policy_backend
+
+    spec = select_policy_backend(config).native_spec
+    adapter = spec is not None and getattr(spec.model_config, "adapter", None) is not None
+    if adapter and config.rl.deterministic is not True:
+        raise ValueError("native adapter SFT requires rl.deterministic=True with strict deterministic algorithms")
+    return adapter
+
+
+def _enable_sft_determinism(config: Any, *, adapter_only: bool = False) -> None:
+    """Enforce strict adapters while preserving the existing general SFT policy."""
+    from cosmos_framework.posttrain.utils.determinism import enable_determinism
+
+    if _validate_determinism(config):
+        enable_determinism(strict=True)
+    elif config.rl.deterministic and not adapter_only:
+        enable_determinism()
 
 
 def validate_config_structure(config: Any) -> SFTConfig:
@@ -102,11 +130,19 @@ def validate_config_structure(config: Any) -> SFTConfig:
         raise ValueError("SFT local/torchrun placement does not support grid.gpu_node_domains")
     if config.grid.backend != "local" or config.grid.grouping != "single":
         raise ValueError("SFT currently supports local/torchrun with grid.grouping='single' only")
+    _validate_determinism(config)
     sft_policy_source(config)
     rl = instantiate(config.rl)
     # ``SFTConfig.__post_init__`` judges ``mask_think_opener=True`` by the typed ``serve_contract`` field for every source
     # of the value (the recipe variant, a YAML, a ``--`` override).
     rl.__post_init__()
+    if rl.validation.wts.enabled:
+        from cosmos_framework.posttrain.config.build import select_policy_backend
+        from cosmos_framework.posttrain.utils.dist import world_size_or_1
+
+        spec = select_policy_backend(config).native_spec
+        if spec is None or getattr(spec.model_config, "adapter", None) is None or world_size_or_1() != 1:
+            raise ValueError("validation.wts initially requires one native adapter process")
     if rl.lr_schedule.kind == "cosine" and (rl.lr_schedule.cycle_steps or rl.max_steps) <= rl.optimizer.warmup_steps:
         # Legal (a short canary of a long warmup) but worth one line: the run never leaves the warmup ramp.
         info0(
@@ -141,6 +177,110 @@ def validate_config(config: Any) -> SFTConfig:
     return rl
 
 
+def _adapter_run_contract(
+    config: Any, packer: Any, objective_identity: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Bind numerical processor identity separately from exact training continuation."""
+    import re
+
+    from cosmos_framework.posttrain.config.build import select_policy_backend
+    from cosmos_framework.posttrain.utils.adapter_identity import adapter_processor_identity
+    from cosmos_framework.posttrain.utils.identity import canonical_config_value, normalize_json_dict
+
+    selection = select_policy_backend(config)
+    spec = selection.native_spec
+    if spec is None or getattr(spec.model_config, "adapter", None) is None:
+        return None
+    rl = config.rl
+    _validate_determinism(config)
+    if rl.checkpoint_format != "dcp" or rl.save_async or rl.checkpoint_store.backend != "local":
+        raise ValueError("native adapter training requires synchronous local DCP checkpoints")
+    from cosmos_framework.posttrain.config.rl import FULL_CHECKPOINT_COMPONENTS
+
+    supported_plans = ({"model"}, set(FULL_CHECKPOINT_COMPONENTS))
+    plans = [rl.checkpoint_components]
+    if rl.validation.enabled and rl.validation.save_checkpoint:
+        plans.append(rl.validation.checkpoint_components)
+    if any(set(plan) not in supported_plans for plan in plans):
+        raise ValueError("native adapter checkpoints support full resume state or model-only artifacts")
+    if getattr(rl, "init_from", ""):
+        raise ValueError("native adapter training does not support init_from; use exact resume or the reload API")
+    revision = os.environ.get("COSMOS_TRAINING_CODE_REVISION", "")
+    wheel_sha256 = os.environ.get("COSMOS_TRAINING_WHEEL_SHA256", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", revision) or not re.fullmatch(r"[0-9a-f]{64}", wheel_sha256):
+        raise ValueError(
+            "native adapter training requires COSMOS_TRAINING_CODE_REVISION (40 hex) and "
+            "COSMOS_TRAINING_WHEEL_SHA256 (64 hex) from the installed build receipt"
+        )
+    processor = adapter_processor_identity(
+        packer, source_path=selection.model_id, source_identity=spec.model_config.source_identity
+    )
+    validation_contract = canonical_config_value(rl.validation)
+    if not rl.validation.wts.enabled:
+        validation_contract["fields"].pop("wts", None)
+    training = normalize_json_dict(
+        {
+            "objective": objective_identity,
+            "optimizer": canonical_config_value(rl.optimizer),
+            "schedule": canonical_config_value(rl.lr_schedule),
+            "max_steps": rl.max_steps,
+            "seed": rl.seed,
+            "deterministic": rl.deterministic,
+            "determinism_mode": "strict",
+            "validation": validation_contract,
+            "code_revision": revision,
+            "wheel_sha256": wheel_sha256,
+        },
+        context="adapter training identity",
+    )
+    return processor, training
+
+
+def _preflight_adapter_resume(
+    config: Any, checkpoint: Any, processor_identity: dict[str, Any], training_identity: dict[str, Any]
+) -> None:
+    """Check fresh-training eligibility or an exact resume before allocating base weights."""
+    from cosmos_framework.posttrain.checkpoint.adapter import read_adapter_metadata
+    from cosmos_framework.posttrain.config.build import select_policy_backend
+    from cosmos_framework.posttrain.config.model import native_adapter_config_identity, quantization_config_identity
+    from cosmos_framework.posttrain.model.quantization.loader import validate_execution_policy_identity
+    from cosmos_framework.posttrain.utils.identity import canonical_config_value
+    from cosmos_framework.utils.lazy_config import instantiate
+
+    cfg = instantiate(select_policy_backend(config).native_spec.model_config)
+    if not checkpoint.resume_checkpoint:
+        # The driver has resolved auto to a checkpoint or off; the configured resume flag
+        # alone does not establish a continuation. Artifact reconstruction remains valid.
+        if (
+            getattr(cfg, "quantized_linear_execution", "bnb") == "checkpointed_dequant"
+            and getattr(cfg, "sft_logits_mode", "full") == "supervised"
+        ):
+            raise ValueError(
+                "fresh native SFT does not admit checkpointed_dequant with supervised logits; "
+                "use bnb execution or full logits. Exact resume requires a complete matching checkpoint."
+            )
+        return
+    metadata = read_adapter_metadata(
+        checkpoint.resume_checkpoint,
+        expected_identity={
+            "base": canonical_config_value(cfg.source_identity),
+            "adapter": native_adapter_config_identity(cfg.adapter),
+            "quantization": quantization_config_identity(cfg.quantized_base),
+            "processor_contract": processor_identity,
+            "training_contract": training_identity,
+        },
+        require_resume=True,
+        manager=checkpoint.manager,
+    )
+    # The early metadata reader accepts an expected subset. This optional leaf
+    # must also match when the current objective omits it (epsilon=0), before
+    # allocating the backbone; authoritative resume still compares all identity.
+    saved_objective = metadata["identity"]["training_contract"]["objective"]
+    if saved_objective.get("wts_answer_smoothing") != training_identity["objective"].get("wts_answer_smoothing"):
+        raise ValueError("adapter training_contract.objective.wts_answer_smoothing differs")
+    validate_execution_policy_identity(cfg, metadata["identity"])
+
+
 def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None, checkpoint: Any) -> Any:
     from cosmos_framework.posttrain.algorithm.sft import make_objective
     from cosmos_framework.posttrain.config.build import (
@@ -154,6 +294,7 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
     from cosmos_framework.posttrain.roles.trainer.validation.sft import evaluate_sft_batch
     from cosmos_framework.posttrain.roles.trainer.validation.state import ValidationState
     from cosmos_framework.posttrain.utils.dist import run_rank_converged, world_size_or_1
+    from cosmos_framework.posttrain.utils.qlora_metrics import record_qlora_phase
     from cosmos_framework.utils import misc
 
     name_or_path, trust_remote_code = sft_policy_source(config)
@@ -167,9 +308,37 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         ),
         "SFT tokenizer/processor setup",
     )
+    if rl.preprocessing_cache_bytes or rl.preprocessing_prefetch:
+        from cosmos_framework.posttrain.config.build import select_policy_backend
+        from cosmos_framework.posttrain.data.packer.sft_preprocess import build_sft_preprocessing
+
+        spec = select_policy_backend(config).native_spec
+        if spec is None or getattr(spec.model_config, "adapter", None) is None or world_size_or_1() != 1:
+            raise ValueError("SFT preprocessing optimization initially requires a single-device native adapter")
+        media_hashes: dict[str, str] = {}
+        for source in (data, validation):
+            if source is None:
+                continue
+            for path, digest in getattr(source.dataset, "media_hashes", {}).items():
+                if path in media_hashes and media_hashes[path] != digest:
+                    raise ValueError("training and validation disagree about verified media content")
+                media_hashes[path] = digest
+        packer = run_rank_converged(
+            lambda: build_sft_preprocessing(
+                packer,
+                name_or_path=name_or_path,
+                cache_bytes=rl.preprocessing_cache_bytes,
+                prefetch=rl.preprocessing_prefetch,
+                media_hashes=media_hashes,
+                max_pending=rl.micro_batch_size * rl.grad_accum,
+                workers=rl.preprocessing_workers,
+            ),
+            "SFT deterministic preprocessing setup",
+        )
     objective = make_objective(
         packer,
         ce_exponent=rl.ce_exponent,
+        wts_answer_smoothing=rl.wts_answer_smoothing,
         moe_lbl_coeff=rl.moe_lbl_coeff,
         moe_lbl_method=rl.moe_lbl_method,
         serve_contract=rl.serve_contract,
@@ -182,9 +351,51 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         "dp_world": world_size_or_1(),
         "precision": asdict(resolve_precision(config)),
     }
+    if rl.preprocessing_cache_bytes or rl.preprocessing_prefetch:
+        objective.identity["preprocessing"] = {
+            "protocol": "cosmos.sft-preprocessing.v1",
+            "cache_bytes": rl.preprocessing_cache_bytes,
+            "prefetch": rl.preprocessing_prefetch,
+            "window_examples": rl.micro_batch_size * rl.grad_accum,
+        }
+        if rl.preprocessing_workers != 1:
+            from cosmos_framework.posttrain.data.packer.sft_preprocess import MEDIA_OWNER_CAPACITY
+
+            objective.identity["preprocessing"].update(
+                protocol="cosmos.sft-preprocessing.v3",
+                workers=rl.preprocessing_workers,
+                dispatch="window_least_assigned_sticky_lru_v1",
+                media_owner_capacity=MEDIA_OWNER_CAPACITY,
+                affinity="partition_inherited_all_worker_threads_v1",
+                cache_budget="sum_of_worker_limits",
+            )
+    development = None
+    if rl.validation.wts.enabled:
+        from cosmos_framework.posttrain.roles.rollout.validation import distributed_validation_rng
+        from cosmos_framework.posttrain.roles.trainer.validation.development import DevelopmentEvaluation
+
+        with distributed_validation_rng("SFT development setup"):
+            development = DevelopmentEvaluation(
+                rl.validation.wts,
+                rl,
+                data,
+                model_source=name_or_path,
+                trust=trust_remote_code,
+                output=out_dir(config),
+            )
+    adapter_contract = _adapter_run_contract(config, packer, objective.identity)
+    if adapter_contract is not None:
+        _preflight_adapter_resume(config, checkpoint, *adapter_contract)
     misc.set_random_seed(seed=rl.seed, by_rank=False)
     model = build_backbone(config)
     optimizer = build_optimizer(model.net, rl.optimizer)
+    if adapter_contract is not None:
+        codec = getattr(model.net, "_cosmos_adapter_checkpoint_codec", None)
+        if codec is None:
+            raise RuntimeError("native adapter builder did not provide its checkpoint codec")
+        codec.bind_processor_identity(adapter_contract[0])
+        codec.bind_training_identity(adapter_contract[1])
+        codec.assert_live(optimizer=optimizer)
     groups = []
     for index, group in enumerate(optimizer.param_groups):
         lr = group["lr"]
@@ -210,6 +421,7 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         checkpoint_manager=checkpoint.manager,
         validation_state=ValidationState(),
         objective_evaluator=evaluate_sft_batch,
+        development_evaluator=development,
     )
     # Exact resume replaces this rank-local stream with the checkpoint's RNG state.
     misc.set_random_seed(seed=rl.seed, by_rank=True)
@@ -236,7 +448,10 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
                 "train_total_steps": rl.max_steps,
             },
         }
+        if development is not None:
+            validation_identity["wts"] = development.identity
     trainer.configure_validation(validation_identity)
+    record_qlora_phase("trainer_ready", reset_peak=True)
     return trainer
 
 
@@ -269,10 +484,7 @@ def make_setup(config_path: str, opts: list[str]) -> Any:
 
         config = load_config(config_path, ["--", *opts])
         rl = validate_config(config)
-        if rl.deterministic:
-            from cosmos_framework.posttrain.utils.determinism import enable_determinism
-
-            enable_determinism()
+        _enable_sft_determinism(config)
         checkpoint = CheckpointLifecycle.from_config(config, rl)
         coordinates = {"rank": rank_or_0(), "world_size": world_size_or_1()}
         data = run_rank_converged(lambda: build_sft_env(rl.data, rl.seed, **coordinates), "SFT training source")
@@ -304,24 +516,42 @@ def make_setup(config_path: str, opts: list[str]) -> Any:
 def train_step(data: Any, policy: Any, rl: SFTConfig) -> dict[str, Any]:
     from cosmos_framework.posttrain.schema.metrics import SUMMED_TRAIN_COUNT_KEYS
     from cosmos_framework.posttrain.utils.report import merge_training_metric_window
+    from cosmos_framework.posttrain.utils.training_profile import profile_range
 
     reports: list[dict[str, Any]] = []
+    window = None
+    if getattr(rl, "preprocessing_prefetch", False):
+        # Read exactly this update, never the next. Only completed updates may be
+        # checkpointed; a failed partial window restarts from its prior checkpoint.
+        with profile_range("sft.prefetch_window"):
+            window = [resolve(data.get_samples(rl.micro_batch_size)) for _ in range(rl.grad_accum)]
+            resolve(policy.prepare_input_window(window))
     for micro in range(rl.grad_accum):
-        metrics = resolve(policy.train(data.get_samples(rl.micro_batch_size)))
+        with profile_range("sft.data_fetch"):
+            batch = window[micro] if window is not None else data.get_samples(rl.micro_batch_size)
+        with profile_range("sft.microbatch"):
+            metrics = resolve(policy.train(batch))
         expected = "applied" if micro == rl.grad_accum - 1 else "accumulating"
         if metrics.get("optim/update_outcome") != expected:
             raise RuntimeError(
                 f"SFT rejected update at microbatch {micro}: {metrics.get('optim/skip_reason', metrics)}"
             )
         reports.append(metrics)
+    if window is not None:
+        resolve(policy.finish_input_window())
     # The clip record (``train/grad_clipped``, ``train/grad_clip_coef``) arrives in the applying microbatch's metrics
     # from ``LLMTrainer``, computed from the norm the clip measured; the loop adds the run's
     # ``train/grad_clip_fraction``.
-    return merge_training_metric_window(
+    merged = merge_training_metric_window(
         reports,
         sum_keys=frozenset(SUMMED_TRAIN_COUNT_KEYS),
         weighted_mean_by={"train/loss_avg": "train/valid_token_count"},
     )
+    if window is not None or getattr(rl, "preprocessing_cache_bytes", 0):
+        for kind, counters in resolve(policy.input_pipeline_stats()).items():
+            for name, value in counters.items():
+                merged[f"train/preprocessing_{kind}_{name}"] = value
+    return merged
 
 
 def evaluate(
@@ -367,6 +597,7 @@ def _evaluate(
             local["sequences"] += float(metrics["val/valid_sequence_count"])
 
         run_rank_converged(collect, "SFT held-out metric preparation")
+    development_metrics = resolve(policy.evaluate_development(model_step)) if rl.validation.wts.enabled else {}
     local["duration"] = time.monotonic() - started
     gathered = gather_rank_states(local, context="SFT held-out totals")
     tokens = sum(row["tokens"] for row in gathered.values())
@@ -384,6 +615,7 @@ def _evaluate(
             "val/valid_token_count": int(tokens),
             "val/valid_sequence_count": int(sequences),
             "timer/validation_s": duration,
+            **development_metrics,
         },
         source_fingerprint=fingerprint,
         trigger_reasons=reasons,
@@ -391,12 +623,13 @@ def _evaluate(
     )
 
 
-def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]:
+def loop(units: dict[str, Any], config: Any, run_out_dir: str, *, started_at: float | None = None) -> dict[str, Any]:
     from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
     from cosmos_framework.posttrain.control.termination import TerminationWatch
     from cosmos_framework.posttrain.control.validation import ValidationSchedule
     from cosmos_framework.posttrain.control.validation.boundary import ValidationBoundaryCoordinator
     from cosmos_framework.posttrain.control.validation.transaction import ValidationTransaction
+    from cosmos_framework.posttrain.utils.qlora_metrics import record_qlora_phase
     from cosmos_framework.posttrain.utils.report import (
         emit_metric_frame,
         finish_best_effort,
@@ -405,13 +638,17 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
         reportable_metrics,
         start_best_effort,
     )
+    from cosmos_framework.posttrain.utils.training_profile import NativeStepProfiler
     from cosmos_framework.utils.lazy_config import instantiate
 
     rl = instantiate(config.rl)
+    started_at = time.monotonic() if started_at is None else started_at
     data, policy = units["data"], units["policy"]
     start = int(resolve(policy.iteration()))
     if start > rl.max_steps:
         raise ValueError("restored SFT iteration exceeds configured max_steps")
+    if rl.pause_after_step is not None and rl.pause_after_step <= start:
+        raise ValueError("SFT pause_after_step must exceed the restored optimizer step")
     resumed = bool(resolve(policy.resumed_from_checkpoint()))
     checkpoint = CheckpointLifecycle.from_config(config, rl, run_out_dir=run_out_dir)
     checkpoints = checkpoint.coordinator(run_out_dir, policy, data=data, initial_step=start)
@@ -442,20 +679,52 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
     # The clip counters continue from the kept rows of the metrics file (rank 0, the rank that writes it), so the
     # fraction below is the share of the RUN's updates, not of this attempt's.
     clipped_steps, counted_steps = prior_clip_counts(reporters)
+    profiler = NativeStepProfiler()
+
+    def publish_development(step: int) -> dict[str, Any] | None:
+        if not rl.validation.wts.enabled:
+            return None
+        location = checkpoints.path(step)
+        if resumed and step == start and checkpoint.resume_checkpoint is not None and not os.path.isdir(location):
+            # Completed external validation needs no copied checkpoint. Pending
+            # evaluation/publication recovery above creates its own successor.
+            location = checkpoint.resume_checkpoint
+        return resolve(
+            policy.publish_development_result(
+                step=step,
+                checkpoint=location,
+                started_at=started_at,
+                resumed=resumed,
+            )
+        )
+
     try:
         initial = boundary.resume_or_initial(start, resumed_from_checkpoint=resumed)
+        record_qlora_phase("initial_validation", reset_peak=True)
         if initial.preempted:
             return {"final_step": start, "preempted": initial.preempted}
+        initial_target = publish_development(start)
+        if initial_target is not None and initial_target["complete"]:
+            return {
+                "start": start,
+                "final_step": start,
+                "final_loss": final_loss,
+                "target_reached": initial_target["first_passing_step"] is not None,
+                "target_result": os.path.join(run_out_dir, "wts", "target-result.json"),
+            }
+        profiler.start()
         for step in range(start, rl.max_steps):
             began = time.monotonic()
             metrics = train_step(data, policy, rl)
             final_step = step + 1
+            record_qlora_phase(f"optimizer_step_{final_step}", reset_peak=True)
             if int(resolve(policy.iteration())) != final_step:
                 raise RuntimeError("SFT loop and trainer optimizer clocks diverged")
             final_loss = float(metrics["train/loss_avg"])
             if not math.isfinite(final_loss):
                 raise RuntimeError("SFT applied a non-finite update")
             metrics["timer/e2e_step_s"] = time.monotonic() - began
+            profiler.step()
             if "train/grad_clipped" in metrics:
                 # The share of this run's updates the clip has set the step size of, so far, across attempts.
                 counted_steps += 1
@@ -470,6 +739,17 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
                 return {"final_step": final_step, "preempted": outcome.preempted}
             if save_due:
                 checkpoints.save_configured_if_needed(final_step)
+            record_qlora_phase(f"validation_checkpoint_boundary_{final_step}", reset_peak=True)
+            target = publish_development(final_step)
+            if target is not None and target["complete"]:
+                CheckpointLifecycle.finalize_units(units)
+                return {
+                    "start": start,
+                    "final_step": final_step,
+                    "final_loss": final_loss,
+                    "target_reached": target["first_passing_step"] is not None,
+                    "target_result": os.path.join(run_out_dir, "wts", "target-result.json"),
+                }
             stopped = watch.should_stop()
             if stopped:
                 # rl.emergency_checkpoint_components: "full" upgrades to the exact-resume plan; "run" writes
@@ -480,12 +760,39 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
                 else:
                     info0(f"termination trigger ({stopped}) — already checkpointed, exiting")
                 return {"final_step": final_step, "preempted": stopped}
+            if final_step == rl.pause_after_step:
+                # The update and its ordinary validation are complete. This is
+                # an attempt boundary, not a synthetic FINAL validation or a
+                # change to the training/scheduler horizon. Upgrade partial
+                # cadence artifacts and drain asynchronous publication before
+                # reporting a resumable pause; save/finalization errors escape.
+                checkpoints.ensure_resumable(final_step)
+                CheckpointLifecycle.finalize_units(units)
+                return {
+                    "start": start,
+                    "final_step": final_step,
+                    "final_loss": final_loss,
+                    "paused": True,
+                    "checkpoint": checkpoints.last_save_location,
+                }
     finally:
-        finish_best_effort(reporters, failed_reporters=failures)
+        try:
+            try:
+                if rl.validation.wts.enabled:
+                    resolve(policy.close_development_evaluation())
+            finally:
+                if getattr(rl, "preprocessing_prefetch", False) or getattr(rl, "preprocessing_cache_bytes", 0):
+                    resolve(policy.close_input_pipeline())
+        finally:
+            try:
+                profiler.close()
+            finally:
+                finish_best_effort(reporters, failed_reporters=failures)
     return {"start": start, "final_step": final_step, "final_loss": final_loss}
 
 
 def run(config: Any, config_path: str, opts: list[str], run_out_dir: str) -> dict[str, Any]:
+    started_at = time.monotonic()
     from cosmos_framework.posttrain.control.bind import bind_check
     from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
     from cosmos_framework.posttrain.control.placement import ActorGroup, DeviceGroup, bind_device_groups
@@ -495,6 +802,9 @@ def run(config: Any, config_path: str, opts: list[str], run_out_dir: str) -> dic
     from cosmos_framework.posttrain.utils.entry import pin_run_attempt
 
     validate_config(config)
+    # The driver initializes CUDA/NCCL before setup; strict adapter policy must precede it.
+    # Setup applies the same policy in every worker before model construction and resume.
+    _enable_sft_determinism(config, adapter_only=True)
     specs = role_specs(config)
     bind_check(sft_manifest(specs)).raise_for_status()
     units: dict[str, Any] = {}
@@ -506,7 +816,7 @@ def run(config: Any, config_path: str, opts: list[str], run_out_dir: str) -> dic
         group = ActorGroup(members=tuple(units.values()), setup=make_setup(config_path, list(attempt.opts)))
         # torchrun owns the CUDA process group; local placement does not allocate another mesh.
         bind_device_groups([DeviceGroup(actor_groups=(group,), device="cpu")], backend="local")
-        summary = loop(units, config, attempt.out_dir)
+        summary = loop(units, config, attempt.out_dir, started_at=started_at)
         info0(f"SFT DONE {summary}")
         return summary
     finally:

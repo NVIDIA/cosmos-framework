@@ -1,0 +1,356 @@
+{
+  "comparison": {
+    "activation_checkpointing": "full",
+    "adapter_compute_dtype": "float32",
+    "all_ordered_row_media_input_mask_token_identities_exact": true,
+    "alpha": 64,
+    "effective_batch": 8,
+    "preprocessing_workers": 1,
+    "rank": 32,
+    "rows_per_state": 64,
+    "rows_rederived": 384,
+    "schedule_cycle_updates": 300,
+    "seed": 42,
+    "states": 6,
+    "supervised_tokens_per_state": 128,
+    "trained_states_updates": 20,
+    "validation_context": "Ordinary profile controls performed scheduled validation; the residual20 pilot disabled it. Prefix20 is still within warmup. This is not an equal-total-compute comparison.",
+    "warmup_updates": 30
+  },
+  "completed_followup_cost": {
+    "allocated_cpu_seconds": 31232,
+    "allocated_gpu_seconds": 1952,
+    "cpu_count": 16,
+    "elapsed_seconds": 1952,
+    "exit_code": "0:0",
+    "gpu_count": 1,
+    "state": "COMPLETED"
+  },
+  "cost_scope": "All 1952 GPU-seconds and 31232 allocated CPU-seconds include allocation startup, checkpoint checks, two fresh scoring processes and the corrected recovery suite. Stage timers and per-state scorer timers are nested. The four historical states are not new scoring runs. Existing 20-update profile training is reused, not repeated. Original failed calibration and separate initializer preparation costs remain charged; initialization and residual search belong to NF4.",
+  "locked_effort_screen": {
+    "automatic_admission": false,
+    "conditions": {
+      "all_64_row_input_media_mask_token_identities_exact": true,
+      "correct_answer_count_not_lower": true,
+      "native_token_weighted_ce_strictly_lower": true,
+      "own_correctness_passed": true
+    },
+    "development_experiment_executed_by_this_evidence": false,
+    "if_met": "Lock the exact development checkpoint/evaluation grid and resource allocation before executing full584 development comparisons; charge initializer and all calibration overhead to NF4 and preserve equally optimized BF16.",
+    "native_ce_relative_change": -0.09811597534714234,
+    "ordinary_nf4_correct_answers": 49,
+    "passed": true,
+    "purpose": "Admit one matched BF16/control/residual development experiment within remaining equal per-arm search budgets; never select a release recipe or claim held-out improvement from training64.",
+    "release_quality_qualified": false,
+    "residual_correct_answers": 51,
+    "source_sha256": "3f5b0823e5c323455a2116c6fa25ab9d7b733a1cde8908f2e890ab1a10e0622e",
+    "token_weighted_nll_interpretation": "Native supervised-token CE, including assistant end token; distinct from mean answer-token NLL."
+  },
+  "metric_contract": {
+    "answer_nll": "mean full-vocabulary negative log probability of the single gold answer token",
+    "limitations": "bounded teacher-forced diagnostic; not free generation or full heldout/release qualification",
+    "media_clusters": "exact video content SHA256 only; related camera views/events may need broader grouping",
+    "restricted_choice": "argmax over the actual question's two to four contiguous A/B[/C[/D]] token logits at the first assistant answer position",
+    "strict_first_token": "full-vocabulary argmax equals the gold letter token",
+    "tie_break": "torch.argmax: first actual choice in canonical A/B/C/D order, lowest full-vocabulary token id",
+    "token_weighted_ce": "native supervised-token CE; includes assistant end token and preserves existing masks",
+    "valid_letter_rate": "full-vocabulary argmax belongs to the actual question choices"
+  },
+  "native_revision": "1ac6a7ff975c3e7a2f8851b7495104ca9a1b1b77",
+  "native_wheel_sha256": "4b634e70f07968b3df0c69d2c5815179bbdd4bd84385ca05249cb97addaff400",
+  "ordinary_control_artifacts": {
+    "all_four_step20_inspections_passed": true,
+    "both_early_steady_checkpoint_payload_comparisons_exact": true,
+    "end_inventory_unchanged": true,
+    "first_observed_allocated_payload_inventory_sha256": "fe464f0331dffc12cf78f35b0b70e7dbbd8643628dc850d077945eb1820b4592",
+    "new_training_updates": 0
+  },
+  "outer_stage_costs": [
+    {
+      "elapsed_seconds": 22.54535885900259,
+      "exit_code": 0,
+      "name": "allocation_preflight"
+    },
+    {
+      "elapsed_seconds": 0.06596069713123143,
+      "exit_code": 0,
+      "name": "verify_preserved_calibration_failure"
+    },
+    {
+      "elapsed_seconds": 46.828407000983134,
+      "exit_code": 0,
+      "name": "verify_corrected_recovery_config_only"
+    },
+    {
+      "elapsed_seconds": 7.6755223968066275,
+      "exit_code": 0,
+      "name": "profile_checkpoint_inventory_begin"
+    },
+    {
+      "elapsed_seconds": 9.679107485106215,
+      "exit_code": 0,
+      "name": "compare_profile_bf16_early_steady"
+    },
+    {
+      "elapsed_seconds": 9.929009001003578,
+      "exit_code": 0,
+      "name": "compare_profile_nf4_early_steady"
+    },
+    {
+      "elapsed_seconds": 6.373496122891083,
+      "exit_code": 0,
+      "name": "inspect_profile_bf16_early_step20"
+    },
+    {
+      "elapsed_seconds": 6.4235003150533885,
+      "exit_code": 0,
+      "name": "inspect_profile_bf16_steady_step20"
+    },
+    {
+      "elapsed_seconds": 6.424875075928867,
+      "exit_code": 0,
+      "name": "inspect_profile_nf4_early_step20"
+    },
+    {
+      "elapsed_seconds": 6.37339468090795,
+      "exit_code": 0,
+      "name": "inspect_profile_nf4_steady_step20"
+    },
+    {
+      "elapsed_seconds": 252.4890950070694,
+      "exit_code": 0,
+      "name": "score_bf16_ordinary_prefix20"
+    },
+    {
+      "elapsed_seconds": 217.4975494099781,
+      "exit_code": 0,
+      "name": "score_nf4_ordinary_prefix20"
+    },
+    {
+      "elapsed_seconds": 4.671696808189154,
+      "exit_code": 0,
+      "name": "profile_checkpoint_inventory_end"
+    },
+    {
+      "elapsed_seconds": 1304.6838496790733,
+      "exit_code": 0,
+      "name": "residual_recovery_four_update_corrected_validation"
+    }
+  ],
+  "preserved_history": {
+    "original_calibration_gpu_seconds": 1755,
+    "original_calibration_state": "FAILED",
+    "original_exposed_regression_nll_relative_increase": 0.04179491590591922,
+    "original_failure": "Private recovery plan supplied training-calibration rows as validation; the unchanged source-overlap guard refused them before model training.",
+    "original_recovery_passed": false,
+    "public_calibration_artifact": "native_qlora_calibration_sensitivity_1ac6a7f.json",
+    "public_calibration_artifact_sha256": "1b7c20b8242ea7d11d81bcf96687880db5a0382a0ba929dad745f8c458500767",
+    "unchanged_nll_noninferiority_margin": 0.02,
+    "untrained_residual_accuracy_lower_than_zero_B_nf4": true
+  },
+  "protocol": "cosmos.native-qlora-residual-controls-recovery-evidence.v1",
+  "release_qualified": false,
+  "remaining_gates": [
+    "Prospectively lock one matched BF16/control/residual full584 development checkpoint/evaluation grid and resources before running it; no automatic300-update sweep.",
+    "Offer preprocessing/runtime optimizations equally to the strong BF16 control and account for initializer, compilation, calibration, loading, scoring and artifact costs.",
+    "Demonstrate the separately predeclared accuracy/NLL and complete time-to-quality targets; this training64 screen establishes neither.",
+    "Resolve independent final-data availability; exposed development/regression/formerly untouched diagnostic rows are not a new final test.",
+    "Retain raw incomplete host readings and qualify actual resource scope; no host residency or24GiB pass is inferred here."
+  ],
+  "residual_recovery": {
+    "adapter_parameter_dtype": "float32",
+    "complete": true,
+    "completion_sha256": "4c9654186c447b56e3d8bb4a4c89869914b26f6b75b3e26d85e1555be2bbf695",
+    "fresh_probe_adapter_updates": {
+      "A": 252,
+      "B": 252
+    },
+    "initialization_manifest_sha256": "0d0c193035ad2520cf23ecf48d34db3750b181d7aa82783e0a661cfcb9d9d353",
+    "initialized_model_identity_unchanged_from_residual20": true,
+    "inner_stages": 15,
+    "interruption_marker_exit_code": 86,
+    "interruption_modes": [
+      "boundary",
+      "accumulation"
+    ],
+    "interruption_torchrun_exit_code": 1,
+    "native_numerical_update_comparisons": 4,
+    "optimizer_adapter_tensors": 504,
+    "probe_data_source": "same training-calibration64",
+    "quantized_base_changed": false,
+    "reference_updates": 4,
+    "reload_comparison": {
+      "atol": 0.0,
+      "differences": {
+        "image": {
+          "logits_max_abs": 0.0,
+          "loss_abs": 0.0
+        },
+        "text": {
+          "logits_max_abs": 0.0,
+          "loss_abs": 0.0
+        },
+        "video": {
+          "logits_max_abs": 0.0,
+          "loss_abs": 0.0
+        }
+      },
+      "passed": true,
+      "rtol": 0.0
+    },
+    "resumed_steps_compared": [
+      3,
+      4
+    ],
+    "scope": "Actual allocated native checks replayed from their exact source/commands/metadata; no checkpoint or logits tensor reread by this analysis.",
+    "source_and_resumed_checkpoint_model_optimizer_rng_data_controls_exact": true,
+    "source_checkpoint_step": 2,
+    "training_data_rows": 4611,
+    "validation_source": "existing exposed development584, bounded to4 rows for the recovery canary"
+  },
+  "scope": "Single-seed training-calibration comparison and separately completed four-update residual recovery. No held-out quality, speed, memory-budget or release qualification.",
+  "sources": {
+    "independent_checkpoint_review_sha256": "a109e888fe6a950496dd23e65b37dc09b9d195a22473c5946976abf4c3ffe5bb",
+    "independent_report_clearance_sha256": "864ff3d31dafd127edb087b8b805f95d3ff74b528ecbdc25f037cbd11e1efb4e",
+    "independent_review_sha256": "0e101abca64cf59f45efbeba463a74c75a49f0f003c6a6faf22bdd857dacf243",
+    "projection_source_sha256": "d5043a1e337bd116a47a559f593a0be63ac85d1a283edd00285c3e3960eba77e",
+    "scientific_review_sha256": "4c35438c6dbc53097c1fecae2fadca42182956c2d27e1152b2d3e33fb6aad6d1",
+    "terminal_capture_sha256": "37d9e11a8ba490182d279801eedeffac4333010d5c876617acd31d0f1444af27"
+  },
+  "states": {
+    "bf16_ordinary_prefix20": {
+      "adapter_state": "reloaded_checkpoint",
+      "adapter_tensors_sha256": "62dcfcf214c5d2728317275f392efd979abd1d4996f977ab77a0996f2f6df721",
+      "correct_answers": 50,
+      "metrics": {
+        "answer_nll": 0.47772297263145447,
+        "native_supervised_tokens": 128,
+        "restricted_choice_accuracy": 0.78125,
+        "restricted_choice_nll": 0.4767121374607086,
+        "restricted_choice_tied_rows": 2,
+        "rows": 64,
+        "strict_first_token_accuracy": 0.78125,
+        "strict_first_token_tied_rows": 2,
+        "token_weighted_ce": 0.23894849070711643,
+        "unique_exact_video_content_clusters": 64,
+        "valid_letter_rate": 1.0
+      },
+      "model_identity_sha256": "8e7ed050bb94d9a028777e08f5d10d0cc9305ba7e60218db3737e2a517f94cc2",
+      "origin": "completed_controls_followup",
+      "outer_stage_seconds": 252.4890950070694,
+      "scorer_seconds": 246.03090871707536
+    },
+    "bf16_zero_B": {
+      "adapter_state": "initial_zero_B_frozen_base",
+      "adapter_tensors_sha256": "18ddd2ae84387afbfd50f064b683508b40a261a6f1d8973cced595b9aad10c05",
+      "correct_answers": 35,
+      "metrics": {
+        "answer_nll": 2.2939605116844177,
+        "native_supervised_tokens": 128,
+        "restricted_choice_accuracy": 0.546875,
+        "restricted_choice_nll": 2.293957471847534,
+        "restricted_choice_tied_rows": 3,
+        "rows": 64,
+        "strict_first_token_accuracy": 0.546875,
+        "strict_first_token_tied_rows": 3,
+        "token_weighted_ce": 1.1476071144652522,
+        "unique_exact_video_content_clusters": 64,
+        "valid_letter_rate": 1.0
+      },
+      "model_identity_sha256": "8e7ed050bb94d9a028777e08f5d10d0cc9305ba7e60218db3737e2a517f94cc2",
+      "origin": "completed_component_of_preserved_failed_calibration",
+      "outer_stage_seconds": 223.00594504002947,
+      "scorer_seconds": 216.0296561330324
+    },
+    "nf4_ordinary_prefix20": {
+      "adapter_state": "reloaded_checkpoint",
+      "adapter_tensors_sha256": "285ab31e02fa402b37ff09fa9214c32eb41989ec291ff49195e615e4c52add77",
+      "correct_answers": 49,
+      "metrics": {
+        "answer_nll": 0.4934753477573395,
+        "native_supervised_tokens": 128,
+        "restricted_choice_accuracy": 0.765625,
+        "restricted_choice_nll": 0.4923996031284332,
+        "restricted_choice_tied_rows": 0,
+        "rows": 64,
+        "strict_first_token_accuracy": 0.765625,
+        "strict_first_token_tied_rows": 0,
+        "token_weighted_ce": 0.2469151158220484,
+        "unique_exact_video_content_clusters": 64,
+        "valid_letter_rate": 1.0
+      },
+      "model_identity_sha256": "c9553a7c640abe0b522901ec0aa76c172004504553ad75ae4efb43500b5ebc2b",
+      "origin": "completed_controls_followup",
+      "outer_stage_seconds": 217.4975494099781,
+      "scorer_seconds": 211.2165018368978
+    },
+    "nf4_residual_trained": {
+      "adapter_state": "reloaded_checkpoint",
+      "adapter_tensors_sha256": "6a3929a4663a0a258aa5c2613d0ae8ddab77a3a6fd9cdfc732501675b7b73d8a",
+      "correct_answers": 51,
+      "metrics": {
+        "answer_nll": 0.4452225863933563,
+        "native_supervised_tokens": 128,
+        "restricted_choice_accuracy": 0.796875,
+        "restricted_choice_nll": 0.44458138942718506,
+        "restricted_choice_tied_rows": 2,
+        "rows": 64,
+        "strict_first_token_accuracy": 0.796875,
+        "strict_first_token_tied_rows": 2,
+        "token_weighted_ce": 0.2226887984052155,
+        "unique_exact_video_content_clusters": 64,
+        "valid_letter_rate": 1.0
+      },
+      "model_identity_sha256": "65dc4dd020dbdae338933b9fd079d36d8743694d791c2775b6eb9e988e7f5cd1",
+      "origin": "completed_component_of_preserved_failed_calibration",
+      "outer_stage_seconds": 232.59277818002738,
+      "scorer_seconds": 224.44930439291056
+    },
+    "nf4_residual_untrained": {
+      "adapter_state": "residual_initialized_untrained_adapter",
+      "adapter_tensors_sha256": "f20e3f21da6ea11b33c4057daff77a21dd26be60071f00ffac3cd35eb1b9fcc8",
+      "correct_answers": 33,
+      "metrics": {
+        "answer_nll": 2.0908975303173065,
+        "native_supervised_tokens": 128,
+        "restricted_choice_accuracy": 0.515625,
+        "restricted_choice_nll": 2.0908933579921722,
+        "restricted_choice_tied_rows": 1,
+        "rows": 64,
+        "strict_first_token_accuracy": 0.515625,
+        "strict_first_token_tied_rows": 1,
+        "token_weighted_ce": 1.045669634080988,
+        "unique_exact_video_content_clusters": 64,
+        "valid_letter_rate": 1.0
+      },
+      "model_identity_sha256": "65dc4dd020dbdae338933b9fd079d36d8743694d791c2775b6eb9e988e7f5cd1",
+      "origin": "completed_component_of_preserved_failed_calibration",
+      "outer_stage_seconds": 220.1406273129396,
+      "scorer_seconds": 212.5182553670602
+    },
+    "nf4_zero_B": {
+      "adapter_state": "initial_zero_B_frozen_base",
+      "adapter_tensors_sha256": "18ddd2ae84387afbfd50f064b683508b40a261a6f1d8973cced595b9aad10c05",
+      "correct_answers": 34,
+      "metrics": {
+        "answer_nll": 2.103504866361618,
+        "native_supervised_tokens": 128,
+        "restricted_choice_accuracy": 0.53125,
+        "restricted_choice_nll": 2.10350102186203,
+        "restricted_choice_tied_rows": 2,
+        "rows": 64,
+        "strict_first_token_accuracy": 0.53125,
+        "strict_first_token_tied_rows": 2,
+        "token_weighted_ce": 1.0519861224309497,
+        "unique_exact_video_content_clusters": 64,
+        "valid_letter_rate": 1.0
+      },
+      "model_identity_sha256": "c9553a7c640abe0b522901ec0aa76c172004504553ad75ae4efb43500b5ebc2b",
+      "origin": "completed_component_of_preserved_failed_calibration",
+      "outer_stage_seconds": 201.49287286307663,
+      "scorer_seconds": 194.56492981500924
+    }
+  },
+  "training_only": true,
+  "workflow_revision": "5894e47170eb92e415c2eb5a8e995af28d69ea79"
+}

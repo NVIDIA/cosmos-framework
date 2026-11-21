@@ -1,0 +1,989 @@
+{
+  "allocation_cost": {
+    "allocated_cpu_hours": 4.16,
+    "allocated_cpu_seconds": 14976,
+    "gpu_hours": 0.26,
+    "gpu_seconds": 936,
+    "outside_stage_timer_seconds": 52.93998525291681,
+    "plan_labelled_bf16_stage_seconds": 0.0,
+    "plan_labelled_nf4_stage_seconds": 751.4219123618677,
+    "plan_labelled_shared_stage_seconds": 108.89378507249057,
+    "scope": "Every actual allocation second counted once, including collector fixtures, config checks, both native commands/inspections and failed measurement. Shared and unlabelled costs remain separate; prior trials are not recharged.",
+    "unlabelled_allocation_preflight_seconds": 22.74431731272489
+  },
+  "cells": [
+    {
+      "activation_checkpointing": "none",
+      "memory": {
+        "allocator_evidence_complete": true,
+        "allocator_peak_allocated_bytes": 12815394304,
+        "allocator_peak_reserved_bytes": 13123977216,
+        "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+        "phases": {
+          "checkpoint_write": {
+            "allocator_peak_allocated_bytes": 8732826112,
+            "allocator_peak_reserved_bytes": 13123977216,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 10.06778054870665,
+              "mean": 10.06778054870665,
+              "median": 10.06778054870665,
+              "p95": 10.06778054870665,
+              "sum": 10.06778054870665
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 14195621888
+          },
+          "first_update": {
+            "allocator_peak_allocated_bytes": 11867146240,
+            "allocator_peak_reserved_bytes": 12475957248,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 13.874176089651883,
+              "mean": 13.874176089651883,
+              "median": 13.874176089651883,
+              "p95": 13.874176089651883,
+              "sum": 13.874176089651883
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 13254000640
+          },
+          "initial_validation": {
+            "allocator_peak_allocated_bytes": 7811153408,
+            "allocator_peak_reserved_bytes": 8002732032,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 40.468700599856675,
+              "mean": 40.468700599856675,
+              "median": 40.468700599856675,
+              "p95": 40.468700599856675,
+              "sum": 40.468700599856675
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 9074376704
+          },
+          "loading": {
+            "allocator_peak_allocated_bytes": 7765099520,
+            "allocator_peak_reserved_bytes": 7790919680,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 18.577880202792585,
+              "mean": 18.577880202792585,
+              "median": 18.577880202792585,
+              "p95": 18.577880202792585,
+              "sum": 18.577880202792585
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 8858370048
+          },
+          "post_checkpoint_boundary": {
+            "allocator_peak_allocated_bytes": 8879521792,
+            "allocator_peak_reserved_bytes": 13123977216,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 15.819041767157614,
+              "mean": 15.819041767157614,
+              "median": 15.819041767157614,
+              "p95": 15.819041767157614,
+              "sum": 15.819041767157614
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 14195621888
+          },
+          "trainer_setup": {
+            "allocator_peak_allocated_bytes": 7663524864,
+            "allocator_peak_reserved_bytes": 7790919680,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 0.04674367047846317,
+              "mean": 0.04674367047846317,
+              "median": 0.04674367047846317,
+              "p95": 0.04674367047846317,
+              "sum": 0.04674367047846317
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_owned_device_process_peak_bytes": null
+          },
+          "updates": {
+            "allocator_peak_allocated_bytes": 12815394304,
+            "allocator_peak_reserved_bytes": 13123977216,
+            "interval_seconds": {
+              "count": 19,
+              "maximum": 13.340217570774257,
+              "mean": 9.962495929463522,
+              "median": 9.520201274193823,
+              "p95": 13.281279778573662,
+              "sum": 189.2874226598069
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 14195621888
+          },
+          "validation_or_boundary_overhead": {
+            "allocator_peak_allocated_bytes": 8768998912,
+            "allocator_peak_reserved_bytes": 13123977216,
+            "interval_seconds": {
+              "count": 20,
+              "maximum": 0.0425284830853343,
+              "mean": 0.021338233118876816,
+              "median": 0.019436492584645748,
+              "p95": 0.024804931366816177,
+              "sum": 0.4267646623775363
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_owned_device_process_peak_bytes": null
+          }
+        },
+        "sampled": {
+          "device_peak_bytes": 14929821696,
+          "errors": [
+            "incomplete_host_pss"
+          ],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": false,
+          "host_pss_sum_peak_bytes": null,
+          "host_rss_sum_peak_bytes": null,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 373.7619936466217,
+          "owned_device_process_peak_bytes": 14195621888,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 293,
+          "sampling_gap_seconds": {
+            "count": 292,
+            "maximum": 1.4363040924072266,
+            "mean": 1.2800068275569236,
+            "median": 1.2836765050888062,
+            "p95": 1.3022904872894288,
+            "sum": 373.7619936466217
+          }
+        }
+      },
+      "native": {
+        "initial_validation_seconds": 40.44127750955522,
+        "no_skips_evidence": "Explicit per-update applied outcomes, zero rejection counters and matching optimizer/attempt clocks; checkpoint controls audited separately.",
+        "preprocessing_counter_scope": "Cumulative counters can include initial/in-loop validation. Processing and waiting overlap execution; never sum them into wall time.",
+        "preprocessing_last_cumulative_counters": {
+          "preprocessing_samples_bytes": 266654565.0,
+          "preprocessing_samples_hits": 0.0,
+          "preprocessing_samples_limit": 268435456.0,
+          "preprocessing_samples_misses": 224.0,
+          "preprocessing_timing_processing_calls": 224.0,
+          "preprocessing_timing_processing_seconds": 196.18520063068718,
+          "preprocessing_timing_wait_calls": 224.0,
+          "preprocessing_timing_wait_seconds": 153.0744933458045,
+          "preprocessing_videos_bytes": 749236395.0,
+          "preprocessing_videos_hits": 97.0,
+          "preprocessing_videos_limit": 805306368.0,
+          "preprocessing_videos_misses": 127.0
+        },
+        "scheduled_validation_seconds": 15.731598628684878,
+        "updates": [
+          {
+            "examples": 8,
+            "seconds": 13.872499245218933,
+            "step": 1,
+            "supervised_ce": 1.3097562954644673,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 11.985361502505839,
+            "step": 2,
+            "supervised_ce": 0.3474072049222059,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 11.760853064246476,
+            "step": 3,
+            "supervised_ce": 2.8275751963374205,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 11.687907961197197,
+            "step": 4,
+            "supervised_ce": 0.9738188916622903,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.200856852345169,
+            "step": 5,
+            "supervised_ce": 0.7597503548540772,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.279148914851248,
+            "step": 6,
+            "supervised_ce": 1.770553919541257,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 9.308493072167039,
+            "step": 7,
+            "supervised_ce": 2.4563302121350716,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.33964042365551,
+            "step": 8,
+            "supervised_ce": 0.8875678363328916,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 10.891491076909006,
+            "step": 9,
+            "supervised_ce": 0.22309658736276106,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 11.782511560246348,
+            "step": 10,
+            "supervised_ce": 0.5776137315760934,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 6.1455756183713675,
+            "step": 11,
+            "supervised_ce": 0.8419632771110628,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 9.123154496774077,
+            "step": 12,
+            "supervised_ce": 0.6731003288732609,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.875853817909956,
+            "step": 13,
+            "supervised_ce": 0.24254747628583573,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 9.517948044463992,
+            "step": 14,
+            "supervised_ce": 0.47605757927522063,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 6.727534396573901,
+            "step": 15,
+            "supervised_ce": 0.2870336589985527,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.1016938630491495,
+            "step": 16,
+            "supervised_ce": 0.41458314284682274,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 12.350331800989807,
+            "step": 17,
+            "supervised_ce": 0.34750998951494694,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.743754736147821,
+            "step": 18,
+            "supervised_ce": 0.28988343104720116,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 8.35421719122678,
+            "step": 19,
+            "supervised_ce": 0.11542056582402438,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.1719638761132956,
+            "step": 20,
+            "supervised_ce": 0.329000489320606,
+            "supervised_tokens": 16
+          }
+        ],
+        "validation": [
+          {
+            "examples": 64.0,
+            "seconds": 40.44127750955522,
+            "step": 0,
+            "supervised_ce": 0.6279687356156636,
+            "supervised_tokens": 128.0
+          },
+          {
+            "examples": 64.0,
+            "seconds": 15.731598628684878,
+            "step": 20,
+            "supervised_ce": 0.11526719094399596,
+            "supervised_tokens": 128.0
+          }
+        ],
+        "windows": {
+          "updates_1_300": {
+            "complete": false
+          },
+          "updates_31_300": {
+            "complete": false
+          },
+          "updates_6_30": {
+            "complete": false
+          }
+        }
+      },
+      "native_command_seconds": 374.3549194559455,
+      "own_checkpoint": {
+        "adapter_tensors": 504,
+        "healthy_completed_boundary": true,
+        "optimizer_step": 20,
+        "parameter_dtype": "float32"
+      },
+      "own_checkpoint_inspection_seconds": 6.273619420826435,
+      "sampled_24gib_screen": {
+        "budget_bytes": 25769803776,
+        "eligible_for_higher_microbatch": false,
+        "evidence_complete": false,
+        "observed_peak_within_budget": null,
+        "observed_process_peak_lower_bound_bytes": 14195621888,
+        "reasons": [
+          "incomplete_host_pss"
+        ],
+        "sampled_peaks_are_lower_bounds": true,
+        "scope": "Observed owned-device-process peak during native training, including load, validation and checkpoint writes; not physical device capacity.",
+        "unseen_short_peaks_remain_possible": true
+      },
+      "update_seconds_sum": 203.2207915149629
+    },
+    {
+      "activation_checkpointing": "full",
+      "memory": {
+        "allocator_evidence_complete": true,
+        "allocator_peak_allocated_bytes": 9106409984,
+        "allocator_peak_reserved_bytes": 9525264384,
+        "phase_semantics": "Peaks end at the current boundary after the preceding reset. checkpoint_begin records the preceding validation/boundary window; only checkpoint_complete after checkpoint_begin is checkpoint writing. Loading excludes earlier source verification and process startup.",
+        "phases": {
+          "checkpoint_write": {
+            "allocator_peak_allocated_bytes": 8740239872,
+            "allocator_peak_reserved_bytes": 9525264384,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 10.066241350024939,
+              "mean": 10.066241350024939,
+              "median": 10.066241350024939,
+              "p95": 10.066241350024939,
+              "sum": 10.066241350024939
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 10596909056
+          },
+          "first_update": {
+            "allocator_peak_allocated_bytes": 8738128384,
+            "allocator_peak_reserved_bytes": 8950644736,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 14.38759539462626,
+              "mean": 14.38759539462626,
+              "median": 14.38759539462626,
+              "p95": 14.38759539462626,
+              "sum": 14.38759539462626
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 9674162176
+          },
+          "initial_validation": {
+            "allocator_peak_allocated_bytes": 7811153408,
+            "allocator_peak_reserved_bytes": 8002732032,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 40.93645083159208,
+              "mean": 40.93645083159208,
+              "median": 40.93645083159208,
+              "p95": 40.93645083159208,
+              "sum": 40.93645083159208
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 9074376704
+          },
+          "loading": {
+            "allocator_peak_allocated_bytes": 7765099520,
+            "allocator_peak_reserved_bytes": 7790919680,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 16.825116598047316,
+              "mean": 16.825116598047316,
+              "median": 16.825116598047316,
+              "p95": 16.825116598047316,
+              "sum": 16.825116598047316
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 8858370048
+          },
+          "post_checkpoint_boundary": {
+            "allocator_peak_allocated_bytes": 8887250432,
+            "allocator_peak_reserved_bytes": 9525264384,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 16.546938713639975,
+              "mean": 16.546938713639975,
+              "median": 16.546938713639975,
+              "p95": 16.546938713639975,
+              "sum": 16.546938713639975
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 10596909056
+          },
+          "trainer_setup": {
+            "allocator_peak_allocated_bytes": 7663524864,
+            "allocator_peak_reserved_bytes": 7790919680,
+            "interval_seconds": {
+              "count": 1,
+              "maximum": 0.05579100642353296,
+              "mean": 0.05579100642353296,
+              "median": 0.05579100642353296,
+              "p95": 0.05579100642353296,
+              "sum": 0.05579100642353296
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_owned_device_process_peak_bytes": null
+          },
+          "updates": {
+            "allocator_peak_allocated_bytes": 9106409984,
+            "allocator_peak_reserved_bytes": 9525264384,
+            "interval_seconds": {
+              "count": 19,
+              "maximum": 13.686219364404678,
+              "mean": 10.574890965497808,
+              "median": 10.103646848350763,
+              "p95": 13.640157006960361,
+              "sum": 200.92292834445834
+            },
+            "sampled_errors": [
+              "incomplete_host_pss"
+            ],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_owned_device_process_peak_bytes": 10596909056
+          },
+          "validation_or_boundary_overhead": {
+            "allocator_peak_allocated_bytes": 8788585984,
+            "allocator_peak_reserved_bytes": 9525264384,
+            "interval_seconds": {
+              "count": 20,
+              "maximum": 0.04801647271960974,
+              "mean": 0.030223214300349355,
+              "median": 0.02881154092028737,
+              "p95": 0.03356778593733908,
+              "sum": 0.6044642860069871
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_owned_device_process_peak_bytes": null
+          }
+        },
+        "sampled": {
+          "device_peak_bytes": 11331108864,
+          "errors": [
+            "incomplete_host_pss"
+          ],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": false,
+          "host_pss_sum_peak_bytes": null,
+          "host_rss_sum_peak_bytes": null,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 362.5909016132355,
+          "owned_device_process_peak_bytes": 10596909056,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 281,
+          "sampling_gap_seconds": {
+            "count": 280,
+            "maximum": 1.3581757545471191,
+            "mean": 1.2949675057615553,
+            "median": 1.3017399311065674,
+            "p95": 1.3153216242790222,
+            "sum": 362.5909016132355
+          }
+        }
+      },
+      "native": {
+        "initial_validation_seconds": 40.89141329564154,
+        "no_skips_evidence": "Explicit per-update applied outcomes, zero rejection counters and matching optimizer/attempt clocks; checkpoint controls audited separately.",
+        "preprocessing_counter_scope": "Cumulative counters can include initial/in-loop validation. Processing and waiting overlap execution; never sum them into wall time.",
+        "preprocessing_last_cumulative_counters": {
+          "preprocessing_samples_bytes": 266654565.0,
+          "preprocessing_samples_hits": 0.0,
+          "preprocessing_samples_limit": 268435456.0,
+          "preprocessing_samples_misses": 224.0,
+          "preprocessing_timing_processing_calls": 224.0,
+          "preprocessing_timing_processing_seconds": 197.84235197398812,
+          "preprocessing_timing_wait_calls": 224.0,
+          "preprocessing_timing_wait_seconds": 123.80503377038985,
+          "preprocessing_videos_bytes": 749236395.0,
+          "preprocessing_videos_hits": 97.0,
+          "preprocessing_videos_limit": 805306368.0,
+          "preprocessing_videos_misses": 127.0
+        },
+        "scheduled_validation_seconds": 16.436865291558206,
+        "updates": [
+          {
+            "examples": 8,
+            "seconds": 14.38423041254282,
+            "step": 1,
+            "supervised_ce": 1.3097562954644673,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 12.37506643962115,
+            "step": 2,
+            "supervised_ce": 0.3474072049222059,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 12.197451882064342,
+            "step": 3,
+            "supervised_ce": 2.8275751963374205,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 11.976948399096727,
+            "step": 4,
+            "supervised_ce": 0.9738188916622903,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.641413136385381,
+            "step": 5,
+            "supervised_ce": 0.7597503548540772,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.689992695115507,
+            "step": 6,
+            "supervised_ce": 1.770553919541257,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 10.110142231918871,
+            "step": 7,
+            "supervised_ce": 2.4563302121350716,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 13.615189706906676,
+            "step": 8,
+            "supervised_ce": 0.8875678363328916,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 11.433573956601322,
+            "step": 9,
+            "supervised_ce": 0.22309658736276106,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 12.377245561219752,
+            "step": 10,
+            "supervised_ce": 0.5776137315760934,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 6.540272964164615,
+            "step": 11,
+            "supervised_ce": 0.8419632771110628,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 9.634050648659468,
+            "step": 12,
+            "supervised_ce": 0.6731003288732609,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 8.932597266510129,
+            "step": 13,
+            "supervised_ce": 0.24254747628583573,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 9.924300810322165,
+            "step": 14,
+            "supervised_ce": 0.47605757927522063,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 7.566784809343517,
+            "step": 15,
+            "supervised_ce": 0.2870336589985527,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 8.542044737376273,
+            "step": 16,
+            "supervised_ce": 0.41458314284682274,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 12.726937625557184,
+            "step": 17,
+            "supervised_ce": 0.34750998951494694,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 8.780579912476242,
+            "step": 18,
+            "supervised_ce": 0.28988343104720116,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 8.764255305752158,
+            "step": 19,
+            "supervised_ce": 0.11542056582402438,
+            "supervised_tokens": 16
+          },
+          {
+            "examples": 8,
+            "seconds": 8.187182739377022,
+            "step": 20,
+            "supervised_ce": 0.329000489320606,
+            "supervised_tokens": 16
+          }
+        ],
+        "validation": [
+          {
+            "examples": 64.0,
+            "seconds": 40.89141329564154,
+            "step": 0,
+            "supervised_ce": 0.6279687356156636,
+            "supervised_tokens": 128.0
+          },
+          {
+            "examples": 64.0,
+            "seconds": 16.436865291558206,
+            "step": 20,
+            "supervised_ce": 0.11526719094399596,
+            "supervised_tokens": 128.0
+          }
+        ],
+        "windows": {
+          "updates_1_300": {
+            "complete": false
+          },
+          "updates_31_300": {
+            "complete": false
+          },
+          "updates_6_30": {
+            "complete": false
+          }
+        }
+      },
+      "native_command_seconds": 363.9031275929883,
+      "own_checkpoint": {
+        "adapter_tensors": 504,
+        "healthy_completed_boundary": true,
+        "optimizer_step": 20,
+        "parameter_dtype": "float32"
+      },
+      "own_checkpoint_inspection_seconds": 6.7241573967039585,
+      "sampled_24gib_screen": {
+        "budget_bytes": 25769803776,
+        "eligible_for_higher_microbatch": false,
+        "evidence_complete": false,
+        "observed_peak_within_budget": null,
+        "observed_process_peak_lower_bound_bytes": 10596909056,
+        "reasons": [
+          "incomplete_host_pss"
+        ],
+        "sampled_peaks_are_lower_bounds": true,
+        "scope": "Observed owned-device-process peak during native training, including load, validation and checkpoint writes; not physical device capacity.",
+        "unseen_short_peaks_remain_possible": true
+      },
+      "update_seconds_sum": 215.40026124101132
+    }
+  ],
+  "collector_failure_diagnosis": {
+    "failed_discovery_to_pin_bindings": 2,
+    "first_incomplete_row": {
+      "reason": "membership_transition_retry_exhausted",
+      "row_index": 5
+    },
+    "historical_samples_changed": false,
+    "interpretation": "The errors do not demonstrate descriptor corruption, PID reuse or a hardware fault. A separately observed released zombie was not the cause. Passing132 isolated collector fixtures and four actual-process properties did not cover this persistent unbound-tracker failure.",
+    "mechanism": "Short-lived discovered children vanished before identity binding. The pre-pin stat read returned ENOENT, and the collector synthesized ESRCH before opening a pidfd. It retained fd=None/error records in its tracked set; they could not produce the validated release required for retirement. Repeated poll(None) generated EBADF and contaminated later samples.",
+    "missing_interval_memory_inferred": false,
+    "prospective_repair_qualified": false,
+    "unchanged_failed_binding_row_range_inclusive": [
+      6,
+      671
+    ],
+    "unchanged_failed_binding_rows": 666
+  },
+  "completed": true,
+  "configuration": {
+    "adapter_compute_dtype": "float32",
+    "adapter_initialization": "kaiming_A_zero_B",
+    "adapter_parameter_gradient_optimizer_dtype": "float32",
+    "adapter_tensors": 504,
+    "alpha": 64,
+    "base_compute_dtype": "bfloat16",
+    "compile": false,
+    "effective_batch": 8,
+    "full_logits": true,
+    "gradient_accumulation": 8,
+    "learning_rate": 0.0001,
+    "max_sequence_length": 4096,
+    "microbatch": 1,
+    "model": "Qwen/Qwen3-VL-8B-Instruct",
+    "preprocessing_cache_bytes": 1073741824,
+    "preprocessing_prefetch": true,
+    "preprocessing_workers": 1,
+    "profile_tracing": false,
+    "quantized_base": "nested_nf4",
+    "quantized_language_matrices": 252,
+    "rank": 32,
+    "seed": 42,
+    "video_frames": 8,
+    "video_longest_edge": 524288,
+    "video_shortest_edge": 32768
+  },
+  "end_to_end_speed_qualified": false,
+  "gates": {
+    "actual_host_fixture_cases": 132,
+    "actual_host_properties": 4,
+    "cross_activation_checkpointing_payload_equality_tested": false,
+    "host_fixture_skips_failures_errors": 0,
+    "outer_stages": 10,
+    "own_reload_or_recovery_executed": false,
+    "sampler_exit_code": 0,
+    "unexpected_outer_failures": 0
+  },
+  "limitations": [
+    "No full584 task-quality scoring, fixed-target attainment or independent final evaluation.",
+    "Twenty updates remain inside30-update warmup; no steady-state300-update throughput qualification.",
+    "Own20 checkpoint inspection does not establish fresh reload, interruption recovery or cross-AC payload equality.",
+    "NoAC's update sum is lower but its complete native command is slower in this run; no10% end-to-end time-to-quality qualification.",
+    "The collector failure is retained and blocks complete matched-resource claims; future repairs cannot repair this observation.",
+    "Original quality margins, prior negative results and independent-final-data requirements remain unchanged."
+  ],
+  "memory": {
+    "collector_method": "proc-identity-state-read-attempts-v7",
+    "complete_samples": 5,
+    "error_occurrences_across_incomplete_samples": {
+      "discovery_identity_changed": 1,
+      "invalid_pidfd_binding": 666,
+      "invalid_pidfd_exit_proof": 666,
+      "invalid_post_discovery_exit_proof": 666,
+      "live_or_unknown_identity_unreadable": 666,
+      "live_or_unknown_memory_unreadable": 666,
+      "membership_transition_retry_exhausted": 22,
+      "process_key_identity_mismatch": 666,
+      "unbound_process_identity": 666,
+      "unproven_live_thread_memory": 4
+    },
+    "host_model_residency_estimate_available": false,
+    "incomplete_contiguous_row_range_inclusive": [
+      5,
+      671
+    ],
+    "incomplete_samples": 667,
+    "incomplete_samples_by_stage": {
+      "inspect_task_untraced_full_b1_nf4_step20": 5,
+      "inspect_task_untraced_none_b1_nf4_step20": 5,
+      "task_untraced_full_b1_nf4": 281,
+      "task_untraced_none_b1_nf4": 293,
+      "validate_exact_native_configs": 38,
+      "verify_actual_v7_host_fixtures": 45
+    },
+    "physical_24gb_support_qualified": false,
+    "raw_samples": 672,
+    "scope": "Every original raw row remains unchanged. Only five early startup samples have complete host records; their small host maxima are not model host-memory estimates. All293 noAC and281 full-AC native-stage host samples are incomplete, with null stage PSS/RSS. Valid GPU observations and allocator intervals are retained separately. Lower bounds are not unsampled maxima or whole-host/cgroup residency; the combined24GiB predicate remains incomplete.",
+    "timing_phases_sampled_host_complete": false,
+    "whole_parent_sampled": {
+      "device_peak_bytes": 14929821696,
+      "errors": [
+        "incomplete_host_pss"
+      ],
+      "gpu_memory_evidence_valid": true,
+      "host_pss_complete": false,
+      "host_pss_sum_peak_bytes": 100561920,
+      "host_rss_sum_peak_bytes": 120496128,
+      "nvml_capacity_bytes": 85899345920,
+      "observed_span_seconds": 860.1135783195496,
+      "owned_device_process_peak_bytes": 14195621888,
+      "peaks_are_sampled_lower_bounds": true,
+      "samples": 672,
+      "sampling_gap_seconds": {
+        "count": 671,
+        "maximum": 1.687939167022705,
+        "mean": 1.2818384177638593,
+        "median": 1.2862019538879395,
+        "p95": 1.3137283325195312,
+        "sum": 860.1135783195496
+      }
+    }
+  },
+  "native_revision": "1ac6a7ff975c3e7a2f8851b7495104ca9a1b1b77",
+  "native_wheel_sha256": "4b634e70f07968b3df0c69d2c5815179bbdd4bd84385ca05249cb97addaff400",
+  "prior_fixed_order_context": {
+    "cells": [
+      {
+        "activation_checkpointing": "full",
+        "native_command_seconds": 425.3744455379783,
+        "update_seconds_sum": 237.35659676493378
+      },
+      {
+        "activation_checkpointing": "none",
+        "native_command_seconds": 496.2175627480028,
+        "update_seconds_sum": 303.92916651192354
+      }
+    ],
+    "historical_anomalous_observations_retained": true,
+    "order": [
+      "full",
+      "none"
+    ],
+    "related_public_evidence": "native_qlora_untraced_b1_1ac6a7f.json",
+    "scope": "The earlier slow NF noAC observation remains intact. The reverse order is another diagnostic, not a controlled causal attribution or replacement of earlier costs/results."
+  },
+  "protocol": "cosmos.native-qlora-nf-no-ac-diagnostic-evidence.v1",
+  "qualification_scope": "NF4 rank32 reverse-order20-update timing and own committed-checkpoint inspections. Numerical metrics match across full/noAC; host telemetry is incomplete. No speed winner, fixed-quality target, noAC reload/recovery, cross-mode payload equality or release qualification.",
+  "quality_qualified": false,
+  "release_qualified": false,
+  "reverse_pair_result": {
+    "all20_numerical_updates_exact": true,
+    "compared_fields": [
+      "train/loss_avg",
+      "train/grad_norm",
+      "train/learning_rate",
+      "train/valid_token_count",
+      "train/valid_sequence_count",
+      "optim/optimizer_step",
+      "optim/attempt_id",
+      "optim/nonfinite_gradient",
+      "optim/nonfinite_loss",
+      "optim/nonfinite_skips_total",
+      "optim/nonfinite_skips_consecutive",
+      "optim/step_skipped",
+      "optim/finite_gradient_check_enabled"
+    ],
+    "excluded_observational_metrics": [
+      "timer/*",
+      "train/preprocessing_*",
+      "train/grad_clip_fraction"
+    ],
+    "none_over_full_native_command_ratio": 1.0287213576098941,
+    "none_update_sum_reduction_fraction": 0.05654343061553113,
+    "scope": "Metrics only; no comparison of full model/optimizer/control/RNG/data payloads across checkpointing modes.",
+    "speed_winner_selected": false
+  },
+  "source_sha256": {
+    "actual_host_proof": "754da1eaef6e0447e42790ae9c74bc4e45b4ef51cd5ae4bdb9860d60cbf6ab30",
+    "actual_host_xml": "f56e0acfbc064e4ea5e17c5d735c02f4666130e919c99de7407556fb30f2dbd7",
+    "collector_failure_diagnosis": "5d159e7e801ef7bc79794d065adb2b0cb848a2aefd9e9835eaf34157eb1ce2c6",
+    "independent_full_metadata_replay": "62e4b02b07c2701a8189a69aad2a14bf3ca4d66d224b1e1461cf39f8629434a2",
+    "original_collector_source": "080cab9f5cbadce9b83819fb054409b99a69031f3a1dffec13ef97f9ee9f1095",
+    "previous_fixed_order_review": "3f1e49968ee931592310d422e7a443b33d386a95f0980b01a35d22377ae7102b",
+    "projection_source": "21d3be04926f90d5a7f2a848063a36bae5e931e1cf1e8a8ac315c6104b7d7316",
+    "raw_host_samples": "581ff221c43838c294415ef502926a8ac4c2b8b491a3575bb631b5e24ed0adb5",
+    "submitted_plan": "20a21595797e5775558415450a0866f7805ec55df5a33b85fb06e72aeef0bbbc",
+    "terminal_capture": "0cd63f8e9363355ed8a510df8b5ad35f9e8c79f1c5aaa7a5e02f0726b4b96333",
+    "terminal_review": "b1358ba230eacc4fe75c43a3fadab7209ca68f60f555ef764b2876f58950149e"
+  },
+  "timing_design": {
+    "all_updates_within_warmup": true,
+    "development_source_rows": 584,
+    "order": [
+      "none",
+      "full"
+    ],
+    "quiet_window": "No other owned media workload ran during this diagnostic allocation.",
+    "randomized_repeated_comparison": false,
+    "schedule_cycle_steps": 300,
+    "scope": "One fresh process per cell and cold in-process preprocessing caches; filesystem/page-cache warmth was not controlled. Complete native command includes startup/source checks/loading,initial64 validation,20updates,final64 validation and checkpoint publication. Separate inspection and parent preflight are outside it; nested update/phase/preprocessing times must not be added again.",
+    "training_sequences_per_run": 160,
+    "training_source_rows": 4611,
+    "updates_per_run": 20,
+    "validation_examples_each": 64,
+    "validation_scope": "Exposed first64 development rows, one group/four media; native supervised-token CE is not full584 task accuracy or independent quality.",
+    "validation_steps": [
+      0,
+      20
+    ],
+    "warmup_steps": 30
+  },
+  "workflow_revision": "3cff9892e6061620cbe0fda50951c891381f0f0f"
+}

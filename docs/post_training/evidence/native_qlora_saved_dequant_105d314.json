@@ -1,0 +1,217 @@
+{
+  "allocation": {
+    "cpu_seconds": 3840,
+    "exit_code": "0:0",
+    "gpu_seconds": 240,
+    "state": "COMPLETED"
+  },
+  "correctness": {
+    "after_forward_and_successful_backward_zero_storage_assertions_passed": true,
+    "all_exact": true,
+    "candidate_max_simultaneous_blocks": 1,
+    "candidate_peak_live_dense_storage_bytes": 385875968,
+    "comparisons": 519,
+    "max_abs": 0,
+    "max_relative_l2": 0,
+    "scope": "Outputs, input gradients where required, all adapter gradients, and post-AdamW adapter parameters for3updates\u00d73variants; no claim of full-model or optimizer-state identity.",
+    "variants": [
+      {
+        "dequantizations_per_step": [
+          [
+            42,
+            28
+          ],
+          [
+            42,
+            28
+          ],
+          [
+            42,
+            28
+          ]
+        ],
+        "early_stop": true,
+        "input_requires_grad": true
+      },
+      {
+        "dequantizations_per_step": [
+          [
+            39,
+            28
+          ],
+          [
+            39,
+            28
+          ],
+          [
+            39,
+            28
+          ]
+        ],
+        "early_stop": true,
+        "input_requires_grad": false
+      },
+      {
+        "dequantizations_per_step": [
+          [
+            42,
+            28
+          ],
+          [
+            42,
+            28
+          ],
+          [
+            42,
+            28
+          ]
+        ],
+        "early_stop": false,
+        "input_requires_grad": true
+      }
+    ]
+  },
+  "effort_screen": {
+    "candidate_peak_allocated_bytes": [
+      1026670592,
+      1026670592
+    ],
+    "limit_bytes": 536870912,
+    "max_baseline_peak_allocated_bytes": 737771520,
+    "maximum_candidate_minus_baseline_peak_bytes": 288899072,
+    "median_wall_seconds": {
+      "bnb": 0.026786945993080735,
+      "saved_weight": 0.023671287926845253
+    },
+    "passed": true,
+    "ratio": 0.8836874473469174,
+    "reduction_percent": 11.63125526530826,
+    "scope": "Prospective engineering effort screen only; warm synthetic2block128token test with both packed models resident, no actual WTS/full-model/end-to-end qualification.",
+    "source_sha256": "3dfd0d2de65cf12cec645777ad23318eda3a8104d8f63075fd46cc192f354932"
+  },
+  "fixture_code_revision": "a545ac2953cac9f9da5cbd3466dfe584761239b5",
+  "hardware": {
+    "accelerator": "NVIDIA A100-SXM4-80GB",
+    "allocated_logical_cpus": 16,
+    "gpus": 1,
+    "host_memory_limit_gib": 64,
+    "physical_cpu_cores": 8
+  },
+  "limitations": [
+    "Two synthetic seven-linear blocks at128tokens; both packed models resident.",
+    "No attention/media/loading/head/full native train/reload/recovery or task-quality claim.",
+    "Single ABBA sequence and one allocation, not statistical end-to-end speed evidence.",
+    "Additional allocated-memory peak is not full process/device/host peak.",
+    "Exceptions abort the process; no in-process failed-backward recovery demonstrated.",
+    "Only permits bounded native implementation/actual-model testing under root admission."
+  ],
+  "native_code_revision": "105d31426da2927eeb5e01243d6db3bdec86ceb5",
+  "native_implementation_qualified": false,
+  "protocol": "cosmos.native-qlora-saved-dequant-effort-evidence.v1",
+  "raw_memory": {
+    "method": "proc-identity-state-read-attempts-v4",
+    "revalidated_samples": 125,
+    "scope": "Outer stage aggregates and sampled lower bounds, not per-arm true process/host peaks. Old-v4 incomplete flags are preserved. Host fixture report values are boundary snapshots.",
+    "source_sha256": "d75881003721c4d79bb54c07c8de03de87fa30b8bb15de4b5826e639bfc1e92e",
+    "stages": {
+      "allocation_preflight": {
+        "host_complete_samples": 1,
+        "host_incomplete_sample_indices": [],
+        "observed_complete_sample_pss_peak_bytes": 37603328,
+        "observed_foreign_gpu_process_samples": 0,
+        "observed_owned_process_nvml_peak_bytes": 0,
+        "samples": 1
+      },
+      "native105_fresh_kernel_gate": {
+        "host_complete_samples": 90,
+        "host_incomplete_sample_indices": [],
+        "observed_complete_sample_pss_peak_bytes": 2776113152,
+        "observed_foreign_gpu_process_samples": 0,
+        "observed_owned_process_nvml_peak_bytes": 769654784,
+        "samples": 90
+      },
+      "saved_dequant_mechanism_and_verification": {
+        "host_complete_samples": 32,
+        "host_incomplete_sample_indices": [
+          124
+        ],
+        "observed_complete_sample_pss_peak_bytes": 1782904832,
+        "observed_foreign_gpu_process_samples": 0,
+        "observed_owned_process_nvml_peak_bytes": 1690304512,
+        "samples": 33
+      },
+      "verify_native105_gate": {
+        "host_complete_samples": 1,
+        "host_incomplete_sample_indices": [],
+        "observed_complete_sample_pss_peak_bytes": 70844416,
+        "observed_foreign_gpu_process_samples": 0,
+        "observed_owned_process_nvml_peak_bytes": 0,
+        "samples": 1
+      }
+    }
+  },
+  "release_targets_changed": false,
+  "scope": "Completed synthetic mechanism experiment; admits native implementation only, not WTS, full-model, or end-to-end qualification.",
+  "software": {
+    "bitsandbytes": "0.49.2",
+    "torch": "2.11.0+cu128"
+  },
+  "source_sha256": {
+    "capture": "e4deb8f63abde1a9c29bb3515ed9a58ba197a5f5c3b9c4abc82b313394c365cb",
+    "fixed_effort_screen": "3dfd0d2de65cf12cec645777ad23318eda3a8104d8f63075fd46cc192f354932",
+    "independent_review": "96c9678aa11ce448cea457b03fe53587e9c93a396cf699b6f12f7f100af356ba",
+    "mechanism_report": "437167445eb21c18696d7c391fd96d9c7c910809a401301eb852cc2fe4e93b89",
+    "plan": "bdef8e14a48fe9e04edd7fd1179b1a4d43e295852cb56d3cb9c635a1493c6a0c",
+    "terminal_review": "a34911a39ff43b390249966d99271599728301879074c49eabcad267a0ae2699"
+  },
+  "source_test": "tools/native_qlora_qualification/tests/test_saved_dequant_cuda.py",
+  "stages": [
+    {
+      "elapsed_seconds": 22.445214530918747,
+      "exit_code": 0,
+      "name": "allocation_preflight"
+    },
+    {
+      "elapsed_seconds": 115.86577603593469,
+      "exit_code": 0,
+      "name": "native105_fresh_kernel_gate"
+    },
+    {
+      "elapsed_seconds": 1.267801817972213,
+      "exit_code": 0,
+      "name": "verify_native105_gate"
+    },
+    {
+      "elapsed_seconds": 41.517415980109945,
+      "exit_code": 0,
+      "name": "saved_dequant_mechanism_and_verification"
+    }
+  ],
+  "tests": {
+    "kernel-gate/gpu-tests.xml": {
+      "passed": 14,
+      "sha256": "87991c2ebd963a8bdfa449fbeb953d0b7dceb6af98084e34adcd0867972b3076"
+    },
+    "kernel-gate/higher-precision-tests.xml": {
+      "passed": 1,
+      "sha256": "790837c0e18cb1f9c44f23872cdab9596ef9e489ee77e2db6c21e52326ee2fe0"
+    },
+    "mechanism/tests.xml": {
+      "passed": 1,
+      "sha256": "1bd9ada572ee19002fcd35a0695b01faf26ca462595ba575bf602203b81da3ba"
+    }
+  },
+  "workload": {
+    "activation_checkpointing": "full nonreentrant",
+    "adapter_dtype": "float32",
+    "alpha": 64,
+    "base_compute_dtype": "bfloat16",
+    "base_format": "NF4 nested UINT8",
+    "both_packed_models_resident": true,
+    "data_or_full_model_loaded": false,
+    "linear_matrices_per_block": 7,
+    "rank": 32,
+    "sequence_tokens": 128,
+    "synthetic_language_blocks": 2
+  }
+}

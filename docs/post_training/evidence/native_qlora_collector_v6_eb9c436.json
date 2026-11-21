@@ -1,0 +1,97 @@
+{
+  "actual_fixture_properties": {
+    "actual_delayed_thread_pidfd_wait": {
+      "attempts": 2,
+      "complete": true,
+      "sample_sha256": "061bf8c9d61f968e269bb38ffdd5ffb00341c68d636ced8c734f84fbbc99fbcc"
+    },
+    "actual_live_thread_shared_mm": {
+      "attempts": 1,
+      "complete": true,
+      "sample_sha256": "70e2bec90be74a5a022af95a5cd14830fd89812c0001616c0d8b962bfc33499b"
+    },
+    "actual_pidfd_thread_exit_recollection": {
+      "attempts": 2,
+      "complete": true,
+      "sample_sha256": "5330a61f8c2d628e13d05bfcd86e37161c8bcf11f50574aa88dc6b01da07e18e"
+    }
+  },
+  "allocation_costs": {
+    "combined_allocated_cpu_hours": 1.288888888888889,
+    "combined_allocated_cpu_seconds": 4640,
+    "combined_allocated_gpu_seconds": 0,
+    "first_attempt": {
+      "allocated_cpu_seconds": 2288,
+      "allocated_cpus": 16,
+      "allocated_gpu_seconds": 0,
+      "elapsed_seconds": 143,
+      "reason": "Cold container/bootstrap startup exceeded the original full-suite admission margin; the unchanged deadline guard refused before pytest.",
+      "state": "FAILED",
+      "test_suite_started": false
+    },
+    "retry": {
+      "allocated_cpu_seconds": 2352,
+      "allocated_cpus": 16,
+      "allocated_gpu_seconds": 0,
+      "elapsed_seconds": 147,
+      "state": "COMPLETED",
+      "test_suite_started": true
+    },
+    "scope": "Slurm allocation time including startup and failure; queue time and local analysis excluded."
+  },
+  "collector_method": "proc-identity-state-read-attempts-v6",
+  "completed": true,
+  "exit_proof": {
+    "complete_recollection_required": true,
+    "delayed_wait_milliseconds": 25.319852982647717,
+    "failed_interval_contributes_memory": false,
+    "original_collection_deadline_milliseconds": 750,
+    "pidfd_and_process_release_actual": true,
+    "retry_reserve_milliseconds": 250,
+    "same_held_pidfd": true,
+    "thread_rollup_esrch_controlled": true,
+    "wait_cap_milliseconds": 350,
+    "whole_collection_attempts": 2
+  },
+  "historical_replay": {
+    "all_original_incomplete_flags_retained": true,
+    "raw_rows_repaired": false,
+    "rows": 7,
+    "versions": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "limitations": [
+    "Controlled ESRCH with real process/pidfd release validates the specified race; it does not guarantee complete telemetry for every model shutdown.",
+    "Missing identity, permission errors, unproven release, exhausted retry time and post-read discovery ENOENT remain incomplete.",
+    "Historical v1-v5 evidence retains its original classification; no retrospective zero or replacement sample is inferred.",
+    "Per-process PSS is sampled and excludes unmapped filesystem cache; no complete allocation host peak, physical 24 GB support or memory eligibility is established."
+  ],
+  "projection_source_sha256": "fa7c34536fbd2c166c61159cac033bc13224f696f3204643232daa3d80f958bf",
+  "protocol": "cosmos.native-qlora-host-collector-v6-cpu-evidence.v1",
+  "qualification_scope": "Actual CPU process fixtures on the allocated Linux container; no model, media, CUDA, full-training, speed or release qualification.",
+  "release_qualified": false,
+  "source_revision": "eb9c4362e4e8c110efdbdff4e36c94cf4604c886",
+  "source_sha256": {
+    "collector_source": "dbb4c89d1f00287aacbdb6d9d885e5883c1dbeb0a04acd0a8858deeaf68c5a5c",
+    "collector_tests": "da6fcd9d3a163aebf6afc4590f9e67aef5aa22c0f53558ce20625bbc0394443f",
+    "first_startup_failure_review": "9ae17593aaf6cb3be1c2baf0809c5d0acce1dad281fdc33d4243acdb77270ad0",
+    "historical_row_manifest": "8133c3218138c7b6fabbb3d4b46032e7e605c5835d9f1c4a8ab4eca7c058a8ab",
+    "independent_review": "44dc4aaa612da4211958287932a904ac726dd302315bd14fdf7112dbfcba78d0",
+    "retry_capture": "bd7fe3e0d36ac0be20c78a8c2c9672977a8886be278dc3429755d7e633af5bee",
+    "retry_review": "033737a1eef812daa843c34f2c2819a5c8d83802479988a44b68fc4eddd77e5c",
+    "target_proof": "fe4ed8d44010e9c41e6b8487fdf4890fd0445020638b05d86a543e2331ab2d62",
+    "target_xml": "35928991d82c72da12f2602c83ea0bfd3d439a02bdd78b1ee07a7ce7f532ddbb"
+  },
+  "target": {
+    "errors": 0,
+    "failures": 0,
+    "kernel_release": "5.15.0-1032-oracle",
+    "skips": 0,
+    "tests": 112
+  }
+}

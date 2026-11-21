@@ -1,0 +1,825 @@
+{
+  "additional_cancelled_attempt": {
+    "actions": [
+      {
+        "action": "evaluate",
+        "adapter_reload_only_seconds": null,
+        "arm": "nf4",
+        "comparison_kind": "selected_fixed_execution",
+        "complete_elapsed_seconds": null,
+        "complete_post_preflight_sampled_memory": {
+          "allocator_record_count": 0,
+          "allocator_records_valid": false,
+          "allocator_scope": "Recorded base-loading boundaries only; no end-of-inference allocator peak was recorded.",
+          "full_evaluation_allocator_peak_allocated_bytes": null,
+          "full_evaluation_allocator_peak_reserved_bytes": null,
+          "loading_phase": null,
+          "recorded_allocator_boundary_peak_allocated_bytes": null,
+          "recorded_allocator_boundary_peak_reserved_bytes": null,
+          "sampled": {
+            "device_peak_bytes": 730660864,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 901949440,
+            "host_rss_sum_peak_bytes": 1065443328,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 147.88982462882996,
+            "owned_device_process_peak_bytes": 0,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 130,
+            "sampling_gap_seconds": {
+              "count": 129,
+              "maximum": 1.656872272491455,
+              "mean": 1.1464327490606974,
+              "median": 1.1265993118286133,
+              "p95": 1.2704598426818845,
+              "sum": 147.88982462882996
+            }
+          }
+        },
+        "first_row_latency_seconds": null,
+        "forward_only_seconds": null,
+        "frozen_reference_fixed": false,
+        "inner_action_completed": false,
+        "memory_by_stage": {
+          "portable_publication": {
+            "allocator_record_count": 0,
+            "allocator_records_valid": false,
+            "allocator_scope": "Recorded base-loading boundaries only; no end-of-inference allocator peak was recorded.",
+            "full_evaluation_allocator_peak_allocated_bytes": null,
+            "full_evaluation_allocator_peak_reserved_bytes": null,
+            "loading_phase": null,
+            "recorded_allocator_boundary_peak_allocated_bytes": null,
+            "recorded_allocator_boundary_peak_reserved_bytes": null,
+            "sampled": {
+              "device_peak_bytes": 727252992,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 901949440,
+              "host_rss_sum_peak_bytes": 910516224,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 18.556320428848267,
+              "owned_device_process_peak_bytes": 0,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 17,
+              "sampling_gap_seconds": {
+                "count": 16,
+                "maximum": 1.656872272491455,
+                "mean": 1.1597700268030167,
+                "median": 1.1241158246994019,
+                "p95": 1.289996325969696,
+                "sum": 18.556320428848267
+              }
+            }
+          },
+          "preflight": {
+            "allocator_record_count": 0,
+            "allocator_records_valid": false,
+            "allocator_scope": "Recorded base-loading boundaries only; no end-of-inference allocator peak was recorded.",
+            "full_evaluation_allocator_peak_allocated_bytes": null,
+            "full_evaluation_allocator_peak_reserved_bytes": null,
+            "loading_phase": null,
+            "recorded_allocator_boundary_peak_allocated_bytes": null,
+            "recorded_allocator_boundary_peak_reserved_bytes": null,
+            "sampled": {
+              "device_peak_bytes": null,
+              "errors": [
+                "no_samples"
+              ],
+              "gpu_memory_evidence_valid": false,
+              "host_pss_complete": false,
+              "host_pss_sum_peak_bytes": null,
+              "host_rss_sum_peak_bytes": null,
+              "nvml_capacity_bytes": null,
+              "observed_span_seconds": 0,
+              "owned_device_process_peak_bytes": null,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 0,
+              "sampling_gap_seconds": {
+                "count": 0,
+                "maximum": null,
+                "mean": null,
+                "median": null,
+                "p95": null,
+                "sum": 0.0
+              }
+            }
+          },
+          "probe_dcp": {
+            "allocator_record_count": 0,
+            "allocator_records_valid": false,
+            "allocator_scope": "Recorded base-loading boundaries only; no end-of-inference allocator peak was recorded.",
+            "full_evaluation_allocator_peak_allocated_bytes": null,
+            "full_evaluation_allocator_peak_reserved_bytes": null,
+            "loading_phase": null,
+            "recorded_allocator_boundary_peak_allocated_bytes": null,
+            "recorded_allocator_boundary_peak_reserved_bytes": null,
+            "sampled": {
+              "device_peak_bytes": 730660864,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 882352128,
+              "host_rss_sum_peak_bytes": 1065443328,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 128.20460510253906,
+              "owned_device_process_peak_bytes": 0,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 113,
+              "sampling_gap_seconds": {
+                "count": 112,
+                "maximum": 1.5833861827850342,
+                "mean": 1.1446839741298132,
+                "median": 1.1269465684890747,
+                "p95": 1.2630536198616023,
+                "sum": 128.20460510253906
+              }
+            }
+          },
+          "probe_portable": {
+            "allocator_record_count": 0,
+            "allocator_records_valid": false,
+            "allocator_scope": "Recorded base-loading boundaries only; no end-of-inference allocator peak was recorded.",
+            "full_evaluation_allocator_peak_allocated_bytes": null,
+            "full_evaluation_allocator_peak_reserved_bytes": null,
+            "loading_phase": null,
+            "recorded_allocator_boundary_peak_allocated_bytes": null,
+            "recorded_allocator_boundary_peak_reserved_bytes": null,
+            "sampled": {
+              "device_peak_bytes": null,
+              "errors": [
+                "no_samples"
+              ],
+              "gpu_memory_evidence_valid": false,
+              "host_pss_complete": false,
+              "host_pss_sum_peak_bytes": null,
+              "host_rss_sum_peak_bytes": null,
+              "nvml_capacity_bytes": null,
+              "observed_span_seconds": 0,
+              "owned_device_process_peak_bytes": null,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 0,
+              "sampling_gap_seconds": {
+                "count": 0,
+                "maximum": null,
+                "mean": null,
+                "median": null,
+                "p95": null,
+                "sum": 0.0
+              }
+            }
+          },
+          "reload_exact": {
+            "allocator_record_count": 0,
+            "allocator_records_valid": false,
+            "allocator_scope": "Recorded base-loading boundaries only; no end-of-inference allocator peak was recorded.",
+            "full_evaluation_allocator_peak_allocated_bytes": null,
+            "full_evaluation_allocator_peak_reserved_bytes": null,
+            "loading_phase": null,
+            "recorded_allocator_boundary_peak_allocated_bytes": null,
+            "recorded_allocator_boundary_peak_reserved_bytes": null,
+            "sampled": {
+              "device_peak_bytes": null,
+              "errors": [
+                "no_samples"
+              ],
+              "gpu_memory_evidence_valid": false,
+              "host_pss_complete": false,
+              "host_pss_sum_peak_bytes": null,
+              "host_rss_sum_peak_bytes": null,
+              "nvml_capacity_bytes": null,
+              "observed_span_seconds": 0,
+              "owned_device_process_peak_bytes": null,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 0,
+              "sampling_gap_seconds": {
+                "count": 0,
+                "maximum": null,
+                "mean": null,
+                "median": null,
+                "p95": null,
+                "sum": 0.0
+              }
+            }
+          },
+          "scoring": {
+            "allocator_record_count": 0,
+            "allocator_records_valid": false,
+            "allocator_scope": "Recorded base-loading boundaries only; no end-of-inference allocator peak was recorded.",
+            "full_evaluation_allocator_peak_allocated_bytes": null,
+            "full_evaluation_allocator_peak_reserved_bytes": null,
+            "loading_phase": null,
+            "recorded_allocator_boundary_peak_allocated_bytes": null,
+            "recorded_allocator_boundary_peak_reserved_bytes": null,
+            "sampled": {
+              "device_peak_bytes": null,
+              "errors": [
+                "no_samples"
+              ],
+              "gpu_memory_evidence_valid": false,
+              "host_pss_complete": false,
+              "host_pss_sum_peak_bytes": null,
+              "host_rss_sum_peak_bytes": null,
+              "nvml_capacity_bytes": null,
+              "observed_span_seconds": 0,
+              "owned_device_process_peak_bytes": null,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 0,
+              "sampling_gap_seconds": {
+                "count": 0,
+                "maximum": null,
+                "mean": null,
+                "median": null,
+                "p95": null,
+                "sum": 0.0
+              }
+            }
+          }
+        },
+        "model_state": "own_trained_checkpoint_reload",
+        "orchestrator_residual_seconds": null,
+        "outer_action": {
+          "outcome": null,
+          "process_time": null
+        },
+        "parent_accepted_action": false,
+        "preprocessing_only_seconds": null,
+        "scorer_inclusive_elapsed_seconds": null,
+        "seed": 17,
+        "source_inspections": {
+          "after": {
+            "outcome": null,
+            "process_time": null
+          },
+          "before": {
+            "outcome": {
+              "elapsed_seconds": 526.9729302730411,
+              "exit_code": 0,
+              "name": "evaluate_selected_fixed_nf4_seed17_before"
+            },
+            "process_time": {
+              "exit_status": 0,
+              "process_wall_seconds": 526.39,
+              "reported_maxrss_kib": 358172,
+              "system_cpu_seconds": 2.18,
+              "user_cpu_seconds": 6.79
+            }
+          }
+        },
+        "source_sha256": {
+          "contract.json": "34cd6233a2871d4cae10eb9896570b4970068392d137e92e238d44ee7448038e",
+          "nvml-host.jsonl": "baabe812b1357f848c8ef7fc47eecc07281b2cbda3c58cd54e6bb5bdda84522f",
+          "runtime.json": "577c0adae6c26a3b45fdfbda73d3f7809aa1bcc2c4ddc86d22c053533cb7a484"
+        },
+        "split_role": "untouched_diagnostic",
+        "stage_seconds_sum": 47.508032956160605,
+        "stages": {
+          "portable_publication": {
+            "outcome": {
+              "elapsed_seconds": 19.546562917064875,
+              "exit_code": 0,
+              "name": "portable_publication"
+            },
+            "process_time": {
+              "exit_status": 0,
+              "process_wall_seconds": 19.51,
+              "reported_maxrss_kib": 866656,
+              "system_cpu_seconds": 1.52,
+              "user_cpu_seconds": 18.88
+            }
+          },
+          "preflight": {
+            "outcome": {
+              "elapsed_seconds": 27.96147003909573,
+              "exit_code": 0,
+              "name": "preflight"
+            },
+            "process_time": {
+              "exit_status": 0,
+              "process_wall_seconds": 27.94,
+              "reported_maxrss_kib": 583536,
+              "system_cpu_seconds": 1.29,
+              "user_cpu_seconds": 6.59
+            }
+          },
+          "probe_dcp": {
+            "outcome": null,
+            "process_time": null
+          },
+          "probe_portable": {
+            "outcome": null,
+            "process_time": null
+          },
+          "reload_exact": {
+            "outcome": null,
+            "process_time": null
+          },
+          "scoring": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "training_source_origin": "fresh_fixed_seed17_or123"
+      },
+      {
+        "action": "evaluate",
+        "adapter_reload_only_seconds": null,
+        "arm": "bf16",
+        "comparison_kind": "selected_fixed_execution",
+        "complete_elapsed_seconds": null,
+        "complete_post_preflight_sampled_memory": null,
+        "first_row_latency_seconds": null,
+        "forward_only_seconds": null,
+        "frozen_reference_fixed": false,
+        "inner_action_completed": false,
+        "memory_by_stage": {
+          "portable_publication": null,
+          "preflight": null,
+          "probe_dcp": null,
+          "probe_portable": null,
+          "reload_exact": null,
+          "scoring": null
+        },
+        "model_state": "own_trained_checkpoint_reload",
+        "orchestrator_residual_seconds": null,
+        "outer_action": {
+          "outcome": null,
+          "process_time": null
+        },
+        "parent_accepted_action": false,
+        "preprocessing_only_seconds": null,
+        "scorer_inclusive_elapsed_seconds": null,
+        "seed": 17,
+        "source_inspections": {
+          "after": {
+            "outcome": null,
+            "process_time": null
+          },
+          "before": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "source_sha256": {},
+        "split_role": "untouched_diagnostic",
+        "stage_seconds_sum": 0.0,
+        "stages": {
+          "portable_publication": {
+            "outcome": null,
+            "process_time": null
+          },
+          "preflight": {
+            "outcome": null,
+            "process_time": null
+          },
+          "probe_dcp": {
+            "outcome": null,
+            "process_time": null
+          },
+          "probe_portable": {
+            "outcome": null,
+            "process_time": null
+          },
+          "reload_exact": {
+            "outcome": null,
+            "process_time": null
+          },
+          "scoring": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "training_source_origin": "fresh_fixed_seed17_or123"
+      },
+      {
+        "action": "evaluate",
+        "adapter_reload_only_seconds": null,
+        "arm": "bf16",
+        "comparison_kind": "selected_fixed_execution",
+        "complete_elapsed_seconds": null,
+        "complete_post_preflight_sampled_memory": null,
+        "first_row_latency_seconds": null,
+        "forward_only_seconds": null,
+        "frozen_reference_fixed": false,
+        "inner_action_completed": false,
+        "memory_by_stage": {
+          "portable_publication": null,
+          "preflight": null,
+          "probe_dcp": null,
+          "probe_portable": null,
+          "reload_exact": null,
+          "scoring": null
+        },
+        "model_state": "own_trained_checkpoint_reload",
+        "orchestrator_residual_seconds": null,
+        "outer_action": {
+          "outcome": null,
+          "process_time": null
+        },
+        "parent_accepted_action": false,
+        "preprocessing_only_seconds": null,
+        "scorer_inclusive_elapsed_seconds": null,
+        "seed": 42,
+        "source_inspections": {
+          "after": {
+            "outcome": null,
+            "process_time": null
+          },
+          "before": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "source_sha256": {},
+        "split_role": "untouched_diagnostic",
+        "stage_seconds_sum": 0.0,
+        "stages": {
+          "portable_publication": {
+            "outcome": null,
+            "process_time": null
+          },
+          "preflight": {
+            "outcome": null,
+            "process_time": null
+          },
+          "probe_dcp": {
+            "outcome": null,
+            "process_time": null
+          },
+          "probe_portable": {
+            "outcome": null,
+            "process_time": null
+          },
+          "reload_exact": {
+            "outcome": null,
+            "process_time": null
+          },
+          "scoring": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "training_source_origin": "reused_original_rank32_seed42"
+      },
+      {
+        "action": "evaluate",
+        "adapter_reload_only_seconds": null,
+        "arm": "nf4",
+        "comparison_kind": "selected_fixed_execution",
+        "complete_elapsed_seconds": null,
+        "complete_post_preflight_sampled_memory": null,
+        "first_row_latency_seconds": null,
+        "forward_only_seconds": null,
+        "frozen_reference_fixed": false,
+        "inner_action_completed": false,
+        "memory_by_stage": {
+          "portable_publication": null,
+          "preflight": null,
+          "probe_dcp": null,
+          "probe_portable": null,
+          "reload_exact": null,
+          "scoring": null
+        },
+        "model_state": "own_trained_checkpoint_reload",
+        "orchestrator_residual_seconds": null,
+        "outer_action": {
+          "outcome": null,
+          "process_time": null
+        },
+        "parent_accepted_action": false,
+        "preprocessing_only_seconds": null,
+        "scorer_inclusive_elapsed_seconds": null,
+        "seed": 42,
+        "source_inspections": {
+          "after": {
+            "outcome": null,
+            "process_time": null
+          },
+          "before": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "source_sha256": {},
+        "split_role": "untouched_diagnostic",
+        "stage_seconds_sum": 0.0,
+        "stages": {
+          "portable_publication": {
+            "outcome": null,
+            "process_time": null
+          },
+          "preflight": {
+            "outcome": null,
+            "process_time": null
+          },
+          "probe_dcp": {
+            "outcome": null,
+            "process_time": null
+          },
+          "probe_portable": {
+            "outcome": null,
+            "process_time": null
+          },
+          "reload_exact": {
+            "outcome": null,
+            "process_time": null
+          },
+          "scoring": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "training_source_origin": "reused_original_rank32_seed42"
+      },
+      {
+        "action": "evaluate",
+        "adapter_reload_only_seconds": null,
+        "arm": "nf4",
+        "comparison_kind": "selected_fixed_execution",
+        "complete_elapsed_seconds": null,
+        "complete_post_preflight_sampled_memory": null,
+        "first_row_latency_seconds": null,
+        "forward_only_seconds": null,
+        "frozen_reference_fixed": false,
+        "inner_action_completed": false,
+        "memory_by_stage": {
+          "portable_publication": null,
+          "preflight": null,
+          "probe_dcp": null,
+          "probe_portable": null,
+          "reload_exact": null,
+          "scoring": null
+        },
+        "model_state": "own_trained_checkpoint_reload",
+        "orchestrator_residual_seconds": null,
+        "outer_action": {
+          "outcome": null,
+          "process_time": null
+        },
+        "parent_accepted_action": false,
+        "preprocessing_only_seconds": null,
+        "scorer_inclusive_elapsed_seconds": null,
+        "seed": 123,
+        "source_inspections": {
+          "after": {
+            "outcome": null,
+            "process_time": null
+          },
+          "before": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "source_sha256": {},
+        "split_role": "untouched_diagnostic",
+        "stage_seconds_sum": 0.0,
+        "stages": {
+          "portable_publication": {
+            "outcome": null,
+            "process_time": null
+          },
+          "preflight": {
+            "outcome": null,
+            "process_time": null
+          },
+          "probe_dcp": {
+            "outcome": null,
+            "process_time": null
+          },
+          "probe_portable": {
+            "outcome": null,
+            "process_time": null
+          },
+          "reload_exact": {
+            "outcome": null,
+            "process_time": null
+          },
+          "scoring": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "training_source_origin": "fresh_fixed_seed17_or123"
+      },
+      {
+        "action": "evaluate",
+        "adapter_reload_only_seconds": null,
+        "arm": "bf16",
+        "comparison_kind": "selected_fixed_execution",
+        "complete_elapsed_seconds": null,
+        "complete_post_preflight_sampled_memory": null,
+        "first_row_latency_seconds": null,
+        "forward_only_seconds": null,
+        "frozen_reference_fixed": false,
+        "inner_action_completed": false,
+        "memory_by_stage": {
+          "portable_publication": null,
+          "preflight": null,
+          "probe_dcp": null,
+          "probe_portable": null,
+          "reload_exact": null,
+          "scoring": null
+        },
+        "model_state": "own_trained_checkpoint_reload",
+        "orchestrator_residual_seconds": null,
+        "outer_action": {
+          "outcome": null,
+          "process_time": null
+        },
+        "parent_accepted_action": false,
+        "preprocessing_only_seconds": null,
+        "scorer_inclusive_elapsed_seconds": null,
+        "seed": 123,
+        "source_inspections": {
+          "after": {
+            "outcome": null,
+            "process_time": null
+          },
+          "before": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "source_sha256": {},
+        "split_role": "untouched_diagnostic",
+        "stage_seconds_sum": 0.0,
+        "stages": {
+          "portable_publication": {
+            "outcome": null,
+            "process_time": null
+          },
+          "preflight": {
+            "outcome": null,
+            "process_time": null
+          },
+          "probe_dcp": {
+            "outcome": null,
+            "process_time": null
+          },
+          "probe_portable": {
+            "outcome": null,
+            "process_time": null
+          },
+          "reload_exact": {
+            "outcome": null,
+            "process_time": null
+          },
+          "scoring": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "training_source_origin": "fresh_fixed_seed17_or123"
+      },
+      {
+        "action": "frozen",
+        "adapter_reload_only_seconds": null,
+        "arm": "nf4",
+        "comparison_kind": "selected_fixed_execution",
+        "complete_elapsed_seconds": null,
+        "complete_post_preflight_sampled_memory": null,
+        "first_row_latency_seconds": null,
+        "forward_only_seconds": null,
+        "frozen_reference_fixed": true,
+        "inner_action_completed": false,
+        "memory_by_stage": {
+          "preflight": null,
+          "scoring": null
+        },
+        "model_state": "fresh_zero_B_frozen_base",
+        "orchestrator_residual_seconds": null,
+        "outer_action": {
+          "outcome": null,
+          "process_time": null
+        },
+        "parent_accepted_action": false,
+        "preprocessing_only_seconds": null,
+        "scorer_inclusive_elapsed_seconds": null,
+        "seed": 42,
+        "source_inspections": {
+          "after": {
+            "outcome": null,
+            "process_time": null
+          },
+          "before": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "source_sha256": {},
+        "split_role": "untouched_diagnostic",
+        "stage_seconds_sum": 0.0,
+        "stages": {
+          "preflight": {
+            "outcome": null,
+            "process_time": null
+          },
+          "scoring": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "training_source_origin": null
+      },
+      {
+        "action": "frozen",
+        "adapter_reload_only_seconds": null,
+        "arm": "bf16",
+        "comparison_kind": "selected_fixed_execution",
+        "complete_elapsed_seconds": null,
+        "complete_post_preflight_sampled_memory": null,
+        "first_row_latency_seconds": null,
+        "forward_only_seconds": null,
+        "frozen_reference_fixed": true,
+        "inner_action_completed": false,
+        "memory_by_stage": {
+          "preflight": null,
+          "scoring": null
+        },
+        "model_state": "fresh_zero_B_frozen_base",
+        "orchestrator_residual_seconds": null,
+        "outer_action": {
+          "outcome": null,
+          "process_time": null
+        },
+        "parent_accepted_action": false,
+        "preprocessing_only_seconds": null,
+        "scorer_inclusive_elapsed_seconds": null,
+        "seed": 42,
+        "source_inspections": {
+          "after": {
+            "outcome": null,
+            "process_time": null
+          },
+          "before": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "source_sha256": {},
+        "split_role": "untouched_diagnostic",
+        "stage_seconds_sum": 0.0,
+        "stages": {
+          "preflight": {
+            "outcome": null,
+            "process_time": null
+          },
+          "scoring": {
+            "outcome": null,
+            "process_time": null
+          }
+        },
+        "training_source_origin": null
+      }
+    ],
+    "allocation": {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "cpu_in_gpu_core_seconds": 27008,
+      "elapsed_seconds": 1688,
+      "eligible_wait_seconds": 5570.0,
+      "exit_code": "0:0",
+      "gpu_seconds": 1688,
+      "queue_wait_seconds": 5570.0,
+      "state": "CANCELLED"
+    },
+    "capture_sha256": "8ab54df4bae3f693cd03e149356acc041aab5a9c2f6b1fa810152a5218874ba6",
+    "comparison_kind": "selected_fixed_execution",
+    "driver_between_stage_residual_seconds": null,
+    "driver_wall_seconds": null,
+    "inner_completed_actions": 0,
+    "outer_stage_seconds_sum": 0.0,
+    "parent_accepted_actions": 0,
+    "plan_sha256": "4ecf4967ed095684feb9a3e1dd2bbdcb98870d8da7673ef2a31408333d461bac",
+    "scheduler_source_sha256": {
+      "queue": "c60240f2c350419ddbbb0d184a5016894beecbc41bf3007a7cc177ed3294f6fa",
+      "scheduler_receipt": "dadd93195fb4b328c5b9b12e12d62b36a6003beb8494442ed984488112f3a121",
+      "utc8": "8f24617f251d2b5186c8f728e82abcb465523b6d7b1f9b0aff599e805d6ce6ca"
+    },
+    "split_role": "untouched_diagnostic",
+    "successful_parent": false
+  },
+  "current_cost_report_sha256": "1ad3c3cc80918a9c0970924e2e25e371c784ab7c5a186d1a89ff7c04f752b883",
+  "current_logical_scoring_actions": 32,
+  "joint_lock_sha256": "5cb69821e4b5130df9cfdae09ed5754e1e276054102da76f2620d4d543b72814",
+  "new_quality_trial": false,
+  "original_attempt_cost_report_sha256": "a6df98e4d8cec8e32e83102e216330082e73ac51b9cc44f14a68390b41ca3e46",
+  "protocol": "cosmos.public-final-evaluation-retry-cost.v1",
+  "quality_or_memory_gate_changed": false,
+  "registry_sha256": "a9557646cf17300d36404a0994c347425433fb4f01960a8e257e27f5d9a8ad71",
+  "reporting_successor": {
+    "package_receipt_sha256": "61680558ecb623b409adab42a8569deecbd8c2dabb3aff175a6099e7ad7c6431",
+    "scope": "Actual reports use v3 default-arm identity admission. All v2 timing/memory arithmetic and the retry-cost supplement function are unchanged.",
+    "source_sha256": "a4ad940d98a7b2fd0c3ec9beb241185c65f1fb322c85032a2a1a16d640e5b956"
+  },
+  "retry_authority_sha256": "7e14ff688a1ca6443e9ff1594f537cfcc73e1c8d5988027b27271eaa3d506934",
+  "scope": "Current four-scope cost report plus one cancelled startup attempt. Shared three allocations counted once. The cancelled attempt supplies no quality bundles; current quality has32 logical actions. Queue, stage and allocator limitations remain those of the unchanged cost-v2 reports.",
+  "shared_three_rows_identical": true,
+  "unique_allocation_totals": {
+    "cpu_in_gpu_core_seconds": 351488,
+    "gpu_seconds": 21968
+  },
+  "unique_allocations": 5
+}

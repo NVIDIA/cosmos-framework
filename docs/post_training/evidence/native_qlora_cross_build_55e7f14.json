@@ -1,0 +1,422 @@
+{
+  "protocol": "cosmos.public-timing-counter-preservation.v1",
+  "builds": {
+    "reference": {
+      "code_revision": "a406ea1d32c95277c57ac8e7ec274784bed3aaf7",
+      "wheel_sha256": "184d5f605aa17c834bd8ac3fecff86ef306c5762ba8d29e503ff2776e6e0b5cd"
+    },
+    "candidate": {
+      "code_revision": "55e7f14dfeca84002d0324108808a0e682579842",
+      "wheel_sha256": "4939262dbf2de43be0b3f9d579b0bc2fbf72ab84250852397b0dc14087b5792b"
+    }
+  },
+  "arms": {
+    "nf4": {
+      "components": {
+        "model": {
+          "exact": true,
+          "top_level_entries": 504
+        },
+        "optim": {
+          "exact": true,
+          "top_level_entries": 1525
+        },
+        "trainer": {
+          "exact": true,
+          "top_level_entries": 13
+        },
+        "data": {
+          "exact": true,
+          "top_level_entries": 3
+        }
+      },
+      "files": {
+        "reference": {
+          "data.pt": {
+            "bytes": 1499,
+            "sha256": "9f4b97b737e9194b0e3efd3ee291babc1124da6accc8047bfae29e17cdebd2a8"
+          },
+          "model/.metadata": {
+            "bytes": 156811,
+            "sha256": "7000888d7cf7d5450978b7907b48f112f84b966cfa93a4b709f9f4c477999d63"
+          },
+          "model/__0_0.distcp": {
+            "bytes": 175382712,
+            "sha256": "99849b030faebe5859c6136fe1e291de5b4e72b39f7fb27554744318a084c358"
+          },
+          "model_metadata.pt": {
+            "bytes": 506135,
+            "sha256": "4bdac7a18f0a37f3a0e5b49a371f953238148551156675756d4b47c67e946ebf"
+          },
+          "optim/.metadata": {
+            "bytes": 544830,
+            "sha256": "c503aa6c665333c07a296b86209c663ce8df9937c2d9a73eac92080ba916eef5"
+          },
+          "optim/__0_0.distcp": {
+            "bytes": 351610673,
+            "sha256": "118f395c32d52c32b5d5534109fc44657a57b8a8e430e0f74294c5df5623194b"
+          },
+          "trainer.pt": {
+            "bytes": 42181,
+            "sha256": "80b6dbbdeb087d2a47e746381647eb5e246372436a3948e0056a4a4102d33ed3"
+          }
+        },
+        "candidate": {
+          "data.pt": {
+            "bytes": 1499,
+            "sha256": "9f4b97b737e9194b0e3efd3ee291babc1124da6accc8047bfae29e17cdebd2a8"
+          },
+          "model/.metadata": {
+            "bytes": 156796,
+            "sha256": "523f83e6d4e3bd864a4a4d5022b6ef8e1cb187bd5549a7a7c276c27ad0b8d885"
+          },
+          "model/__0_0.distcp": {
+            "bytes": 175382712,
+            "sha256": "99849b030faebe5859c6136fe1e291de5b4e72b39f7fb27554744318a084c358"
+          },
+          "model_metadata.pt": {
+            "bytes": 506135,
+            "sha256": "51925397268655ade00bedfcc7ee73bddb708af3c30f5697d150b86e1a1dc426"
+          },
+          "optim/.metadata": {
+            "bytes": 544815,
+            "sha256": "9bab92d24631b8f9d9c81ffe68bcd0ca602458f6ccdccc153a51ac06dcfd4c81"
+          },
+          "optim/__0_0.distcp": {
+            "bytes": 351610673,
+            "sha256": "118f395c32d52c32b5d5534109fc44657a57b8a8e430e0f74294c5df5623194b"
+          },
+          "trainer.pt": {
+            "bytes": 42181,
+            "sha256": "80b6dbbdeb087d2a47e746381647eb5e246372436a3948e0056a4a4102d33ed3"
+          }
+        }
+      },
+      "metadata_sha256": {
+        "candidate": "51925397268655ade00bedfcc7ee73bddb708af3c30f5697d150b86e1a1dc426",
+        "reference": "4bdac7a18f0a37f3a0e5b49a371f953238148551156675756d4b47c67e946ebf"
+      },
+      "exact": true
+    },
+    "bf16": {
+      "components": {
+        "model": {
+          "exact": true,
+          "top_level_entries": 504
+        },
+        "optim": {
+          "exact": true,
+          "top_level_entries": 1525
+        },
+        "trainer": {
+          "exact": true,
+          "top_level_entries": 13
+        },
+        "data": {
+          "exact": true,
+          "top_level_entries": 3
+        }
+      },
+      "files": {
+        "reference": {
+          "data.pt": {
+            "bytes": 1499,
+            "sha256": "9f4b97b737e9194b0e3efd3ee291babc1124da6accc8047bfae29e17cdebd2a8"
+          },
+          "model/.metadata": {
+            "bytes": 156812,
+            "sha256": "9f2c11a4c84194567fcf2b9512af0bd433ee781d63241f4a83fc478300347ad9"
+          },
+          "model/__0_0.distcp": {
+            "bytes": 175382712,
+            "sha256": "218413033438ffe25eb6e1398acb9d6381d97072f82ff18da0564fa54604c875"
+          },
+          "model_metadata.pt": {
+            "bytes": 333335,
+            "sha256": "4a721902cad9e51de8760bb3861599a96d87767e98f047dc85f4a6009ff3cf8a"
+          },
+          "optim/.metadata": {
+            "bytes": 544831,
+            "sha256": "f8fca4fe8b38c37346051da7b787247d87b1b49aef54d0acbaa6019218d85e92"
+          },
+          "optim/__0_0.distcp": {
+            "bytes": 351610673,
+            "sha256": "556d706d702658ccdc987039d40adc604668a3a5b9b9d7bee2f96c8f2738b436"
+          },
+          "trainer.pt": {
+            "bytes": 42181,
+            "sha256": "80b6dbbdeb087d2a47e746381647eb5e246372436a3948e0056a4a4102d33ed3"
+          }
+        },
+        "candidate": {
+          "data.pt": {
+            "bytes": 1499,
+            "sha256": "9f4b97b737e9194b0e3efd3ee291babc1124da6accc8047bfae29e17cdebd2a8"
+          },
+          "model/.metadata": {
+            "bytes": 156797,
+            "sha256": "fca46fe5888dd89fb8528215c4e8eb6ff247cb49b6f1e9865df15bab51b33d32"
+          },
+          "model/__0_0.distcp": {
+            "bytes": 175382712,
+            "sha256": "218413033438ffe25eb6e1398acb9d6381d97072f82ff18da0564fa54604c875"
+          },
+          "model_metadata.pt": {
+            "bytes": 333335,
+            "sha256": "eabe43fb55b05d6bdc1dd4b9203e963c5a21b03cf0d07f70a3a818fd09368fa8"
+          },
+          "optim/.metadata": {
+            "bytes": 544816,
+            "sha256": "1d95d71d95d459dd34cf02763085dcd733793e9c9e54385013306c49f6c47e98"
+          },
+          "optim/__0_0.distcp": {
+            "bytes": 351610673,
+            "sha256": "556d706d702658ccdc987039d40adc604668a3a5b9b9d7bee2f96c8f2738b436"
+          },
+          "trainer.pt": {
+            "bytes": 42181,
+            "sha256": "80b6dbbdeb087d2a47e746381647eb5e246372436a3948e0056a4a4102d33ed3"
+          }
+        }
+      },
+      "metadata_sha256": {
+        "candidate": "eabe43fb55b05d6bdc1dd4b9203e963c5a21b03cf0d07f70a3a818fd09368fa8",
+        "reference": "4a721902cad9e51de8760bb3861599a96d87767e98f047dc85f4a6009ff3cf8a"
+      },
+      "exact": true
+    }
+  },
+  "exact": true,
+  "manifest_sha256": "90e5ba5ea5cf13772a7b0dea7b961d84fefa90177b1947afdd33f877448b48ac",
+  "completion_sha256": {
+    "bf16": "4d72767db0b945ecac8cd5bdc811021121cb77de44f6dd9620e7d77a38787a95",
+    "nf4": "804b1012e103ecc1800213325407f27c174e8d0b8572786af7cb89f0e271789b"
+  },
+  "native_plan_sha256": "f10dd02c5c16bdcc7838d9934380710b6c61c578c11e7160320d88fa8e96908d",
+  "helper_sha256": "6911f3557b6a2fd5c67560deef8711557f9ccc98fc7e6959fa2db4ce907d93ed",
+  "permitted_changes": [
+    "identity.training_contract.code_revision",
+    "identity.training_contract.wheel_sha256"
+  ],
+  "unchanged_preprocessing": {
+    "protocol": "cosmos.sft-preprocessing.v1",
+    "cache_bytes": 1073741824,
+    "prefetch": true,
+    "window_examples": 8
+  },
+  "scope": "Byte-exact adapter/optimizer tensors, scheduler, RNG, data and healthy completed update/validation controls; no checkpoint was modified or restored into a model. Production resume/reload identity checks remain unchanged.",
+  "release_qualified": false,
+  "evidence_scope": {
+    "purpose": "Check that adding native timing counters preserves the original four-update training trajectory in both precision arms.",
+    "native_entrypoint": "cosmos_framework.posttrain.entrypoints.sft",
+    "launch": "torchrun --standalone --nproc-per-node=1",
+    "optimizer_updates_per_arm": 4,
+    "candidate_starts_fresh": true,
+    "reference_checkpoints_read_only": true,
+    "source_dataset": "Original WTS training/validation inputs used by the archived four-update references; the newer grouped development splits are excluded.",
+    "matching_controls": {
+      "seed": 42,
+      "determinism": "strict",
+      "micro_batch_size": 1,
+      "gradient_accumulation": 8,
+      "effective_batch": 8,
+      "lora_rank": 16,
+      "lora_alpha": 32,
+      "adapter_parameter_dtype": "float32",
+      "adapter_compute_dtype": "float32",
+      "optimizer_state_dtype": "float32",
+      "optimizer": "fused AdamW",
+      "learning_rate": 0.0001,
+      "betas": [
+        0.9,
+        0.999
+      ],
+      "epsilon": 1e-08,
+      "weight_decay": 0.01,
+      "gradient_clip_norm": 1.0,
+      "schedule": "cosine",
+      "schedule_cycle_steps": 4,
+      "warmup_steps": 1,
+      "schedule_start_factor": 0.01,
+      "schedule_minimum_factor": 0.1,
+      "activation_checkpointing": "full",
+      "sft_logits_mode": "full",
+      "compile_language_model": false,
+      "configured_max_length": 4096,
+      "configured_video_frames": 8,
+      "save_every_updates": 2,
+      "save_async": false,
+      "validation_before_training": true,
+      "validation_every_updates": 2,
+      "validation_max_samples": 4,
+      "validation_batch_size": 1
+    },
+    "base": {
+      "repository": "Qwen/Qwen3-VL-8B-Instruct",
+      "revision": "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
+    },
+    "precision_arms": {
+      "nf4": "Frozen language-side NF4 base with nested quantization and BF16 dequantized compute; higher-precision excluded components.",
+      "bf16": "Equivalent frozen BF16 base."
+    },
+    "checkpoint_boundary": {
+      "optimizer_step": 4,
+      "attempt_id": 4,
+      "accumulation_step": 0,
+      "nonfinite_skips_total": 0,
+      "pending_validation": false,
+      "pending_publication": false
+    }
+  },
+  "serialization_result": {
+    "adapter_and_optimizer_payload_files_byte_identical": true,
+    "trainer_and_data_files_byte_identical": true,
+    "dcp_index_files_byte_identical": false,
+    "dcp_index_interpretation": "DCP index serialization bytes differ; bounded decoded model and optimizer entries match exactly. This is not a claim that entire checkpoint directories are byte-identical.",
+    "model_metadata_files_byte_identical": false,
+    "model_metadata_semantics": "Exact comparison after validating and removing only the two pinned code/wheel identity fields listed in permitted_changes.",
+    "checkpoint_file_inventory_rehashed_after_comparison": true,
+    "production_resume_identity_exceptions": false
+  },
+  "candidate_runtime": {
+    "name": "NVIDIA A100-SXM4-80GB",
+    "device_bytes": 85174583296,
+    "physical_cpu_cores": 8,
+    "python": "3.12.12 (main, Feb 12 2026, 00:42:14) [Clang 21.1.4 ]",
+    "torch_cuda": "12.8",
+    "torch_git_version": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+    "versions": {
+      "accelerate": "1.13.0",
+      "bitsandbytes": "0.49.2",
+      "safetensors": "0.8.0",
+      "torch": "2.11.0+cu128",
+      "torchcodec": "0.11.0+cpu",
+      "torchvision": "0.26.0+cu128",
+      "transformers": "5.8.1"
+    },
+    "runtime_precision": {
+      "allow_bf16_reduced_precision_reduction": true,
+      "cuda_matmul_allow_tf32": false,
+      "cudnn_allow_tf32": true,
+      "environment": {
+        "NVIDIA_TF32_OVERRIDE": null,
+        "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE": null
+      },
+      "float32_matmul_precision": "highest",
+      "fp32_precision": {
+        "cuda_matmul": "none",
+        "cudnn": "none",
+        "cudnn_conv": "tf32",
+        "cudnn_rnn": "tf32",
+        "global": "none"
+      }
+    },
+    "thread_environment": {
+      "MKL_NUM_THREADS": null,
+      "OMP_NUM_THREADS": "8",
+      "OPENBLAS_NUM_THREADS": null,
+      "TOKENIZERS_PARALLELISM": "false"
+    },
+    "arms_run_sequentially_in_same_allocation": true
+  },
+  "candidate_allocation_cost": {
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed_seconds": 593,
+    "gpus": 1,
+    "allocated_cpus": 16,
+    "gpu_allocation_hours": 0.16472222222222221,
+    "allocated_cpu_hours": 2.6355555555555554,
+    "stage_elapsed_seconds": {
+      "crossbuild_preflight": 34.11687339498894,
+      "crossbuild_nf4": 272.00492228998337,
+      "crossbuild_bf16": 208.5952120660222,
+      "crossbuild_prepare": 8.076577906991588,
+      "crossbuild_compare": 20.34168914699694
+    },
+    "interpretation": "The allocation includes preflight, both fresh four-update native runs, comparison and orchestration. Native stage times include model loading, validation and checkpoint work; they are not steady-state update throughput or a speedup benchmark."
+  },
+  "scheduler_memory_observations": {
+    "records": [
+      {
+        "record": "allocation",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_seconds": 593,
+        "allocated_cpus": 16,
+        "max_rss_raw": null,
+        "max_vm_size_raw": null,
+        "average_rss_raw": null,
+        "tres_usage_in_max_raw": null
+      },
+      {
+        "record": "batch",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_seconds": 593,
+        "allocated_cpus": 16,
+        "max_rss_raw": "5488K",
+        "max_vm_size_raw": "5496K",
+        "average_rss_raw": "5488K",
+        "tres_usage_in_max_raw": "cpu=00:00:00,energy=0,fs/disk=293422,gres/gpumem=0,gres/gpuutil=0,mem=5488K,pages=0,vmem=5496K"
+      },
+      {
+        "record": "extern",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_seconds": 593,
+        "allocated_cpus": 16,
+        "max_rss_raw": "0",
+        "max_vm_size_raw": "0",
+        "average_rss_raw": "0",
+        "tres_usage_in_max_raw": "cpu=00:00:00,energy=0,fs/disk=4292,gres/gpumem=0,gres/gpuutil=0,mem=0,pages=0,vmem=0"
+      },
+      {
+        "record": "native_container_step",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_seconds": 589,
+        "allocated_cpus": 16,
+        "max_rss_raw": "3577400K",
+        "max_vm_size_raw": "65958664K",
+        "average_rss_raw": "3577400K",
+        "tres_usage_in_max_raw": "cpu=00:20:26,energy=0,fs/disk=144540160071,gres/gpumem=19426M,gres/gpuutil=25,mem=3577400K,pages=35253,vmem=65958664K"
+      }
+    ],
+    "interpretation": "Raw sacct step accounting is retained without summing nested allocation/step records. Empty fields are unknown. Slurm RSS/VMSize and TRES samples are not measurements of peak total physical host residency or an owned-process-tree GPU-memory benchmark; VMSize is virtual address space. Reported zero values are scheduler values, not proof of zero use."
+  },
+  "provenance_sha256": {
+    "raw_comparison_report": "ecfc21aa6977800baf56c1667079c7d0ae9f526d54a2d3049ed7de9ef0033268",
+    "candidate_completion": "6f461c225d5aa519b6e61a9f9e41f76a002647adcc0a8770c4eb24f387b9709e",
+    "candidate_runtime": "749c428922451bc8c2c763df26f2a472ea63b75219fd0dcc99f7322b56073b71",
+    "raw_scheduler_memory_accounting": "c977a122dd759182ab2edc9908fe384ef350360c45481c24194f075a1b45b3a8",
+    "input_manifest": "90e5ba5ea5cf13772a7b0dea7b961d84fefa90177b1947afdd33f877448b48ac",
+    "native_plan": "f10dd02c5c16bdcc7838d9934380710b6c61c578c11e7160320d88fa8e96908d",
+    "comparison_helper": "6911f3557b6a2fd5c67560deef8711557f9ccc98fc7e6959fa2db4ce907d93ed",
+    "reference_arms": {
+      "bf16": {
+        "command_sha256": "22893b46642cb586ba5db3d880df1698c1cc3adb7514417715e5a6c80b708dc3",
+        "completion_sha256": "8c46892add5538c121e192437083570e2bd8f0853494cdcaf80b1cf52e6e66cc",
+        "reference_identity_sha256": "89b1a925e7952a06496e35531cc0c72c287eb4e51b4e58e02c236c6f2dd084f3",
+        "reference_receipt_sha256": "de85fa7a0442be069588a259f9dd97a7f3a0c9407589185a99689de1c2948a76"
+      },
+      "nf4": {
+        "command_sha256": "9ebfd6c85ef8e435d98e77c308294aec08528fdfbf267cbc75ed930ad801f2d2",
+        "completion_sha256": "30f19b1c4dfd039867f080dab00bf7e1eb13b7b7c343315cc8837a493702d257",
+        "reference_identity_sha256": "0cc4d063c75bea9796069e349de16b5b5e22fb49dd555ea1fd4dc43cb212bc4c",
+        "reference_receipt_sha256": "bb9170ca149c3d62d0296d3200785d5fd852269423a4607928ed168bcb472d9c"
+      }
+    },
+    "candidate_native_outcomes": {
+      "bf16": "4d72767db0b945ecac8cd5bdc811021121cb77de44f6dd9620e7d77a38787a95",
+      "nf4": "804b1012e103ecc1800213325407f27c174e8d0b8572786af7cb89f0e271789b"
+    }
+  },
+  "limitations": [
+    "Legacy model v1 artifacts did not record TF32/math-policy flags. Exact agreement is observed evidence, not a universal cross-build reproducibility guarantee.",
+    "This is a four-update state-preservation diagnostic, not a new 300-update qualification, task-quality result or general cross-build resume guarantee.",
+    "Configured length 4096 and eight video frames are limits/settings, not proof that these runs trained on 4096-token examples or eight unique decoded source frames.",
+    "Reference runs and new runs were not a controlled throughput comparison; source/checkpoint identity is exact within the stated diagnostic.",
+    "Physical host process-tree residency, unmapped filesystem page cache and unsampled GPU peaks are not established by the scheduler memory fields."
+  ]
+}

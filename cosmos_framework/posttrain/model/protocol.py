@@ -150,6 +150,30 @@ class VLMPolicyOutput:
 
 
 @dataclass(frozen=True)
+class SelectedSFTPolicyOutput:
+    """Full-vocabulary logits for the requested supervised next-token positions.
+
+    Rows follow ``hidden[:, :-1][valid]`` boolean-index order. The backbone still
+    processes every input position and all multimodal conditioning; only the
+    output-head projection is restricted. An empty local selection must retain
+    its graph so a zero-weight validation lane can still participate in backward.
+    """
+
+    logits: torch.Tensor  # [N,V]
+
+
+@runtime_checkable
+class SelectedSFTPolicy(Protocol):
+    """Optional SFT-only projection; the ordinary full-logit API stays intact."""
+
+    sft_logits_mode: str
+
+    def forward_sft_batch(self, batch: dict[str, Any], valid: torch.Tensor) -> SelectedSFTPolicyOutput:
+        """Project the shifted valid mask [B,T-1] after forwarding the complete context."""
+        ...
+
+
+@dataclass(frozen=True)
 class NFTVelocityPredictions:
     """Model-owned values at one NFT forward-process coordinate."""
 

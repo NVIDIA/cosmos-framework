@@ -1,0 +1,168 @@
+{
+  "actual_fixture_properties": {
+    "actual_delayed_thread_pidfd_wait": {
+      "attempts": 2,
+      "complete": true,
+      "sample_sha256": "0e61b8ffa470e4026dbc13a6ef8cba796a71a731d53c4302cb8e894a0cf1ebd5"
+    },
+    "actual_live_thread_shared_mm": {
+      "attempts": 1,
+      "complete": true,
+      "sample_sha256": "69138b0c9541e6213a17f94e5341d8108b856b23d4cf57654d03c08d900391cb"
+    },
+    "actual_pidfd_thread_exit_recollection": {
+      "attempts": 2,
+      "complete": true,
+      "sample_sha256": "72bc0c4d89942968ff9dfc17158587c3c556a75e2f4e21b7bc03b4323f39b7f3"
+    },
+    "actual_reaped_thread_group_recollection": {
+      "attempts": 2,
+      "complete": true,
+      "sample_sha256": "0a998ab1c3cfd090d64cff44e801ec3216717bf090a1a136816c8ac902be6137"
+    },
+    "actual_unbound_disappearance_recollection": {
+      "complete": true,
+      "failed_sample_sha256": "bc570a626609a3327b95a529da2c06bd397eeae5f157053eae6ffdad807358dc",
+      "original_complete": false,
+      "previous_interval_repaired": false,
+      "property_sha256": "b52274fbb2ef4b8e51729ede351069159dd38f75d79c3d3f6b20f6b0e49c6578",
+      "recovered_sample_sha256": "6201023b50260ba6ee2d7240774cc2acd0334d25dc55ed66d5d8ccecb06bed16",
+      "result": "absent"
+    },
+    "actual_unbound_live_orphan_rebinding": {
+      "complete": true,
+      "failed_sample_sha256": "79970dc74f2c856e729eec77cd0dadc32f51ac6eb668a21cf89e2da9cac81d62",
+      "original_complete": false,
+      "previous_interval_repaired": false,
+      "property_sha256": "87aebe737458bc054e18e0ec9c81ac05406ec776467d6ae51229f8838c050afc",
+      "recovered_sample_sha256": "77c9680ab373693cdcf320828ebc1d767d2b093342b5e801c9a007cc0239e950",
+      "result": "rebound"
+    }
+  },
+  "allocation_cost": {
+    "allocated_cpu_hours": 0.8444444444444444,
+    "allocated_cpu_seconds": 3040,
+    "allocated_cpus": 16,
+    "allocated_gpu_seconds": 0,
+    "elapsed_seconds": 190,
+    "scope": "This v8 allocation only, including startup and the optional observer. Earlier failures and collector allocations remain separately recorded; queue/local analysis excluded.",
+    "selected_physical_cores": 8,
+    "state": "COMPLETED"
+  },
+  "collector_method": "proc-identity-state-read-attempts-v8",
+  "completed": true,
+  "failed_binding_recovery": {
+    "absence_is_same_pidfd_release_or_zero_memory": false,
+    "disappearance_fixture": {
+      "actual_flags_zero_pidfd_open_esrch": true,
+      "current_namespace_and_proc_absence_verified": true,
+      "later_whole_collection_required": true,
+      "proc_or_syscall_errors_injected": false,
+      "real_child_reaped_before_pin": true
+    },
+    "original_collection_deadline_milliseconds": 750,
+    "orphan_rebinding_fixture": {
+      "actual_fresh_same_birth_pidfd_open": true,
+      "actual_reparenting": true,
+      "only_initial_stat_enoent_injected": true,
+      "original_ancestry_retained": true,
+      "positive_actual_pss_required": true
+    },
+    "previous_failed_interval_repaired": false,
+    "retry_reserve_milliseconds": 250,
+    "scope": "Only previously published never-bound failed process entries are revisited at a later collection. Valid bound orphans remain owned."
+  },
+  "historical_replay": {
+    "all_derived_fields_unchanged": true,
+    "all_original_incomplete_flags_retained": true,
+    "local_rows_including_overlapping_tails": 14921,
+    "local_unique_raw_rows": 14735,
+    "local_versions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "original_nf_diagnostic_incomplete_rows": 667,
+    "raw_rows_repaired": false,
+    "target_retained_incomplete_rows": 9,
+    "target_versions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      7
+    ]
+  },
+  "limitations": [
+    "The disappearance fixture uses an actual exited child and actual syscall/proc errors. The live-orphan fixture injects only the initial stat ENOENT; reparenting, fresh pidfd and positive memory reads are actual.",
+    "These fixtures establish the specified process transitions, not every model shutdown or a complete training-memory measurement.",
+    "Ambiguous namespace, changed identity, permission errors, unexplained process state or exhausted collection time remain incomplete. No old failed interval gains inferred memory.",
+    "Per-process PSS is sampled and excludes unmapped filesystem cache. The optional aggregate-memory bridge was unavailable; total host peak and physical24GB support remain unqualified."
+  ],
+  "local_validation": {
+    "errors": 0,
+    "failures": 0,
+    "host_tests_included": 169,
+    "kernel_release": "6.8.0-101-generic",
+    "performance_tests": 64,
+    "runtime_tests": 12,
+    "scope": "Separate local CPU suite; counts include the host subset and are not additive to target qualification.",
+    "skips": 0,
+    "stage_tests": 19,
+    "tests": 264
+  },
+  "optional_allocation_memory_bridge": {
+    "available": false,
+    "baseline_observation_available": true,
+    "container_payload_membership_proven": false,
+    "controller_available": true,
+    "final_peak_bytes": null,
+    "observer_exit_code": 0,
+    "observer_reaped": true,
+    "required_for_collector_qualification": false,
+    "scope": "The baseline cannot establish the container workload peak or complete allocation host residency. Diagnostic failure did not gate the host tests.",
+    "unavailable": {
+      "errno": 13,
+      "operation": "candidate cgroup namespace read",
+      "type": "PermissionError"
+    }
+  },
+  "projection_source_sha256": "115c369f89a32341513eea386129b0f9279217dfc6ed3aa75c761666d19635a6",
+  "protocol": "cosmos.native-qlora-host-collector-v8-cpu-evidence.v1",
+  "qualification_scope": "Actual CPU process fixtures on the recorded allocated Linux container. No model, media, CUDA, full-training, speed, task-quality or release qualification.",
+  "release_qualified": false,
+  "retained_exit_fixture_scope": {
+    "failed_interval_contributes_memory": false,
+    "independent_whole_recollection_required": true,
+    "process_exit_reap_and_same_pidfd_release_actual": true,
+    "thread_rollup_esrch_controlled": true
+  },
+  "source_revision": "be0ca36393a19e53832c3e329adb17c2589f3152",
+  "source_sha256": {
+    "capture": "2440c807a07676ef39414fc5ec87930367b513e61f3ec7566acae36aa2a2316a",
+    "collector_source": "42474a569c8748b68fb03a698c6ed527266f62b587ad75ce7625a6586d31caf8",
+    "collector_tests": "18dc3d4287b66afb1ed6d23b9edf97f363c296466f94809ec68c3c8b76d6d3a4",
+    "historical_differential": "a3f92bedd7c35dee8f6a67f946c2beb3f024cdca2ff42ddf9c3958b7e8189894",
+    "historical_row_manifest": "7fa92aa781bd26e29e9ac178c61c8e002fc6ccc47a9128182c8fc4a8327c9b8d",
+    "independent_review": "8f13fe0d6c6863773813530bbf0c09293dc3f8f5c6f91dfc14fd8469d4902020",
+    "local_preparation": "533442c4730c046f649ab4ee127b5dd4f23824610d1bb4f6fad6fd84bc4d7c34",
+    "local_test_xml": "60a45f9f59d2649727600d6b976a7cfdaeabf30a816341c92040453d73d37ee4",
+    "optional_bridge_cleanup": "275f203da3dc3d3b7e0e04d75554d97d7302c6ff5012343577ffe3d2edbe41bd",
+    "optional_bridge_report": "3070a3a463341f34a337295de5bc1258eab001847582e9e4318abcc41ec7f60d",
+    "target_proof": "7a403a68650c982a1261ff03e672d355b18171c9ca87a2bda59c00a3b5d41fa2",
+    "target_xml": "7e927d4e27f69e8a30468fbe3c27a1a3b40b508ca99148c59de42d4c30b54eb5",
+    "terminal_review": "77312f0ee5a7724bd6f2ddd8745a637516c22e37a3efaba996800f08cde214cd"
+  },
+  "target": {
+    "errors": 0,
+    "failures": 0,
+    "kernel_release": "5.15.0-1032-oracle",
+    "skips": 0,
+    "tests": 169
+  }
+}

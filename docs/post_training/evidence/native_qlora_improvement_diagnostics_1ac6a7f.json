@@ -1,0 +1,261 @@
+{
+  "allocator_arena_cpu": {
+    "arena2_vs_arena0_percent": {
+      "full_command_seconds": -1.517850768915452,
+      "processing_seconds": -0.16445981380782682,
+      "replay_seconds": -0.6631446771162897,
+      "sampled_worker_peak_pss_bytes": -0.40726079970730966
+    },
+    "capture_sha256": "aa259678b0045226e7df0c3b03bb7f9f781b22783c116a7e469bf2285d1e824c",
+    "comparison_reproduced_exactly": true,
+    "limitations": [
+      "Single0\u21922 order; no counterbalanced repetition or confidence interval.",
+      "CPU preprocessing only; no model/GPU training or end-to-end speed claim.",
+      "Worker boundary and1Hz process-tree memory are sampled lower bounds; no new completeness qualification.",
+      "malloc_info free bins exclude tcache and snapshots are not simultaneous with PSS.",
+      "Common end-only trim occurs after replay timing and is not the arena intervention."
+    ],
+    "production_policy_qualified": false,
+    "review_sha256": "8792f02b17a892e03061fd1a2730e5e0bb66a4c81bffb4b8dd43c7cdeb877258",
+    "rows": 1000
+  },
+  "hash_routing_cpu_media": {
+    "cache_bytes_total": 1073741824,
+    "cases": [
+      {
+        "all_children_closed": true,
+        "case_seconds": 116.70643731401651,
+        "parent_rng_unchanged": true,
+        "replay_seconds": 85.69525512799737,
+        "setup_seconds": 27.70524303201819,
+        "worker_row_counts": [
+          64
+        ],
+        "workers": 1
+      },
+      {
+        "all_children_closed": true,
+        "case_seconds": 135.8546349260141,
+        "parent_rng_unchanged": true,
+        "replay_seconds": 84.5420020520105,
+        "setup_seconds": 49.941008674009936,
+        "worker_row_counts": [
+          38,
+          26
+        ],
+        "workers": 2
+      },
+      {
+        "all_children_closed": true,
+        "case_seconds": 136.85187042001053,
+        "parent_rng_unchanged": true,
+        "replay_seconds": 84.3992294720083,
+        "setup_seconds": 51.03806832199916,
+        "worker_row_counts": [
+          38,
+          26
+        ],
+        "workers": 2
+      }
+    ],
+    "claim_limit": "Single ordered CPU diagnostic. No useful replay gain observed. Fixture started workers sequentially; setup is not production startup evidence. No GPU training/recovery qualification.",
+    "cold_reconstruction_exact": true,
+    "exact_inputs_masks_ids": true,
+    "proof_sha256": "318d4d6e50958988fe57ae6eafafbcfb2ea999461813fe380a42e8cfd5dc302a",
+    "rows": 64,
+    "window_rows": 8
+  },
+  "native_code": {
+    "hash_routing_media_test": "94f1b4b88c660cd79d512cea78fa239d87cf8d4a",
+    "initializer_and_profiles": "1ac6a7ff975c3e7a2f8851b7495104ca9a1b1b77"
+  },
+  "prospective_product_target": {
+    "confirmation": {
+      "current_dataset_final_evaluation_authorized": false,
+      "existing_noninferiority_and_adaptation_guards": "unchanged from campaign.json",
+      "first_eligible_predeclared_checkpoint_at_or_above_target": "time-to-target; unsuccessful trajectories are censored and cannot be treated as a speed pass",
+      "new_final_data_required": true,
+      "paired_seeds": [
+        17,
+        42,
+        123
+      ],
+      "quality_superiority": "Both paired hierarchical and crossed-group one-sided95% accuracy-difference lower bounds strictly above zero at equal total training compute",
+      "time_includes": [
+        "cold_start",
+        "source_validation",
+        "calibration",
+        "initializer_preparation",
+        "compilation",
+        "preprocessing",
+        "training",
+        "scheduled_validation",
+        "checkpoint",
+        "portable_export",
+        "required_scoring"
+      ],
+      "time_superiority": "Paired one-sided95% ratio upper bound <=0.90"
+    },
+    "development_target": {
+      "both_conditions_required": true,
+      "restricted_correct_min": 540,
+      "rows": 584,
+      "source": "Previous BF16 rank32 three-seed development mean; accuracy rounded upward to an integer count",
+      "token_weighted_nll_max": 0.12357161758062493
+    },
+    "limits": "No independent final test groups are available in the authorized data. Full comparison checkpoint grid and resource envelope must be locked before its runs.",
+    "sha256": "3d001eb82a66d3213f5b3bb7d3d56b54f52c8e19158152e1084e1dcd1f2d5ca5"
+  },
+  "protocol": "cosmos.native-qlora-improvement-completed-diagnostics.v1",
+  "residual_initialization": {
+    "capture_sha256": "a9a75865984aa36a30cece5f6b38ffc8f0c74e64084b83902839fbdc1462fd9a",
+    "limitations": [
+      "No training, calibration accuracy or task NLL result.",
+      "Initializer manifest internal timing excludes source admission/startup; charge outer preparation stage and allocation separately.",
+      "Torch allocator peaks describe initializer phase only, not full-model training.",
+      "External samples are lower bounds and do not measure unmapped filesystem page cache or unsampled short-lived processes.",
+      "All original incomplete host flags remain unchanged."
+    ],
+    "manifest_sha256": "0d0c193035ad2520cf23ecf48d34db3750b181d7aa82783e0a661cfcb9d9d353",
+    "matrices": 252,
+    "preparation": {
+      "cost_scopes_nested_not_additive": true,
+      "cuda_peak_allocated_bytes": 889128960,
+      "cuda_peak_reserved_bytes": 914358272,
+      "host_lifetime_peak_rss_bytes": 1539387392,
+      "internal_seconds": 40.76794908702141,
+      "phase_sampled": {
+        "device_peak_bytes": 2336423936,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 1899874304,
+        "host_rss_sum_peak_bytes": 2091606016,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 56.664782762527466,
+        "owned_device_process_peak_bytes": 1602224128,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 45,
+        "sampling_gap_seconds": {
+          "count": 44,
+          "maximum": 1.3781805038452148,
+          "mean": 1.2878359718756243,
+          "median": 1.2864845991134644,
+          "p95": 1.311007285118103,
+          "sum": 56.664782762527466
+        }
+      },
+      "phase_seconds": 58.31442628597142,
+      "stage_seconds": 81.54245797503972
+    },
+    "reconstruction": {
+      "after_squared_frobenius_total": 38570.49244495527,
+      "before_squared_frobenius_total": 39539.83431830154,
+      "relative_squared_error": 0.9754844224803038,
+      "scope": "Weight-space FP32 residual against actual fixed NF4 BF16 dequantization; not forward/task-quality parity or benefit.",
+      "squared_error_reduction_fraction": 0.02451557751969624
+    },
+    "tests": {
+      "all_tests_no_failures_errors_skips": true,
+      "higher_precision_cpu_tests": 1,
+      "kernel_cuda_tests": 14,
+      "residual_cuda_tests": 1
+    },
+    "validation_sha256": "a6f00d032613ec1843f8b363a59e38f27740a0fb125e8186cc96257abf122cfd"
+  },
+  "scope": "Completed diagnostic evidence only; calibration task scores, balanced routing, actual native training speed and final release claims are not qualified by this artifact.",
+  "status": "product_objective_open",
+  "task_profiles": {
+    "allocation": {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "cpu_core_hours_inside_gpu_allocation": 14.262222222222222,
+      "elapsed_seconds": 3209,
+      "gpu_hours": 0.8913888888888889
+    },
+    "capture_sha256": "4a6dd8b5225c9b69dcb549c375dc12177233555fbc962bccb9fca2106e7e6778",
+    "cases": {
+      "task_profile_early_bf16": {
+        "device_busy_union_seconds": 3.3972040043945313,
+        "device_class_union_seconds": {
+          "device_memset": 0.0036689365234375,
+          "sft.module.adapter_a.forward": 0.16564473583984374,
+          "sft.module.adapter_b.forward": 0.112780921875,
+          "sft.module.attention.forward": 0.679176638671875,
+          "sft.module.output_projection.forward": 0.027791505859375,
+          "trainer.backward": 7.177734375e-05,
+          "trainer.optimizer": 0.00332496240234375,
+          "transfers": 0.0257264892578125,
+          "unattributed_kernel": 2.3790180366210936
+        },
+        "native_command_seconds": 720.8802460879087,
+        "raw_trace_sha256": "1c6f5a23f7af718ab555824a1288d6635d0cd0038060374a7f88aed8a062e545",
+        "traced_microbatch_wall_seconds": 28.090476514160155,
+        "traced_microbatches": 16,
+        "traced_prefetch_wait_seconds": 12.409484619140626
+      },
+      "task_profile_early_nf4": {
+        "device_busy_union_seconds": 4.582589459472656,
+        "device_class_union_seconds": {
+          "dequantization": 0.7503105830078125,
+          "device_memset": 0.00370281787109375,
+          "sft.module.adapter_a.forward": 0.16562786865234375,
+          "sft.module.adapter_b.forward": 0.112697484375,
+          "sft.module.attention.forward": 0.75961532421875,
+          "sft.module.output_projection.forward": 0.0277843408203125,
+          "trainer.backward": 7.03720703125e-05,
+          "trainer.optimizer": 0.00329737646484375,
+          "transfers": 0.0258928349609375,
+          "unattributed_kernel": 2.73359045703125
+        },
+        "native_command_seconds": 764.1334052828606,
+        "raw_trace_sha256": "51e652120d72ddf7aedb2c53a96b6403c7f5f18172fc17efefdd4f6455ce2c16",
+        "traced_microbatch_wall_seconds": 29.808250610839846,
+        "traced_microbatches": 16,
+        "traced_prefetch_wait_seconds": 10.099136833496093
+      },
+      "task_profile_steady_bf16": {
+        "device_busy_union_seconds": 3.397002025878906,
+        "device_class_union_seconds": {
+          "device_memset": 0.00367113232421875,
+          "sft.module.adapter_a.forward": 0.16603047998046874,
+          "sft.module.adapter_b.forward": 0.11257381591796875,
+          "sft.module.attention.forward": 0.679146294921875,
+          "sft.module.output_projection.forward": 0.0277918408203125,
+          "trainer.backward": 7.1232421875e-05,
+          "trainer.optimizer": 0.00331382763671875,
+          "transfers": 0.02574082470703125,
+          "unattributed_kernel": 2.3786625771484373
+        },
+        "native_command_seconds": 720.6575404379983,
+        "raw_trace_sha256": "f08c7d9c85711c8fa5c1b957ffb41e51603300b4ad9419f850f7c9130f6c04c5",
+        "traced_microbatch_wall_seconds": 27.5061975859375,
+        "traced_microbatches": 16,
+        "traced_prefetch_wait_seconds": 11.769209180175782
+      },
+      "task_profile_steady_nf4": {
+        "device_busy_union_seconds": 4.585917792480469,
+        "device_class_union_seconds": {
+          "dequantization": 0.75110207421875,
+          "device_memset": 0.00432420166015625,
+          "sft.module.adapter_a.forward": 0.1658588203125,
+          "sft.module.adapter_b.forward": 0.11224476953125,
+          "sft.module.attention.forward": 0.7599904072265625,
+          "sft.module.output_projection.forward": 0.02778786767578125,
+          "trainer.backward": 7.123681640625e-05,
+          "trainer.optimizer": 0.00330003759765625,
+          "transfers": 0.02685932373046875,
+          "unattributed_kernel": 2.7343790537109376
+        },
+        "native_command_seconds": 757.3436260088347,
+        "raw_trace_sha256": "4c845113ee35a5dabf090713a3b254c87666a503ca502e5d0c92e1b67716471b",
+        "traced_microbatch_wall_seconds": 28.724265986328124,
+        "traced_microbatches": 16,
+        "traced_prefetch_wait_seconds": 9.596431116699218
+      }
+    },
+    "claim_limit": "Profiler overhead prevents comparative end-to-end speed claims. CPU ranges and device work overlap.",
+    "host_gap": "One early BF16 whole-stage sample remains incomplete during teardown; no retroactive repair.",
+    "summary_sha256": "295d50a36bd133b5d48e728803da9569714b294a2028b277b43240b0765ce9c8"
+  }
+}

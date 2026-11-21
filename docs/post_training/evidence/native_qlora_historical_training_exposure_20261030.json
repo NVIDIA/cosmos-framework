@@ -1,0 +1,15 @@
+{
+  "consumed": 2400,
+  "cursor_source_sha256": "eba5ca043a9d46765c405a39c716d0cd4ae880349d5e320ff62f2531db57e107",
+  "groups_exposed_by_first2400": 96,
+  "native_indices_sha256": "772960c786af085bc54d73290422957e37cae0534ea79fde1db400fd4fb741fd",
+  "original_training_groups": 96,
+  "protocol": "cosmos.wts-historical-training-exposure.v1",
+  "scope": "Deterministic native cursor reconstruction from recorded seed42/micro1/accum8/300appliedupdates and exactoriginaltrainbytes; no media decoding or outcome access.",
+  "seed": 42,
+  "shuffle": true,
+  "source_train_sha256": "1947d4b1c021bc5685f337d1b612e50754aa3ff58284e1d5e36455be6bb45afa",
+  "training_groups_not_exposed": 0,
+  "unexposed_training_rows": 0,
+  "world_size": 1
+}

@@ -1,0 +1,151 @@
+{
+  "allocation": {
+    "allocated_cpu_hours": 0.3511111111111111,
+    "allocated_gpus": 1,
+    "allocated_logical_cpus": 16,
+    "elapsed_seconds": 79,
+    "exit_code": "0:0",
+    "gpu_allocation_hours": 0.021944444444444444,
+    "gpu_used_for_tests": false,
+    "state": "COMPLETED"
+  },
+  "cancelled_cpu_only_attempt": {
+    "allocated_seconds": 0,
+    "cpu_proof_completed": false,
+    "started": false,
+    "state": "CANCELLED"
+  },
+  "correction": {
+    "identity_semantics": "pid_start_pidfd_owned_ancestry",
+    "maximum_wait_milliseconds": 350,
+    "method": "proc-identity-state-read-attempts-v3",
+    "native_arithmetic_changed": false,
+    "new_memory_source": false,
+    "old_memory_imputed": false,
+    "original_collection_budget_milliseconds": 750,
+    "remaining_limit": "Scheduler delays and synchronous proc reads are not hard real-time bounded; unreleased or unexplained unreadability still fails closed.",
+    "retry_reserve_milliseconds": 250
+  },
+  "fresh_target_host_proof": {
+    "actual_live_owner_and_reparenting": true,
+    "capability_restore_and_actual_eacces": true,
+    "delayed_last_thread": {
+      "actual_positive_exit_then_fresh_collection": true,
+      "actual_wait_seconds": 0.1007121620059479,
+      "final_released_pss_bytes": 0,
+      "initial_memory_errno": 3,
+      "initial_pidfd_nonready": true,
+      "next_collection_start_delta_seconds": 0.3532925700128544,
+      "requested_timeout_milliseconds": 350,
+      "whole_collection_attempts": 2
+    },
+    "deselected": 0,
+    "errors": 0,
+    "failures": 0,
+    "gpu_used": false,
+    "host_tests": 61,
+    "kernel_release": "5.15.0-1032-oracle",
+    "no_model_imports": true,
+    "passed": 61,
+    "pytest_version": "9.1.1",
+    "python_version": [
+      3,
+      12,
+      12
+    ],
+    "selected_logical_cpus": 1,
+    "skips": 0,
+    "unserialized_reparent_assertions_recomputed": false
+  },
+  "historical_raw_replay": {
+    "all2319_reread_by_this_projection": false,
+    "all_recorded_derived_fields_exact": true,
+    "incomplete_flags_retained": 8,
+    "new_decoder_receipt_source_bound": true,
+    "rows": 2319
+  },
+  "historical_state_evidence": {
+    "arms": [
+      "nf4",
+      "bf16"
+    ],
+    "driver_libcuda_image_bytes_historically_proven": false,
+    "fresh_cuda_tests": 0,
+    "fresh_native_updates": 0,
+    "higher_precision_cpu_regressions_inherited": 1,
+    "payload_exact": true,
+    "scope": "Source-bound historical evidence remains separate; this projection rereads no tensor payloads and does not qualify300-update interruption.",
+    "updates_per_arm": 4
+  },
+  "limitations": [
+    "Old v1/v2/v3 false flags remain unchanged; no historical gate repaired.",
+    "Fresh runtime cells still require actual complete raw telemetry and their own native reload/recovery before selection.",
+    "Sampled host/GPU peaks are lower bounds; process RSS/PSS is not total host or filesystem-cache residency.",
+    "The original exposed256-row NLL regression+4.17949% exceeds2%; this collector proof does not resolve quality.",
+    "Untouched32 has one independent group; no release uncertainty can be inferred."
+  ],
+  "local_workflow_tests": {
+    "passed": 479,
+    "scope": "Previously completed local workflow suite, not additional accelerator qualification."
+  },
+  "memory_benefit_claimed": false,
+  "preserved_failed_v9": {
+    "cpu_component_passes": 122,
+    "cuda_component_passes": 14,
+    "elapsed_seconds": 269,
+    "exit_code": "1:0",
+    "host_component_passes": 50,
+    "incomplete_indices": [
+      94
+    ],
+    "outer_gate_promoted": false,
+    "outer_state": "FAILED",
+    "prior_values_recomputed_unchanged": true,
+    "sample_count": 95
+  },
+  "projection_source_sha256": "2cb3c06341c1cc3e078f39e0fb882d7d6dcb3f52498d8e29c4d7e143446955b3",
+  "protocol": "cosmos.public-collector-bounded-wait.v1",
+  "quality_gate_satisfied_by_this_proof": false,
+  "release_qualified": false,
+  "resource_amendment": {
+    "main_gpu_cap_seconds": 172800,
+    "main_separate_cpu_cap_seconds": 230400,
+    "new_maximum_reservation_seconds": 10500,
+    "new_telemetry_gpu_subcap_seconds": 2160,
+    "no_rolling_amendments_or_further_collector_attempts": true,
+    "old_maximum_reservation_seconds": 10800,
+    "prior_gpu_actual_seconds": 1765,
+    "prior_telemetry_gpu_subcap_seconds": 1800,
+    "transferred_gpu_seconds": 300
+  },
+  "scope": "Actual host-fixture qualification of bounded acquisition; no fresh model/GPU execution, runtime selection, speed, memory-benefit, task-quality or release qualification.",
+  "source_sha256": {
+    "inherited_a8_public_evidence": "8e8bb7c81b6b2b48ab6701bd508a7ea42da83e24fcb7a3ee3c23f22094f67a56",
+    "legacy_replay": "f565ce12ba4d213b6b23989bb41bf2ff6f536b7ab18e94e3005b6e25933197f2",
+    "local_tests": "574c8ccac36182510f5e1bbd8a44f5603d6afe6d9f01ee64755eb487a4c6b174",
+    "policy": "f19d1b9a1114aeb8227e144b944d8e01a2d66cebf9dcf0974c0239e288ebe334",
+    "prior_cpu_tests": "200f2f02bc3ce711c9284c0d1637b3c1b94548c8abf3bd08fab2d702e53ab166",
+    "prior_cuda_tests": "accf9784f569b95f1317cb7aa284f26d4f73a580c5dcccf0d0bc9cea74f31a0b",
+    "prior_failure_review": "8f2af28d762a54ad88877a973d96f170fba6d676e97f2096a32f0fa82b96250a",
+    "prior_raw_samples": "e4ffa7175246c312d86163630481310d9d0ec1804558d52f893b431705072231",
+    "probe_receipt": "5cd4948999f5149b97b5c472b0ee1535657d57456710bef5c5fbd326488efcea",
+    "target_capability-fixtures.json": "9c63c3c5b444b2b58f86381225303eb976c91cd1e149b56670bdce18675b5421",
+    "target_capture": "29fd8863faed609cf81bcad3910b033ded6064ed0d663532a5e04bcf05a5d61a",
+    "target_completion.json": "ad6a1395f5fd98f4caa185ec05000099bd973197acc2b2b33c276862d6380ec3",
+    "target_delayed-exit-wait.json": "fa6051981acb15f23752bc587183f95ce49c84f5782e63d536787d97c7b4b7ee",
+    "target_identity.json": "ad2742dfc8f397cf79da1a691c117278ac86a373bd62850c4456722ee663e855",
+    "target_imports.json": "bca44bf2e96c78bf6f34ab8abecbc9e1fde96562bac13129bd42abdfe2eeae89",
+    "target_live-owner-transition.json": "70e8a9779c363f55a64494dcb06e0611759925ab6ac5d8824d2bba7f188afc4b",
+    "target_owned-reparenting.json": "852e84cb67dc068121d96f8bade4cb5a1a052effa7cd5dc57063b324f5f2b9c7",
+    "target_owner-transition.json": "5285d0596fa4144bcbc0ccc75e68a4d2599ee184ea6251b69f22970c3758ce0e",
+    "target_placement.json": "8ab5596dbce04a81b50e122bed23c9631b489a694762c46d6dfd171abeec780b",
+    "target_post-suite-identity.json": "721b7010c210a0b33189364e47bdf2d42020dd5cf6bcf8f3324b99ef4e108f30",
+    "target_slurm-job.txt": "d2f42dedec12aba540c5b2c7474b7def16fce5c7c20c62fb6bed9e325ecacdc9",
+    "target_terminal": "87b44ab38c1fd9b751f6d1e5716177c2ef6021584345a708ee03ef49e705d27d",
+    "target_test-command.json": "c4af51bb8eee854e38afa642a1d8e1d22b83b92a7af962e158d9549056089bc3",
+    "target_test-session.json": "fa72bdd9775e1c8e148ae25b040d96fbe674485b4ed41682afa892c4dc269172",
+    "target_tests.xml": "91bf01eb238f173739f3d6367cae816abf9ce9ff1f68caf14939bb285c28e072",
+    "workflow_receipt": "b3d10a293b254a402da3918cf057e8f39b4d0390cb8e3ba47cc073af566a3fdc"
+  },
+  "workflow_revision": "94289a2bab5530eb6ba91a1a1132ae7b8607d753"
+}

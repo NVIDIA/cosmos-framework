@@ -1,0 +1,366 @@
+{
+  "comparison_kinds": [
+    "controlled",
+    "selected_fixed_execution"
+  ],
+  "extended_workload_scope": {
+    "24_gib_is_observed_process_budget_not_supported_device_capacity": true,
+    "accelerator_outcome_claim_in_this_projection": false,
+    "larger_media": {
+      "configured_policy": {
+        "device_process_budget_bytes": 25769803776,
+        "max_length": 4096,
+        "microbatches": [
+          {
+            "grad_accum": 8,
+            "microbatch": 1
+          },
+          {
+            "grad_accum": 4,
+            "microbatch": 2
+          },
+          {
+            "grad_accum": 2,
+            "microbatch": 4
+          }
+        ],
+        "processor_kwargs": {
+          "images_kwargs": {
+            "size": {
+              "longest_edge": 262144,
+              "shortest_edge": 65536
+            }
+          },
+          "videos_kwargs": {
+            "fps": null,
+            "num_frames": 16,
+            "size": {
+              "longest_edge": 4194304,
+              "shortest_edge": 65536
+            }
+          }
+        }
+      },
+      "measurement_scope": "CPU native-processor preparation, not completed accelerator training",
+      "splits": {
+        "train": {
+          "merged_visual_token_values": [
+            2016
+          ],
+          "processed_height_width_values": [
+            [
+              384,
+              672
+            ]
+          ],
+          "rows": 32,
+          "sequence_length_range": [
+            2131,
+            2172
+          ],
+          "supervised_token_range": [
+            2,
+            2
+          ],
+          "video_grid_thw_values": [
+            [
+              8,
+              24,
+              42
+            ]
+          ]
+        },
+        "validation": {
+          "merged_visual_token_values": [
+            2016
+          ],
+          "processed_height_width_values": [
+            [
+              384,
+              672
+            ]
+          ],
+          "rows": 8,
+          "sequence_length_range": [
+            2133,
+            2152
+          ],
+          "supervised_token_range": [
+            2,
+            2
+          ],
+          "video_grid_thw_values": [
+            [
+              8,
+              24,
+              42
+            ]
+          ]
+        }
+      }
+    },
+    "long_sequence": {
+      "configured_policy": {
+        "device_process_budget_bytes": 25769803776,
+        "max_length": 4096,
+        "microbatches": [
+          {
+            "grad_accum": 8,
+            "microbatch": 1
+          },
+          {
+            "grad_accum": 4,
+            "microbatch": 2
+          },
+          {
+            "grad_accum": 2,
+            "microbatch": 4
+          }
+        ],
+        "processor_kwargs": {
+          "images_kwargs": {
+            "size": {
+              "longest_edge": 262144,
+              "shortest_edge": 65536
+            }
+          },
+          "videos_kwargs": {
+            "fps": null,
+            "num_frames": 8,
+            "size": {
+              "longest_edge": 524288,
+              "shortest_edge": 32768
+            }
+          }
+        }
+      },
+      "measurement_scope": "CPU native-processor preparation, not completed accelerator training",
+      "splits": {
+        "train": {
+          "merged_visual_token_values": [
+            240
+          ],
+          "processed_height_width_values": [
+            [
+              192,
+              320
+            ]
+          ],
+          "rows": 32,
+          "sequence_length_range": [
+            4056,
+            4096
+          ],
+          "supervised_token_range": [
+            2494,
+            2623
+          ],
+          "video_grid_thw_values": [
+            [
+              4,
+              12,
+              20
+            ]
+          ]
+        },
+        "validation": {
+          "merged_visual_token_values": [
+            240
+          ],
+          "processed_height_width_values": [
+            [
+              192,
+              320
+            ]
+          ],
+          "rows": 8,
+          "sequence_length_range": [
+            4072,
+            4091
+          ],
+          "supervised_token_range": [
+            2549,
+            2623
+          ],
+          "video_grid_thw_values": [
+            [
+              4,
+              12,
+              20
+            ]
+          ]
+        }
+      }
+    },
+    "synthetic_long_answer_is_runtime_stress_not_task_quality": true,
+    "synthetic_workload_cannot_change_quality_split_or_score_gate": true
+  },
+  "fixed_settings": {
+    "activation_checkpointing": "full",
+    "adapter_compute_dtype": "float32",
+    "alpha": 64,
+    "cache_bytes": 1073741824,
+    "compile_language_model": false,
+    "effective_batch": 8,
+    "learning_rate": 0.0001,
+    "logits_mode": "full",
+    "microbatch": 1,
+    "prefetch": true,
+    "rank": 32,
+    "steps": 300,
+    "warmup_steps": 30
+  },
+  "fresh_paired_seeds": [
+    17,
+    123
+  ],
+  "historical_quality_failure_preserved": {
+    "maximum_allowed_relative_increase": 0.02,
+    "original_rows": 256,
+    "passed": false,
+    "relative_native_nll_increase": 0.04179491590591922,
+    "scope": "Original rank16 single-seed diagnostic; not overwritten by subsequent studies"
+  },
+  "memory_benefit_criterion_bytes": 6442450944,
+  "native_build_revision": "55e7f14dfeca84002d0324108808a0e682579842",
+  "new_fixed_training_results_claimed": false,
+  "new_selected_scoring_results_claimed": false,
+  "original_best_fit_qualified": false,
+  "original_runtime_optimization": {
+    "captured_raw_prefix_rows_rederived": 322,
+    "complete": false,
+    "no_sample_repair_or_partial_selection": true,
+    "reason": "Collection crossed training to portable publication; original stage assignment and incomplete flag retained",
+    "sampled_training_budget": {
+      "budget_bytes": 25769803776,
+      "eligible_for_higher_microbatch": false,
+      "evidence_complete": false,
+      "observed_peak_within_budget": null,
+      "observed_process_peak_lower_bound_bytes": 17433624576,
+      "reasons": [
+        "incomplete_host_pss"
+      ],
+      "sampled_peaks_are_lower_bounds": true,
+      "scope": "Observed owned-device-process peak during native training, including load, validation and checkpoint writes; not physical device capacity.",
+      "unseen_short_peaks_remain_possible": true
+    },
+    "selector_executed": false,
+    "subsequent_stop": {
+      "completed": false,
+      "existing_native_sentinel": true,
+      "interpretation": "Deliberate native preemption; bounded cell required its own final step checkpoint and correctly remained incomplete",
+      "native_final_step": 1,
+      "native_training_exit_code": 0,
+      "outer_elapsed_seconds": 1910,
+      "outer_exit_code": "1:0",
+      "outer_state": "FAILED"
+    },
+    "training_labelled_incomplete_samples": 1
+  },
+  "paired_seeds": [
+    17,
+    42,
+    123
+  ],
+  "pending": [
+    "Fresh selected fixed-execution seeds17 and123 complete native training and own reload proofs",
+    "All four prospective scoring plans jointly authorized before untouched scoring",
+    "Completed six-trained-plus-two-frozen paired score bundles per plan and unchanged statistical checks",
+    "Explicit reporting of observed memory criteria and retained host gaps"
+  ],
+  "projection_input_manifest_sha256": "9aaeee26d7889c1156458ec4df0403f3f9b44faffbb3d9a6f1b18c315aa991a7",
+  "projection_source_sha256": "ef69eedf613181ca1d7c08bfdadbc23b55d6448a7a2affe317299fdd2013f284",
+  "protocol": "cosmos.native-qlora-selected-fixed-execution-prospective.v1",
+  "public_workflow_revision": "941b6458f99c4be730192c3e6a2ecff81a794275",
+  "quality_criteria": {
+    "accuracy_loss_upper95_max": 0.01,
+    "bootstrap_repetitions": 10000,
+    "both_hierarchical_and_shared_group_checks_required": true,
+    "gain_over_frozen_nf4_lower95_strictly_greater_than": 0.0,
+    "relative_native_nll_upper95_max": 0.02,
+    "rng_seed": 2026
+  },
+  "release_qualified": false,
+  "resource_contract": {
+    "decision_snapshot_total_gpu_hours": 47.6425,
+    "further_collector_validation_attempts": false,
+    "main_gpu_allocation_hours": 48,
+    "max_active_gpu_reservations": 4,
+    "prospective_decision_accounting_snapshot_gpu_hours": 26.1425,
+    "protected_fresh_quality_training_gpu_hours": 8,
+    "protected_scoring_gpu_hours": 7.5,
+    "separate_cpu_allocated_core_hours": 64,
+    "snapshot_is_not_current_consumption": true,
+    "two_extended_profile_reserved_gpu_hours": {
+      "long4k_video8": 3,
+      "short_video16_large": 3
+    }
+  },
+  "reuse_scope": {
+    "current_checkpoint_integrity_checked": true,
+    "current_dcp_hashes_have_full_historical_byte_reference": false,
+    "exact_identity_audit_complete": true,
+    "four_update_recovery_scope_only": true,
+    "fresh_inspections_and_reload_at_selected_scoring_required": true,
+    "homogeneous_three_fresh_timing_claim": false,
+    "original_host_flags_retained": true
+  },
+  "reused_seed": 42,
+  "scope": "Prospective selected-hyperparameter quality validation; original runtime optimization remains incomplete",
+  "scoring_contract": {
+    "all_four_plans_jointly_locked_before_first_untouched_outcome": true,
+    "independent_group_confidence_estimable_on_untouched": false,
+    "plans": [
+      {
+        "comparison_kind": "controlled",
+        "fixed_frozen_seed42_reference_bundles": 2,
+        "rows": 256,
+        "split": "regression",
+        "trained_seed_arm_bundles": 6
+      },
+      {
+        "comparison_kind": "controlled",
+        "fixed_frozen_seed42_reference_bundles": 2,
+        "rows": 32,
+        "split": "untouched_diagnostic",
+        "trained_seed_arm_bundles": 6
+      },
+      {
+        "comparison_kind": "selected_fixed_execution",
+        "fixed_frozen_seed42_reference_bundles": 2,
+        "rows": 256,
+        "split": "regression",
+        "trained_seed_arm_bundles": 6
+      },
+      {
+        "comparison_kind": "selected_fixed_execution",
+        "fixed_frozen_seed42_reference_bundles": 2,
+        "rows": 32,
+        "split": "untouched_diagnostic",
+        "trained_seed_arm_bundles": 6
+      }
+    ],
+    "release_qualified": false,
+    "untouched_independent_groups": 1
+  },
+  "source_sha256": {
+    "builder_receipt": "ceb2f8d43580cfc910dfecd3d79b9b1c0a59597b1c8976f09b429fb4287c2cde",
+    "capture_receipt": "3584106ee244b09ff0e78c69104849771d9af7a7090f07bf0ea552063c4a6415",
+    "current_checkpoint_integrity": "edda5642a6cfb5903b1591ae1bd4d3dec8b5d5014f2d59b12da8231a4d4cddaf",
+    "failed_training_capture": "44d860a19086c823f8cb43e89ba674e5bcd6d385baeb2747012e1de6d8ec3ceb",
+    "failed_training_review": "603a3118aa52802dd5b6ba3d882fb8e9f59b83a736ff8b307d6bf5c7d43e5de3",
+    "fixed_decision": "f2c6b02e528ac519c911e5e1545ee2de699fe12f3646e8494e663bec4f1435d2",
+    "historical_quality": "979f78c58b190140f9def4e939e3f49d0ce40835028e9dfe13d0f745e96f21f4",
+    "larger_media_workload": "f2bc3f3d497a02a550913abe2b6a3e7a60f8105d4dc5a27d6166e23c8d8a2439",
+    "long_workload": "0a9e73ba55d28029519d5b4eb460464cf71887a99283679172840637945c1350",
+    "preparer_receipt": "36c0647bbc9a5757354e943f92a238a21af64ccc0053efeeb64377b182cd7dd2",
+    "producer_profile": "2e64ecfae5543faae31f60f6ed0b7a291ec5bd149e93b5bbca963275cbb76686",
+    "reuse_audit": "58b70df7496b08ef89c8585960a781f909702d7ec6aca7eca1d17c56eae9de86",
+    "root_decision": "2ad5e8c1e31de6431637d49a55c662fe4c9b1056588d10d2792e5070badd49ba",
+    "runtime_receipt": "da624d2ac40dfc7806fd63db3042b54540b525014ffacdf4676251a744406e8e",
+    "runtime_upload": "4a626998fe98bb5da27f6130eafee858b4a81153ddc25c8c2a1eda810f7f3c3a",
+    "sentinel_stop_capture": "b937859c289a19e2d4240696ab351a96cdc03775cc62c2f90047424dafee0fb1",
+    "sentinel_stop_review": "2379968089b5d87b4042cf77281c91ed0424cb76b41a6809ecb1174d7faacbe8"
+  },
+  "universal_hardware_or_speed_claim": false
+}

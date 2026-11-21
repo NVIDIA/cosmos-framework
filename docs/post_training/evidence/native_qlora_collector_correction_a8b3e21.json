@@ -1,0 +1,332 @@
+{
+  "allocated_cpu_proof": {
+    "capability_drop_real_eacces_and_restore_verified": true,
+    "child_selected_logical_cpus": 1,
+    "cpu_child_gpu_visible": false,
+    "deselected": 1,
+    "deselection_reason": "The native-framework CPU preflight fixture imports Torch and was deliberately excluded from this no-model-import child; the separate existing multimodal regression is inherited below.",
+    "errors": 0,
+    "failures": 0,
+    "host_sampler_tests_included": 39,
+    "parent_physical_cores": 8,
+    "parent_state_unchanged": true,
+    "passed": 111,
+    "real_owner_transition_and_retained_peak_verified": true,
+    "skipped": 0
+  },
+  "allocation": {
+    "allocated_cpu_hours": 2.617777777777778,
+    "allocated_gpus": 1,
+    "allocated_logical_cpus": 16,
+    "elapsed_seconds": 589,
+    "exit_code": "0:0",
+    "gpu_allocation_hours": 0.16361111111111112,
+    "nested_stage_durations_must_not_be_added_to_allocation_wall": true,
+    "stage_outcomes": [
+      {
+        "elapsed_seconds": 35.862978493008995,
+        "exit_code": 0,
+        "name": "collector_cpu"
+      },
+      {
+        "elapsed_seconds": 23.99575843597995,
+        "exit_code": 0,
+        "name": "crossbuild_preflight"
+      },
+      {
+        "elapsed_seconds": 241.06277855599183,
+        "exit_code": 0,
+        "name": "crossbuild_nf4"
+      },
+      {
+        "elapsed_seconds": 203.42364255600842,
+        "exit_code": 0,
+        "name": "crossbuild_bf16"
+      },
+      {
+        "elapsed_seconds": 7.225373180001043,
+        "exit_code": 0,
+        "name": "crossbuild_prepare"
+      },
+      {
+        "elapsed_seconds": 16.938098890008405,
+        "exit_code": 0,
+        "name": "crossbuild_compare"
+      }
+    ],
+    "state": "COMPLETED"
+  },
+  "correction": {
+    "change": "A proc inode owner change after address-space exit is accepted only with stable PID/birth/parent, Z/X state and a positive identity-bound pidfd poll after final discovery. Whole-collection retry retains earlier observed memory.",
+    "method": "proc-identity-state-read-attempts-v2",
+    "native_training_arithmetic_changed": false,
+    "prior_v1_flags_unchanged": true,
+    "still_rejected": [
+      "live or unknown unreadable memory",
+      "live identity changes",
+      "PID reuse",
+      "parent changes",
+      "stage races",
+      "missing exit proof"
+    ]
+  },
+  "hardware_software": {
+    "device_bytes": 85174583296,
+    "name": "NVIDIA A100-SXM4-80GB",
+    "physical_cpu_cores": 8,
+    "python": "3.12.12 (main, Feb 12 2026, 00:42:14) [Clang 21.1.4 ]",
+    "runtime_precision": {
+      "allow_bf16_reduced_precision_reduction": true,
+      "cuda_matmul_allow_tf32": false,
+      "cudnn_allow_tf32": true,
+      "environment": {
+        "NVIDIA_TF32_OVERRIDE": null,
+        "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE": null
+      },
+      "float32_matmul_precision": "highest",
+      "fp32_precision": {
+        "cuda_matmul": "none",
+        "cudnn": "none",
+        "cudnn_conv": "tf32",
+        "cudnn_rnn": "tf32",
+        "global": "none"
+      }
+    },
+    "thread_environment": {
+      "MKL_NUM_THREADS": null,
+      "OMP_NUM_THREADS": "8",
+      "OPENBLAS_NUM_THREADS": null,
+      "TOKENIZERS_PARALLELISM": "false"
+    },
+    "torch_cuda": "12.8",
+    "torch_git_version": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+    "versions": {
+      "accelerate": "1.13.0",
+      "bitsandbytes": "0.49.2",
+      "safetensors": "0.8.0",
+      "torch": "2.11.0+cu128",
+      "torchcodec": "0.11.0+cpu",
+      "torchvision": "0.26.0+cu128",
+      "transformers": "5.8.1"
+    }
+  },
+  "inherited_kernel_evidence": {
+    "fresh_cuda_suite_run_in_this_allocation": false,
+    "gate_completion_sha256": "ea5fa58cdec59ab2f025df470ba1c0327a2e5967179a945d07a69609be9a4211",
+    "higher_precision_multimodal_cpu_regressions": 1,
+    "historical_driver_libcuda_or_image_bytes_proven": false,
+    "real_cuda_tests": 14,
+    "recorded_runtime_fields_match": true,
+    "same_native_package_and_test_bytes": true,
+    "test_source_sha256": {
+      "test_entrypoints_sft.py": "2a90678c90dd44d7de6c8d956ef686f245a04fffd51e9eaa90870f9c5614ee28",
+      "test_model_qwen3_vl_qlora_gpu.py": "8fd27324a3971732531856da8edf08cefa2435e0f4b084304a74ef85a9e23f46",
+      "test_native_adapter_execution_gpu.py": "bf0ada612525a1e339abaa84f1225a57c247b14faae93cb0c241576059c71072",
+      "test_sft_selected_logits_gpu.py": "a05b5b8e107a75421c4831ad926d0823d48f40bc1f723fa1d6bfda8bf5a1b1b6"
+    }
+  },
+  "limitations": [
+    "Sampled memory values are lower bounds; unobserved short peaks remain possible. Some short native subintervals had no samples even though whole-stage coverage passed.",
+    "Host RSS/PSS excludes unmapped filesystem page cache and is not total physical host residency.",
+    "The four-update state comparison is source-bound allocated proof; this metadata-only projection does not reread tensor payloads.",
+    "This attempt adds no fresh interruption/resume, serving, merge/export or task-quality qualification. Existing separate evidence retains its original scope.",
+    "CPU pytest temporary files were captured for audit preservation but are excluded from experimental proof.",
+    "Controlled workflow941/privatev5 producers and their incomplete host flags remain unchanged."
+  ],
+  "local_regression_tests": {
+    "errors": 0,
+    "failures": 0,
+    "passed": 430,
+    "scope": "Local public CPU workflow suite; not additional accelerator qualification.",
+    "skipped": 0
+  },
+  "memory_benefit_claimed": false,
+  "native_build": {
+    "code_revision": "55e7f14dfeca84002d0324108808a0e682579842",
+    "wheel_sha256": "4939262dbf2de43be0b3f9d579b0bc2fbf72ab84250852397b0dc14087b5792b"
+  },
+  "native_validation": {
+    "activation_checkpointing": "full",
+    "adapter_compute_dtype": "float32",
+    "arms": {
+      "bf16": {
+        "applied_updates": 4,
+        "coverage_complete": true,
+        "dcp_index_files_byte_exact": false,
+        "exact_state_components": {
+          "data": {
+            "exact": true,
+            "top_level_entries": 3
+          },
+          "model": {
+            "exact": true,
+            "top_level_entries": 504
+          },
+          "optim": {
+            "exact": true,
+            "top_level_entries": 1525
+          },
+          "trainer": {
+            "exact": true,
+            "top_level_entries": 13
+          }
+        },
+        "finite_training_losses": true,
+        "native_phase_sha256": "c40a850e7290f93577f383db0b19cc54f8033f33cfe0d23677c26bed1cc245b9",
+        "observed_span_seconds": 202.82197523117065,
+        "owned_gpu_sample_evidence_valid": true,
+        "payload_files_byte_exact": true,
+        "raw_samples_sha256": "9482b515b92ba9a96fd2c1f14770e1ba8d2d5686d68ba4df471f4ce92b6a4841",
+        "sample_count": 159,
+        "sampling_gap_seconds": {
+          "count": 158,
+          "maximum": 1.3835053443908691,
+          "mean": 1.2836833875390548,
+          "median": 1.2812705039978027,
+          "p95": 1.313883399963379,
+          "sum": 202.82197523117065
+        },
+        "short_intervals_without_samples": 6,
+        "source_bound_native_command_sha256": "914f2db102a06b297286bbb89e9efca332b59d72683be5770f508eed4a3430ac",
+        "telemetry_sha256": "bd480fb8ef52af73d00f799cbbb3582d4162e9013c06a2f974bb6e8cbc17249f",
+        "whole_native_stage_host_pss_complete": true
+      },
+      "nf4": {
+        "applied_updates": 4,
+        "coverage_complete": true,
+        "dcp_index_files_byte_exact": false,
+        "exact_state_components": {
+          "data": {
+            "exact": true,
+            "top_level_entries": 3
+          },
+          "model": {
+            "exact": true,
+            "top_level_entries": 504
+          },
+          "optim": {
+            "exact": true,
+            "top_level_entries": 1525
+          },
+          "trainer": {
+            "exact": true,
+            "top_level_entries": 13
+          }
+        },
+        "finite_training_losses": true,
+        "native_phase_sha256": "ac47c0738f6116da11bdd408820fbd1ca0c68ddbbed776a6ad0caff32245aa8f",
+        "observed_span_seconds": 239.86746454238892,
+        "owned_gpu_sample_evidence_valid": true,
+        "payload_files_byte_exact": true,
+        "raw_samples_sha256": "11b8422f19d030048e21957ed94834233fbb60e405fd6535c83e5ed4cf4e3e94",
+        "sample_count": 188,
+        "sampling_gap_seconds": {
+          "count": 187,
+          "maximum": 1.3741891384124756,
+          "mean": 1.282713714130422,
+          "median": 1.2756774425506592,
+          "p95": 1.3222296714782715,
+          "sum": 239.86746454238892
+        },
+        "short_intervals_without_samples": 5,
+        "source_bound_native_command_sha256": "4d436d1c998f4477722eec4a4706a2442d419d21ad7f15ef55044038c66e5287",
+        "telemetry_sha256": "52f3775e98ee475fae8a982b1f29f32b7bb328d95afb977e942c22f08dbfd6df",
+        "whole_native_stage_host_pss_complete": true
+      }
+    },
+    "cache_bytes": 1073741824,
+    "comparison_builds": {
+      "candidate": {
+        "code_revision": "55e7f14dfeca84002d0324108808a0e682579842",
+        "wheel_sha256": "4939262dbf2de43be0b3f9d579b0bc2fbf72ab84250852397b0dc14087b5792b"
+      },
+      "reference": {
+        "code_revision": "a406ea1d32c95277c57ac8e7ec274784bed3aaf7",
+        "wheel_sha256": "184d5f605aa17c834bd8ac3fecff86ef306c5762ba8d29e503ff2776e6e0b5cd"
+      }
+    },
+    "gradient_accumulation": 8,
+    "legacy_math_policy_limitation": "Legacy model v1 artifacts did not record TF32/math-policy flags. Exact agreement is observed evidence, not a universal cross-build reproducibility guarantee.",
+    "microbatch": 1,
+    "permitted_metadata_changes": [
+      "identity.training_contract.code_revision",
+      "identity.training_contract.wheel_sha256"
+    ],
+    "prefetch": true,
+    "production_resume_identity_checks_changed": false,
+    "state_proof_scope": "Byte-exact adapter/optimizer tensors, scheduler, RNG, data and healthy completed update/validation controls; no checkpoint was modified or restored into a model. Production resume/reload identity checks remain unchanged.",
+    "tensor_payloads_reread_by_this_projection": false,
+    "updates_per_arm": 4
+  },
+  "preserved_prior_failure": {
+    "allocated_seconds": 535,
+    "bf16_incomplete_samples": 1,
+    "bf16_samples": 166,
+    "both_native_four_update_stages_exited_zero": true,
+    "cause": "One BF16 sample failed the prior discovery identity contract when proc inode ownership changed after memory was read. No post-discovery exit proof was available.",
+    "checkpoint_comparison_executed": false,
+    "exit_code": "1:0",
+    "legacy_raw_fields_reproduced_by_new_source": true,
+    "nf4_samples": 184,
+    "runtime_promoted": false,
+    "state": "FAILED"
+  },
+  "projection_source_sha256": "264e2d4a9cd1367563197dc4aa3ba510883faf79e8bd9451b8f990456817224a",
+  "protocol": "cosmos.public-collector-correction.v1",
+  "quality_gate_satisfied_by_this_proof": false,
+  "release_qualified": false,
+  "scope": "One completed collector-validation allocation with two four-update native trajectories. This is telemetry and numerical-preservation evidence, not task-quality, speedup, memory-benefit, 24GiB-device or release qualification.",
+  "source_sha256": {
+    "accounting": "f1add5cf40de25bc88720dc71587299df856c2b982caa3fa4dd5ab1bd983c07c",
+    "attempt_identity": "7cd6ba2bfaf67f095be0ca8f4baad785625266e9631358305e3d35fc315ca770",
+    "bf16_allocator_phases": "c40a850e7290f93577f383db0b19cc54f8033f33cfe0d23677c26bed1cc245b9",
+    "bf16_native_command": "914f2db102a06b297286bbb89e9efca332b59d72683be5770f508eed4a3430ac",
+    "bf16_native_metrics": "abe31f9bc5fa125887ef62ac719e5b8608d7abf586a5b2fba05edc3b976a550e",
+    "bf16_raw_samples": "9482b515b92ba9a96fd2c1f14770e1ba8d2d5686d68ba4df471f4ce92b6a4841",
+    "bf16_telemetry": "bd480fb8ef52af73d00f799cbbb3582d4162e9013c06a2f974bb6e8cbc17249f",
+    "capture": "7d5353cf07b477b45f62e8337e96028beea1335c7e936b4d472b8f90cc8926b4",
+    "correction_policy": "321d16a270e990453dec463b970c4269a8921dac7ec845c73157ac3979acca1b",
+    "cpu_capabilities": "4528710d74ceeac6840b289d1655c322eeaac0f295f88c419e46f6dcaca8548b",
+    "cpu_capability-fixtures.json": "4528710d74ceeac6840b289d1655c322eeaac0f295f88c419e46f6dcaca8548b",
+    "cpu_completion": "120bbbe02ef4b48e93a2f23e8cd5cc5b16c3dda821e1c8ae086652ffaee50c83",
+    "cpu_identity": "fc904107223ff025ee07a17cada70627266876849a533e26657b062b8298a3b6",
+    "cpu_identity.json": "fc904107223ff025ee07a17cada70627266876849a533e26657b062b8298a3b6",
+    "cpu_imports.json": "e9d39195bf186fedee34bcad2a499ec93fbae1327b231a621af31c4eeecb905e",
+    "cpu_owner-transition.json": "2cfd27629e36492625144d80989ce2940e004ef1652f0bb3a5834b94472aa182",
+    "cpu_owner_transition": "2cfd27629e36492625144d80989ce2940e004ef1652f0bb3a5834b94472aa182",
+    "cpu_placement": "6a78b7d64965ce9a6cebb4d9e63434ac171f1ef65e8839a1615540ba8fca1dc6",
+    "cpu_placement.json": "6a78b7d64965ce9a6cebb4d9e63434ac171f1ef65e8839a1615540ba8fca1dc6",
+    "cpu_post-suite-identity.json": "135f48d1f01bb08757f3d6499f6ec32414af4c0667f4e9ee590b46082788b22a",
+    "cpu_post_identity": "135f48d1f01bb08757f3d6499f6ec32414af4c0667f4e9ee590b46082788b22a",
+    "cpu_slurm-job.txt": "bb369ef501038b5ba6269f132568f4a37ed568df8d8a8014577e05146ef5bc77",
+    "cpu_test-command.json": "b8015b80174dc59b7c1298979a86d6b7d57e295c5b94d508108fe7435636f17e",
+    "cpu_test-session.json": "250e7d42a6eb0be08ff0d815f17a3366f07f5d2a736e7bca91e12783a18c3655",
+    "cpu_tests.xml": "b2c3dfa4238fe13e3bf443432fb252e21c46285dc1641bdbfbf82978fe910f3b",
+    "crossbuild_manifest": "682cab5e5b55a56d6bebd45075ef0ae431b3d0f9f2b4fb594e77a6311993f88f",
+    "exact_state_report": "47efe79340cc79e87b6d86d19936ac7bb12dc1eed7963a707b613ee495de9c0d",
+    "inherited_kernel_closure": "7a0f0dedeffa5a77550781ef35e8e0b6d091769bb5f5dc58ddcd74285e31f5bb",
+    "local_tests": "a887e7cdde35907c11db5832bec8369fc1ae6a8b0b2b4046ba05a12228aef378",
+    "native_runtime": "fca0a6b9d90092e7199c83b49957076bbf6adb9e6968e6a6d2b8bdbe22e3dbae",
+    "nf4_allocator_phases": "ac47c0738f6116da11bdd408820fbd1ca0c68ddbbed776a6ad0caff32245aa8f",
+    "nf4_native_command": "4d436d1c998f4477722eec4a4706a2442d419d21ad7f15ef55044038c66e5287",
+    "nf4_native_metrics": "7a4500229810792ab630547f7462f2d06f279fd09631f10b94c6d58d814d6e18",
+    "nf4_raw_samples": "11b8422f19d030048e21957ed94834233fbb60e405fd6535c83e5ed4cf4e3e94",
+    "nf4_telemetry": "52f3775e98ee475fae8a982b1f29f32b7bb328d95afb977e942c22f08dbfd6df",
+    "outer_completion": "43d29f24269c3f27d78f15101248ecaf1871e4a9ca0d2ede4bf7a08aef0d4532",
+    "parent_state": "bbef1d45948835053894dc0605f673971a500374999fe6433b84fc042c0e1110",
+    "prior_bf16_raw_samples": "d0510192107d6b1a1cc3c4174363196447838b9166465a08e7d96bb0d9880b11",
+    "prior_failure": "3397baae0958c2cf5b0987290ebba754eb21b78ae49eb26e1c1feb9ab2ed0c44",
+    "prior_nf4_raw_samples": "d3813c91eea3d75197b67659cad2483f1e247c98c71a584b6a9982b8ce4cab33",
+    "prior_v1_regression": "02c9ca94cff9b70578167a7d3dc10d99169c0b5cf1df75cbf093de0b4d4400c3",
+    "runner_receipt": "2fbe770f201d8bfe6f1a1755ad591cae199cfd38900c73c0be164e864d21c4db",
+    "stage_collector_cpu": "91ad8f07ab12abe10a9f66a2fea77fbf9be8fcb939413862b10cc7a7d2d7d599",
+    "stage_crossbuild_bf16": "c18002d7fca93951f48c3c9ec3627374e7f49cad78fb1a59f0b96461dba5d9fd",
+    "stage_crossbuild_compare": "26add42bbddf9eb7bc9a5c011a5992de1f4b356e82d65a8181f2fd09772bf023",
+    "stage_crossbuild_nf4": "f214e9a23bc0d7e371bdddd993e17c593cb5e8ffd1f37ee3cdfc74ae8fe8bbf2",
+    "stage_crossbuild_preflight": "40c4c68257804cc002332ead2ab3e91dbc86a2931e553bf529aff8c1444f57bd",
+    "stage_crossbuild_prepare": "9ac15c585ca7c7d82dce37c550ec0a4c9e1b5e271c3c11459269b3d0adcb0ab9",
+    "submitted_plan": "1d4d1ef9ebe12f14b12b48c5ee80ffd5c288e5cd46c0742e6e1a3c2f57b307ba",
+    "workflow_receipt": "0f7e7cb22df2ff859f94681aecc4ecca55c1113ae5b9f90908e8ad7f18f8871a"
+  },
+  "workflow_revision": "a8b3e21375c47be1b8ce8f25e49c9efee1f6f036"
+}

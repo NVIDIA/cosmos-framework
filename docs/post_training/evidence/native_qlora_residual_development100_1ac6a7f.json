@@ -1,0 +1,495 @@
+{
+  "automatic_longer_run_authorized": false,
+  "configuration": {
+    "accumulation": 8,
+    "activation_checkpointing": "full nonreentrant",
+    "adapter_compute_dtype": "float32",
+    "alpha": 64,
+    "compile": false,
+    "cycle_steps": 300,
+    "dropout": 0.0,
+    "effective_batch": 8,
+    "fresh_max_steps": 100,
+    "inline_validation_enabled": false,
+    "learning_rate": 0.0001,
+    "logits": "full",
+    "microbatch": 1,
+    "optimizer": "fused AdamW",
+    "optimizer_moment_dtype": "float32",
+    "optimizer_parameter_dtype": "float32",
+    "preprocessing_cache_bytes": 1073741824,
+    "preprocessing_prefetch": true,
+    "preprocessing_workers": 1,
+    "rank": 32,
+    "scheduled_checkpoints": [
+      50,
+      100
+    ],
+    "seed": 42,
+    "warmup_steps": 30,
+    "weight_decay": 0.01
+  },
+  "correctness": {
+    "all_three_100_applied_update_runs_completed": true,
+    "all_three_fresh_dcp_portable_text_image_video_comparisons": {
+      "bf16_ordinary": {
+        "atol": 0.0,
+        "differences": {
+          "image": {
+            "logits_max_abs": 0.0,
+            "loss_abs": 0.0
+          },
+          "text": {
+            "logits_max_abs": 0.0,
+            "loss_abs": 0.0
+          },
+          "video": {
+            "logits_max_abs": 0.0,
+            "loss_abs": 0.0
+          }
+        },
+        "passed": true,
+        "rtol": 0.0
+      },
+      "nf4_ordinary": {
+        "atol": 0.0,
+        "differences": {
+          "image": {
+            "logits_max_abs": 0.0,
+            "loss_abs": 0.0
+          },
+          "text": {
+            "logits_max_abs": 0.0,
+            "loss_abs": 0.0
+          },
+          "video": {
+            "logits_max_abs": 0.0,
+            "loss_abs": 0.0
+          }
+        },
+        "passed": true,
+        "rtol": 0.0
+      },
+      "nf4_residual_svd": {
+        "atol": 0.0,
+        "differences": {
+          "image": {
+            "logits_max_abs": 0.0,
+            "loss_abs": 0.0
+          },
+          "text": {
+            "logits_max_abs": 0.0,
+            "loss_abs": 0.0
+          },
+          "video": {
+            "logits_max_abs": 0.0,
+            "loss_abs": 0.0
+          }
+        },
+        "passed": true,
+        "rtol": 0.0
+      }
+    },
+    "frozen_base_and_504_fp32_optimizer_membership_passed": true,
+    "new_100_update_interruption_recovery_claim": false,
+    "own_checkpoint100_inspection_and_portable_publication_passed": true,
+    "prior_separate_four_update_recovery_preserved": true
+  },
+  "cost": {
+    "allocation": {
+      "allocated_cpu_seconds": 81504,
+      "allocation_minus_stage_seconds": 58.64776619197801,
+      "elapsed_seconds": 5094,
+      "gpu_seconds": 5094,
+      "stage_seconds_sum": 5035.352233808022
+    },
+    "arms": {
+      "bf16_ordinary": {
+        "previous_initializer_preparation_seconds": 0.0,
+        "seven_stage_seconds_sum": 1666.5538372809533,
+        "seven_stages_plus_initializer_seconds": 1666.5538372809533,
+        "stage_seconds": {
+          "compare_reload": 6.573818069067784,
+          "inspect100": 17.739040307933465,
+          "probe_dcp": 131.00337147898972,
+          "probe_portable": 107.15662327595055,
+          "publish100": 8.025087559013627,
+          "score584": 311.98084752401337,
+          "train100": 1084.0750490659848
+        }
+      },
+      "nf4_ordinary": {
+        "previous_initializer_preparation_seconds": 0.0,
+        "seven_stage_seconds_sum": 1589.0930274148704,
+        "seven_stages_plus_initializer_seconds": 1589.0930274148704,
+        "stage_seconds": {
+          "compare_reload": 3.6201098039746284,
+          "inspect100": 17.839179220958613,
+          "probe_dcp": 104.65107090596575,
+          "probe_portable": 81.08025784604251,
+          "publish100": 7.726209819898941,
+          "score584": 321.42004676302895,
+          "train100": 1052.756153055001
+        }
+      },
+      "nf4_residual_svd": {
+        "previous_initializer_preparation_seconds": 81.54245797503972,
+        "seven_stage_seconds_sum": 1708.5663228861522,
+        "seven_stages_plus_initializer_seconds": 1790.108780861192,
+        "stage_seconds": {
+          "compare_reload": 5.022057901951484,
+          "inspect100": 18.391650482080877,
+          "probe_dcp": 128.18302301701624,
+          "probe_portable": 102.72192735096905,
+          "publish100": 7.725581001024693,
+          "score584": 335.35453995410353,
+          "train100": 1111.1675431790063
+        }
+      }
+    },
+    "scope": "Stage timers are nested within allocation cost. Shared setup and allocation overhead are not silently apportioned. Prior initializer preparation is included in residual descriptive end-to-end cost, without charging its historical allocation twice. No timing confidence interval, equal-total-compute or 10% time-to-quality benefit is established."
+  },
+  "data_scope": {
+    "all_1752_score_rows_recomputed": true,
+    "development_rows": 584,
+    "independent_final_test": false,
+    "ordered_inputs_media_labels_masks_tokens_exact": true,
+    "previously_exposed_development": true,
+    "recording_groups": 12,
+    "task_templates": 22,
+    "training_rows": 4611,
+    "training_seeds": [
+      42
+    ]
+  },
+  "effort_promotion_passed": false,
+  "execution_order": [
+    "nf4_ordinary",
+    "bf16_ordinary",
+    "nf4_residual_svd"
+  ],
+  "fixed_target_at100": {
+    "arms": {
+      "bf16_ordinary": {
+        "first_crossing_estimated": false,
+        "nonattainment_is_censored": true,
+        "reached": false
+      },
+      "nf4_ordinary": {
+        "first_crossing_estimated": false,
+        "nonattainment_is_censored": true,
+        "reached": false
+      },
+      "nf4_residual_svd": {
+        "first_crossing_estimated": false,
+        "nonattainment_is_censored": true,
+        "reached": false
+      }
+    },
+    "native_ce_maximum": 0.12357161758062493,
+    "no_first_crossing_or_time_to_target_estimate": true,
+    "required_correct": 540,
+    "rows": 584
+  },
+  "locked_quality_conditions": {
+    "residual_ce_at_most_1_02_bf16": false,
+    "residual_ce_strictly_below_ordinary_nf4": false,
+    "residual_correct_not_lower_than_either": false
+  },
+  "locked_resource_gate": {
+    "all_resource_samples_complete": false,
+    "observed_owned_gpu_peak_difference_bf16_minus_residual_bytes": 10238296064,
+    "passed": false,
+    "required_difference_bytes": 6442450944,
+    "scope": "Observed peaks are sampled lower bounds. Incomplete samples cannot satisfy the locked requirement."
+  },
+  "memory": {
+    "arms": {
+      "bf16_ordinary": {
+        "errors": [
+          "incomplete_host_pss"
+        ],
+        "full_scoring_allocator_peak_bytes": null,
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": false,
+        "host_pss_sum_peak_bytes": 6883563520,
+        "host_rss_sum_peak_bytes": 7062810624,
+        "incomplete_host_rows": 2,
+        "owned_device_process_peak_bytes": 20937965568,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 1268,
+        "sampling_gap_seconds": {
+          "count": 1267,
+          "maximum": 19.85832977294922,
+          "mean": 1.3139152391368984,
+          "median": 1.3008685111999512,
+          "p95": 1.3350621700286867,
+          "sum": 1664.7306079864502
+        },
+        "training_allocator_peak_allocated_bytes": 19443868672,
+        "training_allocator_peak_reserved_bytes": 19866320896
+      },
+      "nf4_ordinary": {
+        "errors": [],
+        "full_scoring_allocator_peak_bytes": null,
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 7057754112,
+        "host_rss_sum_peak_bytes": 7135793152,
+        "incomplete_host_rows": 0,
+        "owned_device_process_peak_bytes": 10699669504,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 1234,
+        "sampling_gap_seconds": {
+          "count": 1233,
+          "maximum": 1.5056562423706055,
+          "mean": 1.2885532659529093,
+          "median": 1.2879648208618164,
+          "p95": 1.3182966232299804,
+          "sum": 1588.7861769199371
+        },
+        "training_allocator_peak_allocated_bytes": 9118664704,
+        "training_allocator_peak_reserved_bytes": 9628024832
+      },
+      "nf4_residual_svd": {
+        "errors": [
+          "incomplete_host_pss"
+        ],
+        "full_scoring_allocator_peak_bytes": null,
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": false,
+        "host_pss_sum_peak_bytes": 7074939904,
+        "host_rss_sum_peak_bytes": 7188934656,
+        "incomplete_host_rows": 2,
+        "owned_device_process_peak_bytes": 10699669504,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 1310,
+        "sampling_gap_seconds": {
+          "count": 1309,
+          "maximum": 2.468979835510254,
+          "mean": 1.3053110436322217,
+          "median": 1.3041667938232422,
+          "p95": 1.352735376358032,
+          "sum": 1708.6521561145782
+        },
+        "training_allocator_peak_allocated_bytes": 9118664704,
+        "training_allocator_peak_reserved_bytes": 9628024832
+      }
+    },
+    "collector_method": "proc-identity-state-read-attempts-v5",
+    "incomplete_by_stage": {
+      "bf16_ordinary_probe_dcp": [
+        "live_or_unknown_memory_unreadable",
+        "unproven_live_thread_memory"
+      ],
+      "bf16_ordinary_train100": [
+        "live_or_unknown_memory_unreadable",
+        "unproven_live_thread_memory"
+      ],
+      "nf4_residual_svd_probe_dcp": [
+        "live_or_unknown_memory_unreadable",
+        "membership_transition_retry_exhausted",
+        "unproven_live_thread_memory"
+      ],
+      "nf4_residual_svd_train100": [
+        "live_or_unknown_memory_unreadable",
+        "membership_transition_retry_exhausted",
+        "unproven_live_thread_memory"
+      ]
+    },
+    "incomplete_samples": 4,
+    "raw_samples_rederived": 3851,
+    "scope": "Sampled process-owned GPU peaks are lower bounds. Host sums do not establish all host residency. Full scoring allocator peaks were not recorded. No historical incomplete row is repaired by a later collector."
+  },
+  "metric_contract": "Native CE is the supervised-token-weighted answer/end-token loss. Answer-token NLL and restricted-choice NLL are separate reductions.",
+  "metrics": {
+    "bf16_ordinary": {
+      "answer_nll": 0.3597487946079202,
+      "restricted_accuracy": 0.9092465753424658,
+      "restricted_choice_nll": 0.3589642341822794,
+      "restricted_correct": 531,
+      "rows": 584,
+      "strict_accuracy": 0.9092465753424658,
+      "supervised_tokens": 1168,
+      "token_weighted_ce": 0.17987969358421663,
+      "valid_letter_rate": 1.0
+    },
+    "nf4_ordinary": {
+      "answer_nll": 0.3393067693057126,
+      "restricted_accuracy": 0.9126712328767124,
+      "restricted_choice_nll": 0.33866740579474464,
+      "restricted_correct": 533,
+      "rows": 584,
+      "strict_accuracy": 0.9126712328767124,
+      "supervised_tokens": 1168,
+      "token_weighted_ce": 0.16965634466001273,
+      "valid_letter_rate": 1.0
+    },
+    "nf4_residual_svd": {
+      "answer_nll": 0.37122926646715976,
+      "restricted_accuracy": 0.9075342465753424,
+      "restricted_choice_nll": 0.36973480655722424,
+      "restricted_correct": 530,
+      "rows": 584,
+      "strict_accuracy": 0.9075342465753424,
+      "supervised_tokens": 1168,
+      "token_weighted_ce": 0.18562059318668467,
+      "valid_letter_rate": 1.0
+    }
+  },
+  "native_revision": "1ac6a7ff975c3e7a2f8851b7495104ca9a1b1b77",
+  "native_wheel_sha256": "4b634e70f07968b3df0c69d2c5815179bbdd4bd84385ca05249cb97addaff400",
+  "observed_shapes": {
+    "pixel_values_videos": [
+      {
+        "rows": 584,
+        "shape_and_dtype": {
+          "dtype": "float32",
+          "shape": [
+            960,
+            1536
+          ]
+        }
+      }
+    ],
+    "sequence_length_counts": {
+      "317": 4,
+      "318": 3,
+      "319": 15,
+      "320": 3,
+      "321": 29,
+      "324": 77,
+      "326": 38,
+      "327": 40,
+      "328": 18,
+      "329": 44,
+      "330": 17,
+      "331": 44,
+      "332": 45,
+      "333": 19,
+      "334": 16,
+      "336": 27,
+      "337": 27,
+      "339": 27,
+      "340": 23,
+      "342": 15,
+      "343": 10,
+      "345": 31,
+      "346": 8,
+      "347": 4
+    },
+    "supervised_token_count_counts": {
+      "2": 584
+    },
+    "supervised_tokens_per_arm": 1168,
+    "video_grid_thw_tensor": [
+      {
+        "rows": 584,
+        "shape_and_dtype": {
+          "dtype": "int64",
+          "shape": [
+            1,
+            3
+          ]
+        }
+      }
+    ]
+  },
+  "paired_comparisons": {
+    "descriptive_ordinary_nf4_minus_bf16": {
+      "accuracy_difference": 0.003424657534246589,
+      "accuracy_difference_interval_95": [
+        -0.0037593984962406013,
+        0.013565891472868217
+      ],
+      "accuracy_difference_lower_one_sided_95": -0.0030075187969924814,
+      "relative_native_ce_change": -0.056834369241448024,
+      "relative_native_ce_interval_95": [
+        -0.1484462142205938,
+        0.018040270945472114
+      ],
+      "relative_native_ce_upper_one_sided_95": 0.005492081603181376
+    },
+    "guard_residual_minus_ordinary_bf16": {
+      "accuracy_difference": -0.00171232876712335,
+      "accuracy_difference_interval_95": [
+        -0.012096774193548387,
+        0.009398496240601503
+      ],
+      "accuracy_difference_lower_one_sided_95": -0.010330578512396695,
+      "relative_native_ce_change": 0.031915217821850694,
+      "relative_native_ce_interval_95": [
+        -0.09998299062463434,
+        0.1547157005362323
+      ],
+      "relative_native_ce_upper_one_sided_95": 0.1345896804814799
+    },
+    "primary_residual_minus_ordinary_nf4": {
+      "accuracy_difference": -0.005136986301369939,
+      "accuracy_difference_interval_95": [
+        -0.011023622047244094,
+        0.0
+      ],
+      "accuracy_difference_lower_one_sided_95": -0.01001669449081803,
+      "relative_native_ce_change": 0.09409756268569813,
+      "relative_native_ce_interval_95": [
+        -0.005396569442188914,
+        0.16829808725564677
+      ],
+      "relative_native_ce_upper_one_sided_95": 0.16337684221020288
+    }
+  },
+  "preserved_history": {
+    "completed_controls_gpu_seconds": 1952,
+    "original_calibration_gpu_seconds": 1755,
+    "original_calibration_state": "FAILED",
+    "original_exposed_regression_nll_relative_increase": 0.04179491590591922,
+    "original_failure": "Private recovery plan supplied training-calibration rows as validation; the unchanged source-overlap guard refused them before model training.",
+    "original_recovery_passed": false,
+    "public_calibration_artifact": "native_qlora_calibration_sensitivity_1ac6a7f.json",
+    "public_calibration_artifact_sha256": "1b7c20b8242ea7d11d81bcf96687880db5a0382a0ba929dad745f8c458500767",
+    "strong_product_baseline": "Equally optimized rank32 BF16 at300 updates remains the product baseline; this100-update pilot does not replace it.",
+    "unchanged_nll_noninferiority_margin": 0.02,
+    "untrained_residual_accuracy_lower_than_zero_B_nf4": true
+  },
+  "protocol": "cosmos.public-residual-development100.v1",
+  "release_qualified": false,
+  "scoring_cache_bytes": 1073741824,
+  "sources": {
+    "locked_plan_sha256": "52bcdba3a5825acfecb9198651e7ad96b9fad6baa87a721775d2962671a00027",
+    "prior_controls_artifact_sha256": "00a8823b97949333f6f6a421e45e635c7bb652164075d99398e799e612ab1b5c",
+    "projection_source_sha256": "7d3355c78f6dbf477629f7c53abc219f18b069d7349feb0ffbf3a7290745aab5",
+    "prospective_lock_sha256": "dbc35e3f9ceb7fd7655ec3c7dd8cebfafb8f081e8a45f674a7c57e2794018b6f",
+    "quality_analyzer_sha256": "920f054389657af93ffe38da8d725e312cb010674e3ce24b35a89f075caadbe5",
+    "quality_report_sha256": "e69319f897e06e9a5e39fc369f2256975d6977395bff444eabf25e67e1761198",
+    "resource_composer_sha256": "d497ea576014e1d9ce1c0c3584019739d49a06e3a887502dfcb0ed043c27b902",
+    "resource_report_sha256": "76ca87469451a8f81b369bc38784636996da67e3215a7d8fe45e4d83a5f85a81",
+    "terminal_capture_sha256": "fdb798edc81d707ae1ba211b95bf2c4c8acf3e04297b8a3cab3e10b66d6fc9fb"
+  },
+  "status": "completed_negative_pilot",
+  "tie_policy": "Native canonical argmax retained; no tied rows removed. Full-vocabulary tie flags remain source-bound because complete logits are not exported.",
+  "ties": {
+    "bf16_ordinary": {
+      "restricted_choice_tied_max": 0,
+      "strict_first_token_tied_max": 0
+    },
+    "nf4_ordinary": {
+      "restricted_choice_tied_max": 3,
+      "strict_first_token_tied_max": 3
+    },
+    "nf4_residual_svd": {
+      "restricted_choice_tied_max": 2,
+      "strict_first_token_tied_max": 2
+    }
+  },
+  "uncertainty": {
+    "all_12_group_and_22_template_descriptive_slices_retained_in_source_report": true,
+    "groups": 12,
+    "method": "Paired whole-recording-group percentile bootstrap",
+    "repetitions": 10000,
+    "scope": "One-seed exploratory development intervals; not multiseed or independent-final confirmation.",
+    "seed": 271828,
+    "training_seed_resampling": false
+  },
+  "workflow_revision": "d4f639d5dfc38a1cb9cf53b0c500ce7d52c4a527"
+}

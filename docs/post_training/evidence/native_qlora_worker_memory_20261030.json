@@ -1,0 +1,1051 @@
+{
+  "all_four_processed_tensor_bytes_order_cursor_parent_rng_exact": true,
+  "all_live_cache_tensor_and_rng_checks_passed": true,
+  "both_clean_pairs_observed_lower_worker_peak_pss": true,
+  "cache_bytes": 1073741824,
+  "clean_replays": 4,
+  "completed_clean_pairs": 2,
+  "explicit_gc_or_cache_eviction": false,
+  "failed_attempt_retained_descriptive_only": {
+    "accounting": {
+      "allocated_cpu_hours": 6.933333333333334,
+      "allocated_cpus": 16,
+      "elapsed_seconds": 1560,
+      "state": "FAILED"
+    },
+    "cause_scope": "Whole-child1500-second deadline expired after result publication; final trim completed first. Exact old close-versus-interpreter split was not instrumented.",
+    "completed_rows_before_timeout": 1000,
+    "included_in_paired_effect_estimates": false,
+    "replay_seconds_before_end_diagnostic": 1154.7049505120012,
+    "result_was_written_before_timeout": true,
+    "worker_peak_pss_bytes": 4092386304
+  },
+  "framework_revision": "a406ea1d32c95277c57ac8e7ec274784bed3aaf7",
+  "framework_wheel_sha256": "184d5f605aa17c834bd8ac3fecff86ef306c5762ba8d29e503ff2776e6e0b5cd",
+  "fresh_workers_initial_rng_compared_across_replays": false,
+  "limitations": [
+    "CPU-only native preprocessing replay; no model, GPU training, held-out quality or production allocator policy is qualified.",
+    "Eight physical cores with16allowed hardware threads per allocation; exact affinity matches within each pair. Separate allocations share CPU model but not placement or uncontrolled system load.",
+    "Both arms perform the same extra live-cache hashing and snapshots every128rows. No GC or explicit cache eviction occurs. Real training needs separate memory and throughput validation.",
+    "Boundary and1Hz process-tree memory are sampled lower bounds; lifetime HWM is not a phase peak. Startup before processor construction is not included in the replay sampler.",
+    "Only1000fixed rows and one1GiB cache policy were replayed; no universal host-memory bound or longer-sequence/media guarantee follows.",
+    "Replay, processing, maintenance wait and trim times overlap or cover different scopes and must not be added. Trim-call time does not bound later page-fault or end-to-end throughput cost.",
+    "Two opposite-order pairs support the observed memory effect; elapsed-time comparisons remain affected by warm caches, order and system load. No speed improvement or confidence interval is claimed.",
+    "Freed allocator-page residency is supported by worker-local trim releasing anonymous PSS while cache/RNG state remains exact. This does not identify a leaking object or establish that all live-training growth has this cause.",
+    "Fresh workers have different initial RNG states; preservation is checked within each replay, while all processed outputs and parent RNG/cursor bytes match across all four completed arms.",
+    "The failed initial control completed row processing but lacked a clean process exit and paired treatment. Its immutable data are descriptive only."
+  ],
+  "maintenance_calls_per_arm": 7,
+  "paired_diagnostic_evidence_complete": true,
+  "pairs": [
+    {
+      "accounting": {
+        "allocated_cpu_hours": 9.72888888888889,
+        "allocated_cpus": 16,
+        "elapsed_seconds": 2189,
+        "state": "COMPLETED"
+      },
+      "arms": {
+        "sham": {
+          "allowed_logical_cpus": 16,
+          "complete": true,
+          "cpu_models": [
+            "AMD EPYC 7J13 64-Core Processor"
+          ],
+          "end_diagnostic_seconds": 2.2232991468627006,
+          "final_live_cache": {
+            "samples": {
+              "bytes": 266662149,
+              "hits": 0,
+              "limit": 268435456,
+              "misses": 1000
+            },
+            "videos": {
+              "bytes": 802331904,
+              "hits": 363,
+              "limit": 805306368,
+              "misses": 637
+            }
+          },
+          "glibc": "2.39",
+          "interventions": [
+            {
+              "anonymous_pss_released_bytes": -36864,
+              "cache_and_rng_exact": true,
+              "completed_rows": 128,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1040,
+              "glibc_free_arena_bytes_before": 623577280,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 2250977280,
+              "pss_before_bytes": 2250940416,
+              "pss_released_bytes": -36864,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 256,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1136,
+              "glibc_free_arena_bytes_before": 938655856,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 2739318784,
+              "pss_before_bytes": 2739318784,
+              "pss_released_bytes": 0,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 384,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1136,
+              "glibc_free_arena_bytes_before": 1159304800,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 2869315584,
+              "pss_before_bytes": 2869282816,
+              "pss_released_bytes": -32768,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 512,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1136,
+              "glibc_free_arena_bytes_before": 1494888608,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 3203176448,
+              "pss_before_bytes": 3203176448,
+              "pss_released_bytes": 0,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 640,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1136,
+              "glibc_free_arena_bytes_before": 1696733568,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 3409410048,
+              "pss_before_bytes": 3409381376,
+              "pss_released_bytes": -28672,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 768,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1152,
+              "glibc_free_arena_bytes_before": 1908139552,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 3616649216,
+              "pss_before_bytes": 3616649216,
+              "pss_released_bytes": 0,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 896,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1136,
+              "glibc_free_arena_bytes_before": 2092282704,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 3805362176,
+              "pss_before_bytes": 3805333504,
+              "pss_released_bytes": -28672,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            }
+          ],
+          "observed_boundary_worker_peak_pss_bytes": 3988226048,
+          "observed_boundary_worker_peak_pss_gib": 3.714324951171875,
+          "observed_worker_thread_counts": [
+            23
+          ],
+          "periodic_maintenance": {
+            "actual_trim_calls": 0,
+            "calls": 7,
+            "gc_called": false,
+            "parent_wait_seconds": 11.475243323948234,
+            "sham_uses_same_snapshots_and_cache_hashing": true,
+            "trim_seconds": 0.0,
+            "verification_seconds": 11.237078816629946
+          },
+          "periodic_trim_interval": 0,
+          "physical_cpu_cores": 8,
+          "post_result_shutdown_seconds": {
+            "before_close_to_leaving_main": 4.347407656954601,
+            "pipeline_close": 4.304039729060605,
+            "watcher_join": 0.002159204799681902,
+            "watcher_stop": 0.0009645051322877407
+          },
+          "processing_timing": {
+            "calls": 1000,
+            "seconds": 886.7336193851661
+          },
+          "replay_seconds_before_end_diagnostic": 931.5153556440491,
+          "rows": 1000,
+          "sampled_tree_peaks_before_result_bytes": {
+            "Pss": 4778070016,
+            "Rss": 4790333440
+          },
+          "software_versions": {
+            "numpy": "2.2.6",
+            "torch": "2.11.0+cu128",
+            "torchcodec": "0.11.0+cpu",
+            "transformers": "5.8.1"
+          },
+          "thread_environment": {
+            "MKL_NUM_THREADS": null,
+            "OMP_NUM_THREADS": "8",
+            "OPENBLAS_NUM_THREADS": null,
+            "TOKENIZERS_PARALLELISM": "false"
+          },
+          "worker_torch_threads": [
+            1
+          ]
+        },
+        "trim128": {
+          "allowed_logical_cpus": 16,
+          "complete": true,
+          "cpu_models": [
+            "AMD EPYC 7J13 64-Core Processor"
+          ],
+          "end_diagnostic_seconds": 2.1371245870832354,
+          "final_live_cache": {
+            "samples": {
+              "bytes": 266662149,
+              "hits": 0,
+              "limit": 268435456,
+              "misses": 1000
+            },
+            "videos": {
+              "bytes": 802331904,
+              "hits": 363,
+              "limit": 805306368,
+              "misses": 637
+            }
+          },
+          "glibc": "2.39",
+          "interventions": [
+            {
+              "anonymous_pss_released_bytes": 494854144,
+              "cache_and_rng_exact": true,
+              "completed_rows": 128,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2144,
+              "glibc_free_arena_bytes_before": 619310512,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1759760384,
+              "pss_before_bytes": 2254614528,
+              "pss_released_bytes": 494854144,
+              "trim_called": true,
+              "trim_seconds": 0.011531936936080456
+            },
+            {
+              "anonymous_pss_released_bytes": 700239872,
+              "cache_and_rng_exact": true,
+              "completed_rows": 256,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1136,
+              "glibc_free_arena_bytes_before": 981285152,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1834412032,
+              "pss_before_bytes": 2534610944,
+              "pss_released_bytes": 700198912,
+              "trim_called": true,
+              "trim_seconds": 0.01590726408176124
+            },
+            {
+              "anonymous_pss_released_bytes": 618823680,
+              "cache_and_rng_exact": true,
+              "completed_rows": 384,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2688,
+              "glibc_free_arena_bytes_before": 1231413136,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1834928128,
+              "pss_before_bytes": 2453706752,
+              "pss_released_bytes": 618778624,
+              "trim_called": true,
+              "trim_seconds": 0.016218232922255993
+            },
+            {
+              "anonymous_pss_released_bytes": 759214080,
+              "cache_and_rng_exact": true,
+              "completed_rows": 512,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2128,
+              "glibc_free_arena_bytes_before": 1484286880,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1838612480,
+              "pss_before_bytes": 2597814272,
+              "pss_released_bytes": 759201792,
+              "trim_called": true,
+              "trim_seconds": 0.02436979580670595
+            },
+            {
+              "anonymous_pss_released_bytes": 737918976,
+              "cache_and_rng_exact": true,
+              "completed_rows": 640,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2128,
+              "glibc_free_arena_bytes_before": 1633670512,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1830299648,
+              "pss_before_bytes": 2568206336,
+              "pss_released_bytes": 737906688,
+              "trim_called": true,
+              "trim_seconds": 0.026476899860426784
+            },
+            {
+              "anonymous_pss_released_bytes": 827367424,
+              "cache_and_rng_exact": true,
+              "completed_rows": 768,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2160,
+              "glibc_free_arena_bytes_before": 1827370112,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1839605760,
+              "pss_before_bytes": 2666928128,
+              "pss_released_bytes": 827322368,
+              "trim_called": true,
+              "trim_seconds": 0.03578292694874108
+            },
+            {
+              "anonymous_pss_released_bytes": 984203264,
+              "cache_and_rng_exact": true,
+              "completed_rows": 896,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2208,
+              "glibc_free_arena_bytes_before": 2017251408,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1842616320,
+              "pss_before_bytes": 2826758144,
+              "pss_released_bytes": 984141824,
+              "trim_called": true,
+              "trim_seconds": 0.041541812010109425
+            }
+          ],
+          "observed_boundary_worker_peak_pss_bytes": 2826758144,
+          "observed_boundary_worker_peak_pss_gib": 2.6326236724853516,
+          "observed_worker_thread_counts": [
+            23
+          ],
+          "periodic_maintenance": {
+            "actual_trim_calls": 7,
+            "calls": 7,
+            "gc_called": false,
+            "parent_wait_seconds": 11.636559292906895,
+            "sham_uses_same_snapshots_and_cache_hashing": true,
+            "trim_seconds": 0.17182886856608093,
+            "verification_seconds": 11.282474483828992
+          },
+          "periodic_trim_interval": 128,
+          "physical_cpu_cores": 8,
+          "post_result_shutdown_seconds": {
+            "before_close_to_leaving_main": 4.975791417993605,
+            "pipeline_close": 4.933240026934072,
+            "watcher_join": 0.0009615989401936531,
+            "watcher_stop": 0.0009414209052920341
+          },
+          "processing_timing": {
+            "calls": 1000,
+            "seconds": 900.1075552981347
+          },
+          "replay_seconds_before_end_diagnostic": 943.5298730889335,
+          "rows": 1000,
+          "sampled_tree_peaks_before_result_bytes": {
+            "Pss": 3591086080,
+            "Rss": 3603316736
+          },
+          "software_versions": {
+            "numpy": "2.2.6",
+            "torch": "2.11.0+cu128",
+            "torchcodec": "0.11.0+cpu",
+            "transformers": "5.8.1"
+          },
+          "thread_environment": {
+            "MKL_NUM_THREADS": null,
+            "OMP_NUM_THREADS": "8",
+            "OPENBLAS_NUM_THREADS": null,
+            "TOKENIZERS_PARALLELISM": "false"
+          },
+          "worker_torch_threads": [
+            1
+          ]
+        }
+      },
+      "comparison_recomputed_from_raw_evidence": true,
+      "matched_affinity_topology_environment": true,
+      "observed_peak_pss_reduction_fraction": 0.29122419091125695,
+      "order": [
+        "sham",
+        "trim128"
+      ],
+      "runtime_receipt_sha256": "7705223149ff37f849561aca6a10879f9695c6f204f3180e60f6c3ea57e8811c",
+      "trim_minus_sham_peak_pss_bytes": -1161467904,
+      "trim_minus_sham_replay_seconds": 12.014517444884405,
+      "worker_source_sha256": "e48747d29c63086291b4598fe018a19d980fdb3c5cbd44fc043ae4ea2e351377"
+    },
+    {
+      "accounting": {
+        "allocated_cpu_hours": 12.4,
+        "allocated_cpus": 16,
+        "elapsed_seconds": 2790,
+        "state": "COMPLETED"
+      },
+      "arms": {
+        "sham": {
+          "allowed_logical_cpus": 16,
+          "complete": true,
+          "cpu_models": [
+            "AMD EPYC 7J13 64-Core Processor"
+          ],
+          "end_diagnostic_seconds": 2.1388585009990493,
+          "final_live_cache": {
+            "samples": {
+              "bytes": 266662149,
+              "hits": 0,
+              "limit": 268435456,
+              "misses": 1000
+            },
+            "videos": {
+              "bytes": 802331904,
+              "hits": 363,
+              "limit": 805306368,
+              "misses": 637
+            }
+          },
+          "glibc": "2.39",
+          "interventions": [
+            {
+              "anonymous_pss_released_bytes": -40960,
+              "cache_and_rng_exact": true,
+              "completed_rows": 128,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1040,
+              "glibc_free_arena_bytes_before": 620117968,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 2287538176,
+              "pss_before_bytes": 2287497216,
+              "pss_released_bytes": -40960,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 256,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1136,
+              "glibc_free_arena_bytes_before": 1000776496,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 2839857152,
+              "pss_before_bytes": 2839857152,
+              "pss_released_bytes": 0,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 384,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1840,
+              "glibc_free_arena_bytes_before": 1273452624,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 3117236224,
+              "pss_before_bytes": 3117236224,
+              "pss_released_bytes": 0,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 512,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1136,
+              "glibc_free_arena_bytes_before": 1638281392,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 3464372224,
+              "pss_before_bytes": 3464372224,
+              "pss_released_bytes": 0,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 640,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 144,
+              "glibc_free_arena_bytes_before": 1964481744,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 3689320448,
+              "pss_before_bytes": 3689320448,
+              "pss_released_bytes": 0,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 768,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1152,
+              "glibc_free_arena_bytes_before": 2146221520,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 3856871424,
+              "pss_before_bytes": 3856850944,
+              "pss_released_bytes": -20480,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            },
+            {
+              "anonymous_pss_released_bytes": 0,
+              "cache_and_rng_exact": true,
+              "completed_rows": 896,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 1264,
+              "glibc_free_arena_bytes_before": 2378285040,
+              "malloc_trim_return": null,
+              "pss_after_bytes": 4093691904,
+              "pss_before_bytes": 4093691904,
+              "pss_released_bytes": 0,
+              "trim_called": false,
+              "trim_seconds": 0.0
+            }
+          ],
+          "observed_boundary_worker_peak_pss_bytes": 4264108032,
+          "observed_boundary_worker_peak_pss_gib": 3.9712600708007812,
+          "observed_worker_thread_counts": [
+            23
+          ],
+          "periodic_maintenance": {
+            "actual_trim_calls": 0,
+            "calls": 7,
+            "gc_called": false,
+            "parent_wait_seconds": 11.441082751000067,
+            "sham_uses_same_snapshots_and_cache_hashing": true,
+            "trim_seconds": 0.0,
+            "verification_seconds": 11.185325660000672
+          },
+          "periodic_trim_interval": 0,
+          "physical_cpu_cores": 8,
+          "processing_timing": {
+            "calls": 1000,
+            "seconds": 861.0109344459743
+          },
+          "replay_seconds_before_end_diagnostic": 944.263233185,
+          "rows": 1000,
+          "sampled_tree_peaks_before_result_bytes": {
+            "Pss": 5036827648,
+            "Rss": 5049262080
+          },
+          "software_versions": {
+            "numpy": "2.2.6",
+            "torch": "2.11.0+cu128",
+            "torchcodec": "0.11.0+cpu",
+            "transformers": "5.8.1"
+          },
+          "thread_environment": {
+            "MKL_NUM_THREADS": null,
+            "OMP_NUM_THREADS": "8",
+            "OPENBLAS_NUM_THREADS": null,
+            "TOKENIZERS_PARALLELISM": "false"
+          },
+          "worker_torch_threads": [
+            1
+          ]
+        },
+        "trim128": {
+          "allowed_logical_cpus": 16,
+          "complete": true,
+          "cpu_models": [
+            "AMD EPYC 7J13 64-Core Processor"
+          ],
+          "end_diagnostic_seconds": 2.7080220030002238,
+          "final_live_cache": {
+            "samples": {
+              "bytes": 266662149,
+              "hits": 0,
+              "limit": 268435456,
+              "misses": 1000
+            },
+            "videos": {
+              "bytes": 802331904,
+              "hits": 363,
+              "limit": 805306368,
+              "misses": 637
+            }
+          },
+          "glibc": "2.39",
+          "interventions": [
+            {
+              "anonymous_pss_released_bytes": 364597248,
+              "cache_and_rng_exact": true,
+              "completed_rows": 128,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2144,
+              "glibc_free_arena_bytes_before": 489151984,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1698159616,
+              "pss_before_bytes": 2062724096,
+              "pss_released_bytes": 364564480,
+              "trim_called": true,
+              "trim_seconds": 0.012093511999410111
+            },
+            {
+              "anonymous_pss_released_bytes": 528519168,
+              "cache_and_rng_exact": true,
+              "completed_rows": 256,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2208,
+              "glibc_free_arena_bytes_before": 780907744,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1871749120,
+              "pss_before_bytes": 2400256000,
+              "pss_released_bytes": 528506880,
+              "trim_called": true,
+              "trim_seconds": 0.017296346002694918
+            },
+            {
+              "anonymous_pss_released_bytes": 800333824,
+              "cache_and_rng_exact": true,
+              "completed_rows": 384,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2144,
+              "glibc_free_arena_bytes_before": 1201738576,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1860512768,
+              "pss_before_bytes": 2660846592,
+              "pss_released_bytes": 800333824,
+              "trim_called": true,
+              "trim_seconds": 0.02586493499984499
+            },
+            {
+              "anonymous_pss_released_bytes": 883134464,
+              "cache_and_rng_exact": true,
+              "completed_rows": 512,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2736,
+              "glibc_free_arena_bytes_before": 1537257888,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1834881024,
+              "pss_before_bytes": 2718003200,
+              "pss_released_bytes": 883122176,
+              "trim_called": true,
+              "trim_seconds": 0.028167388998554088
+            },
+            {
+              "anonymous_pss_released_bytes": 883326976,
+              "cache_and_rng_exact": true,
+              "completed_rows": 640,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2128,
+              "glibc_free_arena_bytes_before": 1756831088,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1844252672,
+              "pss_before_bytes": 2727579648,
+              "pss_released_bytes": 883326976,
+              "trim_called": true,
+              "trim_seconds": 0.026554107000265503
+            },
+            {
+              "anonymous_pss_released_bytes": 1007820800,
+              "cache_and_rng_exact": true,
+              "completed_rows": 768,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2160,
+              "glibc_free_arena_bytes_before": 1979739728,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1844794368,
+              "pss_before_bytes": 2852613120,
+              "pss_released_bytes": 1007818752,
+              "trim_called": true,
+              "trim_seconds": 0.030077924002398504
+            },
+            {
+              "anonymous_pss_released_bytes": 1223176192,
+              "cache_and_rng_exact": true,
+              "completed_rows": 896,
+              "explicit_gc": false,
+              "glibc_allocated_bytes_change": 2144,
+              "glibc_free_arena_bytes_before": 2229171216,
+              "malloc_trim_return": 1,
+              "pss_after_bytes": 1851649024,
+              "pss_before_bytes": 3074864128,
+              "pss_released_bytes": 1223215104,
+              "trim_called": true,
+              "trim_seconds": 0.041445229999226285
+            }
+          ],
+          "observed_boundary_worker_peak_pss_bytes": 3074864128,
+          "observed_boundary_worker_peak_pss_gib": 2.8636903762817383,
+          "observed_worker_thread_counts": [
+            23
+          ],
+          "periodic_maintenance": {
+            "actual_trim_calls": 7,
+            "calls": 7,
+            "gc_called": false,
+            "parent_wait_seconds": 12.209985446002975,
+            "sham_uses_same_snapshots_and_cache_hashing": true,
+            "trim_seconds": 0.1814994430023944,
+            "verification_seconds": 11.782551777003391
+          },
+          "periodic_trim_interval": 128,
+          "physical_cpu_cores": 8,
+          "processing_timing": {
+            "calls": 1000,
+            "seconds": 1042.1112850510071
+          },
+          "replay_seconds_before_end_diagnostic": 1154.341601013999,
+          "rows": 1000,
+          "sampled_tree_peaks_before_result_bytes": {
+            "Pss": 3875295232,
+            "Rss": 3891785728
+          },
+          "software_versions": {
+            "numpy": "2.2.6",
+            "torch": "2.11.0+cu128",
+            "torchcodec": "0.11.0+cpu",
+            "transformers": "5.8.1"
+          },
+          "thread_environment": {
+            "MKL_NUM_THREADS": null,
+            "OMP_NUM_THREADS": "8",
+            "OPENBLAS_NUM_THREADS": null,
+            "TOKENIZERS_PARALLELISM": "false"
+          },
+          "worker_torch_threads": [
+            1
+          ]
+        }
+      },
+      "comparison_recomputed_from_raw_evidence": true,
+      "matched_affinity_topology_environment": true,
+      "observed_peak_pss_reduction_fraction": 0.27889628852630344,
+      "order": [
+        "trim128",
+        "sham"
+      ],
+      "runtime_receipt_sha256": "9e6710eba39d02f2fbbff602f5f822cf8c089f78dfa54398755414f8c9b127b8",
+      "trim_minus_sham_peak_pss_bytes": -1189243904,
+      "trim_minus_sham_replay_seconds": 210.07836782899903,
+      "worker_source_sha256": "e0799efd132f5ba91714224beaf7d26292e25d8830cbfb9b55b317efb1c20bd3"
+    }
+  ],
+  "prior_thread_limit_summary_sha256": "c0524ad068560bd7c8bd65146ab3700787f57ada781bfa6429d1cd9fd2dadc65",
+  "processed_rows_sha256": "8f634d71f0caa822a7f4199c6dbe523d2bd749e8bf3fd33786053e218ce7e013",
+  "processor_identity_sha256": "f34896a16d2f7d59d95ac7e10e31c5e2d9ad46b859ca2bd2d6597b392d76e083",
+  "production_implementation_status": "not_implemented",
+  "production_policy_qualified": false,
+  "protocol": "cosmos.preprocessing-periodic-trim-causal-replay.v1",
+  "raw_evidence": {
+    "failed_unpaired_attempt": {
+      "batch.log": {
+        "bytes": 2771,
+        "sha256": "9dd1c93b6b85fdad3dfdafc9fdfa0b9c1b1ff9f39c4d461861f87304102703b1"
+      },
+      "exit-code.txt": {
+        "bytes": 2,
+        "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+      },
+      "runtime-sha256.txt": {
+        "bytes": 752,
+        "sha256": "a799ec963bef3a37806bcfa54a68c7c8acd3e8fd522973518638a808df5906b0"
+      },
+      "sham-time.txt": {
+        "bytes": 1976,
+        "sha256": "fa7d298d6529eb342bf2d696c403b6bcd667018f227a5e8e3f9d5cdb20376419"
+      },
+      "sham/child.log": {
+        "bytes": 986,
+        "sha256": "6da0b431a754e2c84e87dc6bd0a76dad413e3e97e70e04077384e158ace31172"
+      },
+      "sham/cpu-topology.json": {
+        "bytes": 2170,
+        "sha256": "44721ba9fce24760fdf19b5ead61355d4efef2153a0cd2edb14e0a454af1a854"
+      },
+      "sham/host-memory.jsonl": {
+        "bytes": 1897965,
+        "sha256": "610335c639fb53f694a70fc958262f2403cf45b546701d0d50ded25cbcb0aa59"
+      },
+      "sham/launch.json": {
+        "bytes": 1807,
+        "sha256": "93559d31ec8f8ed9404ee805ae555a9e683966232f5869e81f7a8fe5dc95da81"
+      },
+      "sham/maintenance.jsonl": {
+        "bytes": 43682,
+        "sha256": "fa2b05e24567320862f64ecfb1bac1d74e9a1e37a8bf936b260d3d9eb4ad3593"
+      },
+      "sham/result.json": {
+        "bytes": 17265,
+        "sha256": "d201bd529d30be22e25d803dbe16a76f9c2fb5887d4866cd0277c77aa26ee324"
+      },
+      "sham/rows.jsonl": {
+        "bytes": 464000,
+        "sha256": "8f634d71f0caa822a7f4199c6dbe523d2bd749e8bf3fd33786053e218ce7e013"
+      },
+      "sham/snapshots.jsonl": {
+        "bytes": 33201,
+        "sha256": "8da55606478ec85394806bb074da2f71d243628da2450c01dce8abca9b5f38ea"
+      },
+      "slurm-job.txt": {
+        "bytes": 1823,
+        "sha256": "019678bdbf5b226817abe8cae31d7c7337a0768f4d4bdcd5c7d2da6aad003187"
+      },
+      "verified-build.json": {
+        "bytes": 351,
+        "sha256": "2872e48a821aba454e2fe232fe69dbe98befafeb847534e0f667f4203aee8114"
+      }
+    },
+    "sham_then_trim": {
+      "accounting.txt": {
+        "sha256": "9d4ea9e4b12a4234f6e4e0f75699c3de03ea48f7ae992c1383fc2142f1f2e9b7"
+      },
+      "batch.log": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "comparison.json": {
+        "bytes": 2182,
+        "sha256": "5b8c805bd22fd727e2da09cf68c23793308342b0ebfd2dcbf905e1a0d6d55e8f"
+      },
+      "exit-code.txt": {
+        "bytes": 2,
+        "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+      },
+      "runtime-sha256.txt": {
+        "bytes": 752,
+        "sha256": "f3151a2b4ce6305688387053a93ae68bc5a1073b378cc4cff728061dfe2ca239"
+      },
+      "sham-time.txt": {
+        "bytes": 1940,
+        "sha256": "92779169332b27d6b0556850b03e2cf480b2dba720e7b84780ec18891e9e27fc"
+      },
+      "sham/child.log": {
+        "bytes": 985,
+        "sha256": "82236584a30f2476f4ca54f9630345401ac4b94048f2bf51fbb924b8b7a5d4ae"
+      },
+      "sham/cpu-topology.json": {
+        "bytes": 2194,
+        "sha256": "68898c9af27609154800e174075eaeb1af273794b65401ca2aeadbe3d641e9b7"
+      },
+      "sham/exit.json": {
+        "bytes": 21,
+        "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+      },
+      "sham/host-memory.jsonl": {
+        "bytes": 1595330,
+        "sha256": "258f70f10a0794e1b1addf006f14807926e089543ed38025a56ae26325416e9c"
+      },
+      "sham/launch.json": {
+        "bytes": 1807,
+        "sha256": "aeb5f6d64951c192be46567ddb053e014a5362ac47f4005475d81bdb8c1f0329"
+      },
+      "sham/maintenance.jsonl": {
+        "bytes": 44235,
+        "sha256": "fe68370074c8b375840498d07fd54c3d387baec467e79864ee4c5b55a31511ab"
+      },
+      "sham/result.json": {
+        "bytes": 17372,
+        "sha256": "b0572f28d6e87bd6e1c8e402167313027a2a266f328a15ceecae8aaa1294489b"
+      },
+      "sham/rows.jsonl": {
+        "bytes": 464000,
+        "sha256": "8f634d71f0caa822a7f4199c6dbe523d2bd749e8bf3fd33786053e218ce7e013"
+      },
+      "sham/shutdown.jsonl": {
+        "bytes": 888,
+        "sha256": "c750cb58494f8a54de6b08e9167cc669a8f2473516db9c37fc956eee88d8b747"
+      },
+      "sham/snapshots.jsonl": {
+        "bytes": 33635,
+        "sha256": "1829d09433ef3badceff8bbc489a3a9c0288ef65775b4b26c4475b8e236d3e2a"
+      },
+      "slurm-job.txt": {
+        "bytes": 1823,
+        "sha256": "b2a0b532fa440a21e50e283a8a9e161ec748f18945d433ade80cd72c6c3a23a4"
+      },
+      "trim128-time.txt": {
+        "bytes": 1945,
+        "sha256": "5cc65367e27802e12f213b7e7edab2173b88b375a644f567f3c3571ff887a834"
+      },
+      "trim128/child.log": {
+        "bytes": 986,
+        "sha256": "1ece479d903c1b2de37519a1fdc2b24546152caf8e261144ebb426f9e8f98c63"
+      },
+      "trim128/cpu-topology.json": {
+        "bytes": 2194,
+        "sha256": "68898c9af27609154800e174075eaeb1af273794b65401ca2aeadbe3d641e9b7"
+      },
+      "trim128/exit.json": {
+        "bytes": 21,
+        "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+      },
+      "trim128/host-memory.jsonl": {
+        "bytes": 1628595,
+        "sha256": "a86fe5e829cb8b1109e90e6ee8bc3a23f43860c85c3706c93342ef85d4496a02"
+      },
+      "trim128/launch.json": {
+        "bytes": 1812,
+        "sha256": "13e8ea20baf6149541566d8222bd4d5393335e26b76848ee82255ad42ac1e130"
+      },
+      "trim128/maintenance.jsonl": {
+        "bytes": 44248,
+        "sha256": "d1c82352e803b910fcc1ee55b77ba33ba6eed25a535b587e8ecdea2bc55e1bc7"
+      },
+      "trim128/result.json": {
+        "bytes": 17390,
+        "sha256": "fba4d6fed07df5e72155c372cf7dec113ad4b6b81a989f6c64788e48d400e8d3"
+      },
+      "trim128/rows.jsonl": {
+        "bytes": 464000,
+        "sha256": "8f634d71f0caa822a7f4199c6dbe523d2bd749e8bf3fd33786053e218ce7e013"
+      },
+      "trim128/shutdown.jsonl": {
+        "bytes": 890,
+        "sha256": "896ead1248dbbac8ecba6b3ab3e348cc27b0a44a37d757c99186d8871e17175c"
+      },
+      "trim128/snapshots.jsonl": {
+        "bytes": 33622,
+        "sha256": "0b4ce44fade680044db1e6f3e6d3a2133463292c6c2f4330d7827cae23275582"
+      },
+      "verified-build.json": {
+        "bytes": 351,
+        "sha256": "2872e48a821aba454e2fe232fe69dbe98befafeb847534e0f667f4203aee8114"
+      }
+    },
+    "trim_then_sham": {
+      "accounting.txt": {
+        "sha256": "24bb6657f2b1146cda6f707bd456b9b4ebc629dfa6cd0bff6605e2e327e1231e"
+      },
+      "batch.log": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "comparison.json": {
+        "bytes": 2178,
+        "sha256": "842794e3be659d9bc249e2ed66ced9f154efa49cef24e0c974e1a34b82c7fd3b"
+      },
+      "exit-code.txt": {
+        "bytes": 2,
+        "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+      },
+      "runtime-sha256.txt": {
+        "bytes": 752,
+        "sha256": "a799ec963bef3a37806bcfa54a68c7c8acd3e8fd522973518638a808df5906b0"
+      },
+      "sham-time.txt": {
+        "bytes": 1938,
+        "sha256": "5467f69031aa095ebe70939922d3ff25070dac305c6ecf6862731713872bbbb1"
+      },
+      "sham/child.log": {
+        "bytes": 988,
+        "sha256": "3485b5e158521fa03b32e611dac2259151b6ac75215a0cc3d80e17233e12b5a1"
+      },
+      "sham/cpu-topology.json": {
+        "bytes": 2202,
+        "sha256": "57682abcb948af0835228509a9ca647b4f001e9125b7ba13ce608b8638720597"
+      },
+      "sham/exit.json": {
+        "bytes": 21,
+        "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+      },
+      "sham/host-memory.jsonl": {
+        "bytes": 1561970,
+        "sha256": "3f1a32eef339264dab9d50a1d98abff93555de508b04cd98dcf9d0dc162fc932"
+      },
+      "sham/launch.json": {
+        "bytes": 1807,
+        "sha256": "b340223b40a5d94a29956aaee768e5ac7f5331b2d29b7a84977f06929a21cae0"
+      },
+      "sham/maintenance.jsonl": {
+        "bytes": 44163,
+        "sha256": "d65e31fc95952db49c94231d689d0add89c63fcc324daf4f6f71803e7743b488"
+      },
+      "sham/result.json": {
+        "bytes": 17364,
+        "sha256": "5106ca871ca2b9d2bc164209eccba80e6ded6303e21b430e16d2e16c2e854800"
+      },
+      "sham/rows.jsonl": {
+        "bytes": 464000,
+        "sha256": "8f634d71f0caa822a7f4199c6dbe523d2bd749e8bf3fd33786053e218ce7e013"
+      },
+      "sham/snapshots.jsonl": {
+        "bytes": 33577,
+        "sha256": "377e3ac8d502991cc1dca25785a1c5b0427a579f66b65931204e3ac900c7dc63"
+      },
+      "slurm-job.txt": {
+        "bytes": 1823,
+        "sha256": "34a2f734e233f3f0510dc0108d44ee89c4dfdf6769bedad70c9bc86b489b062d"
+      },
+      "trim128-time.txt": {
+        "bytes": 1944,
+        "sha256": "ff16494c22a13eb9a2db6e288c92c9ac991b7c911ab225dbdc8d374616662a3f"
+      },
+      "trim128/child.log": {
+        "bytes": 986,
+        "sha256": "54c0d3844cbaadba0a15e82401d8ec601df5c10f6858dcd8a5f59d4e04be9d91"
+      },
+      "trim128/cpu-topology.json": {
+        "bytes": 2202,
+        "sha256": "57682abcb948af0835228509a9ca647b4f001e9125b7ba13ce608b8638720597"
+      },
+      "trim128/exit.json": {
+        "bytes": 21,
+        "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+      },
+      "trim128/host-memory.jsonl": {
+        "bytes": 1909557,
+        "sha256": "9649d857bfcef5ab5b701bdd3ca45e0f83519356bc6c3e6ce26970bcfb8f5ab2"
+      },
+      "trim128/launch.json": {
+        "bytes": 1812,
+        "sha256": "cb7b0369d36a59243e5b24dc05a3e905f4a90476f4c30e0aac1c05a8c002e2a9"
+      },
+      "trim128/maintenance.jsonl": {
+        "bytes": 44166,
+        "sha256": "e853528ec117e532b92e42fdd601ba28c5f67d47ea97f37012b2e7979198aaec"
+      },
+      "trim128/result.json": {
+        "bytes": 17394,
+        "sha256": "26a6443a975660b353a9b377bb1fde926f5c80a2d5e4a04e8dd0610fc720eb30"
+      },
+      "trim128/rows.jsonl": {
+        "bytes": 464000,
+        "sha256": "8f634d71f0caa822a7f4199c6dbe523d2bd749e8bf3fd33786053e218ce7e013"
+      },
+      "trim128/snapshots.jsonl": {
+        "bytes": 33558,
+        "sha256": "470c00ad434317cf3085d64372d961128d9d419c15c7da5623ee81f7d56cb8c2"
+      },
+      "verified-build.json": {
+        "bytes": 351,
+        "sha256": "2872e48a821aba454e2fe232fe69dbe98befafeb847534e0f667f4203aee8114"
+      }
+    }
+  },
+  "rows_per_arm": 1000,
+  "seed": 42,
+  "total_periodic_trim_calls": 14,
+  "training_performed": false,
+  "trim_interval_completed_rows": 128,
+  "window_rows": 8,
+  "worker_rng_unchanged_within_each_replay": true
+}

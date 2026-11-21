@@ -1,0 +1,60 @@
+{
+  "all_four_ordered_inputs_masks_media_choices_match": true,
+  "arms": {
+    "frozen_bf16": {
+      "correct": 144,
+      "full_vocabulary_answer_nll": 2.246973931789398,
+      "native_mean_token_nll": 1.123509175092148,
+      "other_supervised_token_plus_roundoff_mean": 4.4418394897577373e-05,
+      "restricted_choice_answer_nll": 2.2469720989465714
+    },
+    "frozen_nf4": {
+      "correct": 131,
+      "full_vocabulary_answer_nll": 2.1358126923441887,
+      "native_mean_token_nll": 1.0679172057121626,
+      "other_supervised_token_plus_roundoff_mean": 2.1719080136622937e-05,
+      "restricted_choice_answer_nll": 2.1358103081583977
+    },
+    "trained_bf16": {
+      "correct": 230,
+      "full_vocabulary_answer_nll": 0.2947198376059532,
+      "native_mean_token_nll": 0.14737239200007934,
+      "other_supervised_token_plus_roundoff_mean": 2.4946394205471734e-05,
+      "restricted_choice_answer_nll": 0.29438819736242294
+    },
+    "trained_nf4": {
+      "correct": 229,
+      "full_vocabulary_answer_nll": 0.3070508539676666,
+      "native_mean_token_nll": 0.1535318087305768,
+      "other_supervised_token_plus_roundoff_mean": 1.2763493487000233e-05,
+      "restricted_choice_answer_nll": 0.3067801669239998
+    }
+  },
+  "interpretation": "The measured trained NLL difference is concentrated in answer-letter probabilities. The residual from the second supervised token is tiny and offsets the answer contribution slightly. Lower NF4 frozen NLL alongside lower frozen accuracy also shows that these metrics need not move together.",
+  "limitations": [
+    "Descriptive recomputation on the previously exposed historical256; not a new quality experiment or candidate-selection input.",
+    "The scorer uses FP32 logsumexp subtraction for answer NLL; native token CE uses the native objective. The derived residual includes numerical rounding and is not a separately measured exact end-token loss.",
+    "This does not prove why quantization changed confidence, establish a coding defect, or remove uncertainty from the original paired group analysis.",
+    "All rows, including large positive differences and incorrect predictions, remain included. The original2% NLL threshold and failure are unchanged."
+  ],
+  "protocol": "cosmos.qlora-historical-token-contributions.v1",
+  "release_qualified": false,
+  "rows": 256,
+  "source_diagnostic_sha256": "75e0192b70e7ec39c9797ce5505eedb4c48dc07f6a6e9f30b74c40d9c5163dd5",
+  "source_score_sha256": {
+    "frozen_bf16": "5b636c4d2064ea2821d251389b312ce30b0338e47217d160afb081457c81cd7b",
+    "frozen_nf4": "7dfbc8200a2866cc461b57034e3d4853a4adb330f367d3f3bba1e4da21f0b1cc",
+    "trained_bf16": "eac89f4bccfa1e8ae981451f9b5f32bd178d414f73efe79c37b14b2330eef11e",
+    "trained_nf4": "e46704bca8fc8e760fb78481b048f6587313a3fb32e499cb06ae53ecb0b1de70"
+  },
+  "supervised_tokens_per_row": 2,
+  "trained_nf4_minus_bf16": {
+    "answer_contribution_to_mean_token_nll_difference": 0.006165508180856705,
+    "answer_fraction_of_net_native_difference": 1.000988965453348,
+    "native_mean_token_nll_difference": 0.006159416730497469,
+    "other_token_plus_roundoff_contribution": -6.0914503592357505e-06,
+    "relative_full_vocabulary_answer_nll_increase": 0.04183979083959821,
+    "relative_native_mean_token_nll_increase": 0.04179491590591922,
+    "relative_restricted_choice_nll_increase": 0.04209397548068483
+  }
+}

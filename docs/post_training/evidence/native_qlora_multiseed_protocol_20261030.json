@@ -1,0 +1,28 @@
+{
+  "bootstrap_seed": 2026,
+  "conditional_statistical_pass": "All three unchanged criteria must pass under BOTH hierarchical primary and crossed sensitivity; fewer than two independent group labels is not estimable. No release qualification from development, regression, or the one-group untouched diagnostic.",
+  "criteria": {
+    "accuracy_loss_upper_max": 0.01,
+    "gain_over_frozen_nf4_lower_min_exclusive": 0.0,
+    "relative_native_token_nll_upper_max": 0.02
+  },
+  "crossed_sensitivity": "Independently seeded replay of the same deterministic generator seed2026; draw three paired training-seed indices and one G-group draw per replicate, applying that shared group draw to all sampled seeds. This preserves common recording-group perturbations across seeds.",
+  "justification": "Clarifies the originally sealed hierarchical method and adds a conservative crossed-group sensitivity before any continuation development outcomes. Same recording groups recur across seeds; no rows are removed and no threshold is weakened.",
+  "limitations": [
+    "Three training seeds and few recording groups provide limited uncertainty resolution.",
+    "Bootstrap bounds are conditional on grouping metadata and available examples, not proof of population independence.",
+    "Artifact identity, numerical correctness, memory and untouched evaluation requirements are separate gates."
+  ],
+  "point_estimate": "Pool all paired seed-by-example results; weight native NLL by supervised-token count and task accuracy by example count. Keep complete connected recording groups. Frozen references are fixed deterministic evaluations, not new training seeds.",
+  "primary": "For each replicate draw three paired training-seed indices with replacement. For each drawn seed independently draw G connected recording groups with replacement; keep both precision arms and frozen reference paired on the identical selected examples.",
+  "prior_plan_sha256": "40081d64e497631ba01c761a1862d052257233487b190fb123891c0b3b44a90d",
+  "protocol": "cosmos.qlora-multiseed-uncertainty-plan.v1",
+  "quantiles": "Order each metric sample; percentile p is element ceil(repetitions*p)-1, matching the archived diagnostic percentile convention. Report two-sided95% and required one-sided95% bounds.",
+  "repetitions": 10000,
+  "sealed_utc": "2026-10-30T20:35:55.996439+00:00",
+  "training_seeds": [
+    17,
+    42,
+    123
+  ]
+}

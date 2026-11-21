@@ -1,0 +1,2187 @@
+{
+  "cases": [
+    {
+      "mode": "nf4_lora",
+      "sample_indices": [
+        2029,
+        2030
+      ],
+      "samples": [
+        {
+          "device_compute_processes": [],
+          "device_memory_total_bytes": 85899345920,
+          "device_memory_used_bytes": 730660864,
+          "device_uuid": "GPU-0823c215-a017-2b70-cf69-ac8cabf7d1fc",
+          "host_collection": {
+            "attempts": [
+              {
+                "begin_monotonic_seconds": 496155.049644818,
+                "discovery_after": {
+                  "3689792": {
+                    "begin_monotonic_seconds": 496158.78242055,
+                    "begin_unix_seconds": 1794673801.2215934,
+                    "end_monotonic_seconds": 496158.78245144,
+                    "end_unix_seconds": 1794673801.2216244,
+                    "value": {
+                      "pid": 3689792,
+                      "ppid": 3689773,
+                      "start_ticks": 49350211,
+                      "state": "S",
+                      "uid": 0
+                    }
+                  },
+                  "3694604": {
+                    "begin_monotonic_seconds": 496158.782686836,
+                    "begin_unix_seconds": 1794673801.2218597,
+                    "end_monotonic_seconds": 496158.782715307,
+                    "end_unix_seconds": 1794673801.2218883,
+                    "value": {
+                      "pid": 3694604,
+                      "ppid": 3689792,
+                      "start_ticks": 49356178,
+                      "state": "S",
+                      "uid": 0
+                    }
+                  },
+                  "3694932": {
+                    "begin_monotonic_seconds": 496158.782813799,
+                    "begin_unix_seconds": 1794673801.2219865,
+                    "end_monotonic_seconds": 496158.78284117,
+                    "end_unix_seconds": 1794673801.222014,
+                    "value": {
+                      "pid": 3694932,
+                      "ppid": 3694604,
+                      "start_ticks": 49356536,
+                      "state": "R",
+                      "uid": 65534
+                    }
+                  }
+                },
+                "discovery_before": {
+                  "3689792": {
+                    "begin_monotonic_seconds": 496155.154021999,
+                    "begin_unix_seconds": 1794673797.5931947,
+                    "end_monotonic_seconds": 496155.15405173,
+                    "end_unix_seconds": 1794673797.5932245,
+                    "value": {
+                      "pid": 3689792,
+                      "ppid": 3689773,
+                      "start_ticks": 49350211,
+                      "state": "S",
+                      "uid": 0
+                    }
+                  },
+                  "3694604": {
+                    "begin_monotonic_seconds": 496155.154282666,
+                    "begin_unix_seconds": 1794673797.5934556,
+                    "end_monotonic_seconds": 496155.154310356,
+                    "end_unix_seconds": 1794673797.5934832,
+                    "value": {
+                      "pid": 3694604,
+                      "ppid": 3689792,
+                      "start_ticks": 49356178,
+                      "state": "S",
+                      "uid": 0
+                    }
+                  },
+                  "3694932": {
+                    "begin_monotonic_seconds": 496155.154404009,
+                    "begin_unix_seconds": 1794673797.593577,
+                    "end_monotonic_seconds": 496155.154430509,
+                    "end_unix_seconds": 1794673797.5936034,
+                    "value": {
+                      "pid": 3694932,
+                      "ppid": 3694604,
+                      "start_ticks": 49356536,
+                      "state": "R",
+                      "uid": 65534
+                    }
+                  }
+                },
+                "post_discovery_polls": {
+                  "3689792": {
+                    "begin_monotonic_seconds": 496158.792948378,
+                    "begin_unix_seconds": 1794673801.232121,
+                    "end_monotonic_seconds": 496158.792952388,
+                    "end_unix_seconds": 1794673801.2321253,
+                    "events": []
+                  },
+                  "3694604": {
+                    "begin_monotonic_seconds": 496158.792961818,
+                    "begin_unix_seconds": 1794673801.2321346,
+                    "end_monotonic_seconds": 496158.792963608,
+                    "end_unix_seconds": 1794673801.2321365,
+                    "events": []
+                  },
+                  "3694932": {
+                    "begin_monotonic_seconds": 496158.792967318,
+                    "begin_unix_seconds": 1794673801.2321403,
+                    "end_monotonic_seconds": 496158.792968449,
+                    "end_unix_seconds": 1794673801.2321413,
+                    "events": []
+                  }
+                },
+                "processes": {
+                  "3689792": {
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 493561.632348364,
+                        "begin_unix_seconds": 1794671204.0715213,
+                        "end_monotonic_seconds": 493561.632384925,
+                        "end_unix_seconds": 1794671204.0715575,
+                        "value": {
+                          "pid": 3689792,
+                          "ppid": 3689773,
+                          "start_ticks": 49350211,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 493561.632278642,
+                        "begin_unix_seconds": 1794671204.0714514,
+                        "end_monotonic_seconds": 493561.632317383,
+                        "end_unix_seconds": 1794671204.0714903,
+                        "value": {
+                          "pid": 3689792,
+                          "ppid": 3689773,
+                          "start_ticks": 49350211,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 493561.630566351,
+                        "begin_unix_seconds": 1794671204.0697393,
+                        "end_monotonic_seconds": 493561.630600752,
+                        "end_unix_seconds": 1794671204.0697737,
+                        "value": {
+                          "pid": 3689792,
+                          "ppid": 3689773,
+                          "start_ticks": 49350211,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 3689792,
+                        "ppid": 3689773,
+                        "start_ticks": 49350211,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 496155.167718175,
+                      "begin_unix_seconds": 1794673797.606891,
+                      "end_monotonic_seconds": 496155.167721986,
+                      "end_unix_seconds": 1794673797.6068947,
+                      "events": []
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 496155.164473246,
+                      "begin_unix_seconds": 1794673797.6036463,
+                      "end_monotonic_seconds": 496155.164477536,
+                      "end_unix_seconds": 1794673797.6036503,
+                      "events": []
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 496155.164532107,
+                      "begin_unix_seconds": 1794673797.6037052,
+                      "end_monotonic_seconds": 496155.167675364,
+                      "end_unix_seconds": 1794673797.6068482,
+                      "value": {
+                        "Pss": 495517696,
+                        "Rss": 671084544
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 496155.167677214,
+                      "begin_unix_seconds": 1794673797.6068501,
+                      "end_monotonic_seconds": 496155.167715715,
+                      "end_unix_seconds": 1794673797.6068885,
+                      "value": {
+                        "pid": 3689792,
+                        "ppid": 3689773,
+                        "start_ticks": 49350211,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 496155.164429995,
+                      "begin_unix_seconds": 1794673797.6036026,
+                      "end_monotonic_seconds": 496155.164470766,
+                      "end_unix_seconds": 1794673797.6036437,
+                      "value": {
+                        "pid": 3689792,
+                        "ppid": 3689773,
+                        "start_ticks": 49350211,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 496155.164478566,
+                      "begin_unix_seconds": 1794673797.6036513,
+                      "end_monotonic_seconds": 496155.164530457,
+                      "end_unix_seconds": 1794673797.6037033,
+                      "value": {
+                        "VmHWM": 775708672,
+                        "VmRSS": 670859264
+                      }
+                    }
+                  },
+                  "3694604": {
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 493562.883113033,
+                        "begin_unix_seconds": 1794671205.322286,
+                        "end_monotonic_seconds": 493562.883150504,
+                        "end_unix_seconds": 1794671205.322323,
+                        "value": {
+                          "pid": 3694604,
+                          "ppid": 3689792,
+                          "start_ticks": 49356178,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 493562.883047952,
+                        "begin_unix_seconds": 1794671205.3222208,
+                        "end_monotonic_seconds": 493562.883085773,
+                        "end_unix_seconds": 1794671205.3222587,
+                        "value": {
+                          "pid": 3694604,
+                          "ppid": 3689792,
+                          "start_ticks": 49356178,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 493562.881782341,
+                        "begin_unix_seconds": 1794671205.320955,
+                        "end_monotonic_seconds": 493562.881813981,
+                        "end_unix_seconds": 1794671205.320987,
+                        "value": {
+                          "pid": 3694604,
+                          "ppid": 3689792,
+                          "start_ticks": 49356178,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 3694604,
+                        "ppid": 3689792,
+                        "start_ticks": 49356178,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 496155.170848952,
+                      "begin_unix_seconds": 1794673797.6100218,
+                      "end_monotonic_seconds": 496155.170851482,
+                      "end_unix_seconds": 1794673797.6100242,
+                      "events": []
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 496155.167860659,
+                      "begin_unix_seconds": 1794673797.6070335,
+                      "end_monotonic_seconds": 496155.167863009,
+                      "end_unix_seconds": 1794673797.6070359,
+                      "events": []
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 496155.16791729,
+                      "begin_unix_seconds": 1794673797.6070902,
+                      "end_monotonic_seconds": 496155.170805741,
+                      "end_unix_seconds": 1794673797.6099787,
+                      "value": {
+                        "Pss": 412180480,
+                        "Rss": 590741504
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 496155.170807561,
+                      "begin_unix_seconds": 1794673797.6099803,
+                      "end_monotonic_seconds": 496155.170847042,
+                      "end_unix_seconds": 1794673797.61002,
+                      "value": {
+                        "pid": 3694604,
+                        "ppid": 3689792,
+                        "start_ticks": 49356178,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 496155.167813908,
+                      "begin_unix_seconds": 1794673797.6069868,
+                      "end_monotonic_seconds": 496155.167858549,
+                      "end_unix_seconds": 1794673797.6070313,
+                      "value": {
+                        "pid": 3694604,
+                        "ppid": 3689792,
+                        "start_ticks": 49356178,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 496155.167863819,
+                      "begin_unix_seconds": 1794673797.6070366,
+                      "end_monotonic_seconds": 496155.16791583,
+                      "end_unix_seconds": 1794673797.6070886,
+                      "value": {
+                        "VmHWM": 590147584,
+                        "VmRSS": 590147584
+                      }
+                    }
+                  },
+                  "3694932": {
+                    "exit_wait": {
+                      "deadline_monotonic_seconds": 496159.549644818,
+                      "initial_poll": {
+                        "begin_monotonic_seconds": 496155.171087038,
+                        "begin_unix_seconds": 1794673797.61026,
+                        "end_monotonic_seconds": 496155.171088758,
+                        "end_unix_seconds": 1794673797.6102614,
+                        "events": []
+                      },
+                      "retry_reserve_seconds": 0.25
+                    },
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 493565.511957554,
+                        "begin_unix_seconds": 1794671207.9511304,
+                        "end_monotonic_seconds": 493565.511993035,
+                        "end_unix_seconds": 1794671207.951166,
+                        "value": {
+                          "pid": 3694932,
+                          "ppid": 3694604,
+                          "start_ticks": 49356536,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 493565.511896662,
+                        "begin_unix_seconds": 1794671207.9510694,
+                        "end_monotonic_seconds": 493565.511932843,
+                        "end_unix_seconds": 1794671207.9511056,
+                        "value": {
+                          "pid": 3694932,
+                          "ppid": 3694604,
+                          "start_ticks": 49356536,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 493565.510735054,
+                        "begin_unix_seconds": 1794671207.949908,
+                        "end_monotonic_seconds": 493565.510771584,
+                        "end_unix_seconds": 1794671207.9499443,
+                        "value": {
+                          "pid": 3694932,
+                          "ppid": 3694604,
+                          "start_ticks": 49356536,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 3694932,
+                        "ppid": 3694604,
+                        "start_ticks": 49356536,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 496155.17118307,
+                      "begin_unix_seconds": 1794673797.6103559,
+                      "end_monotonic_seconds": 496158.67282883,
+                      "end_unix_seconds": 1794673801.112001,
+                      "events": [],
+                      "timeout_milliseconds": 3500
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 496155.170974805,
+                      "begin_unix_seconds": 1794673797.6101475,
+                      "end_monotonic_seconds": 496155.170976895,
+                      "end_unix_seconds": 1794673797.6101496,
+                      "events": []
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 496155.171021706,
+                      "begin_unix_seconds": 1794673797.6101944,
+                      "end_monotonic_seconds": 496155.171052067,
+                      "end_unix_seconds": 1794673797.610225,
+                      "error": {
+                        "errno": 3,
+                        "type": "ProcessLookupError"
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 496155.171053267,
+                      "begin_unix_seconds": 1794673797.6102262,
+                      "end_monotonic_seconds": 496155.171085378,
+                      "end_unix_seconds": 1794673797.610258,
+                      "value": {
+                        "pid": 3694932,
+                        "ppid": 3694604,
+                        "start_ticks": 49356536,
+                        "state": "R",
+                        "uid": 65534
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 496155.170934084,
+                      "begin_unix_seconds": 1794673797.610107,
+                      "end_monotonic_seconds": 496155.170973145,
+                      "end_unix_seconds": 1794673797.610146,
+                      "value": {
+                        "pid": 3694932,
+                        "ppid": 3694604,
+                        "start_ticks": 49356536,
+                        "state": "R",
+                        "uid": 65534
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 496155.170977605,
+                      "begin_unix_seconds": 1794673797.6101503,
+                      "end_monotonic_seconds": 496155.171020336,
+                      "end_unix_seconds": 1794673797.6101933,
+                      "value": {}
+                    }
+                  }
+                },
+                "selected_after": [
+                  3689792,
+                  3694604,
+                  3694932
+                ],
+                "selected_before": [
+                  3689792,
+                  3694604,
+                  3694932
+                ],
+                "stage_after": {
+                  "begin_monotonic_seconds": 496158.792971529,
+                  "begin_unix_seconds": 1794673801.2321444,
+                  "end_monotonic_seconds": 496158.793554113,
+                  "end_unix_seconds": 1794673801.2327268,
+                  "value": "native128"
+                },
+                "stage_before": {
+                  "begin_monotonic_seconds": 496155.049645508,
+                  "begin_unix_seconds": 1794673797.4888184,
+                  "end_monotonic_seconds": 496155.050055198,
+                  "end_unix_seconds": 1794673797.489228,
+                  "value": "native128"
+                }
+              }
+            ],
+            "excluded_monitor_pid": 3694596,
+            "final_attempt": 0,
+            "identity_semantics": "pid_start_pidfd_owned_ancestry",
+            "max_attempts": 3,
+            "max_collection_seconds": 4.5,
+            "protocol": "proc-identity-state-read-attempts-v10",
+            "root_pid": 3689792,
+            "stage_publish": {
+              "begin_monotonic_seconds": 496159.098352883,
+              "begin_unix_seconds": 1794673801.5375254,
+              "end_monotonic_seconds": 496159.098837394,
+              "end_unix_seconds": 1794673801.5380101,
+              "value": "native128"
+            },
+            "uid_semantics": "proc_inode_owner"
+          },
+          "host_collection_errors": [
+            "live_or_unknown_memory_unreadable"
+          ],
+          "host_observed_attempt_rss_peak_bytes": null,
+          "host_observed_complete_attempt_pss_peak_bytes": null,
+          "host_process_memory_method": "proc-identity-state-read-attempts-v10",
+          "host_pss_complete": false,
+          "process_host_memory": {
+            "3689792": {
+              "Pss_rollup": 495517696,
+              "Rss_rollup": 671084544,
+              "VmHWM": 775708672,
+              "VmRSS": 670859264
+            },
+            "3694604": {
+              "Pss_rollup": 412180480,
+              "Rss_rollup": 590741504,
+              "VmHWM": 590147584,
+              "VmRSS": 590147584
+            },
+            "3694932": {
+              "rollup_unavailable": true
+            }
+          },
+          "sampling_seconds": 1,
+          "selected_host_pss_sum_bytes": 907698176,
+          "selected_host_rss_sum_bytes": 1261006848,
+          "stage": "native128",
+          "stage_serialization": {
+            "acquired_monotonic_seconds": 496155.049049694,
+            "mode": "sample",
+            "observation_finished_monotonic_seconds": 496159.099322106,
+            "protocol": "cosmos.native-qlora-stage-lock.v1",
+            "wait_seconds": 0.00018620496848598123
+          },
+          "telemetry": {
+            "memory_clock_mhz": 1593,
+            "power_milliwatts": 100075,
+            "sm_clock_mhz": 1410,
+            "temperature_celsius": 41,
+            "utilization": {
+              "gpu_percent": 24,
+              "memory_percent": 1
+            }
+          },
+          "unix_seconds": 1794673801.5331612
+        },
+        {
+          "device_compute_processes": [],
+          "device_memory_total_bytes": 85899345920,
+          "device_memory_used_bytes": 727252992,
+          "device_uuid": "GPU-0823c215-a017-2b70-cf69-ac8cabf7d1fc",
+          "host_collection": {
+            "attempts": [
+              {
+                "begin_monotonic_seconds": 496160.101671144,
+                "discovery_after": {
+                  "3689792": {
+                    "begin_monotonic_seconds": 496160.343260153,
+                    "begin_unix_seconds": 1794673802.782433,
+                    "end_monotonic_seconds": 496160.343292283,
+                    "end_unix_seconds": 1794673802.782465,
+                    "value": {
+                      "pid": 3689792,
+                      "ppid": 3689773,
+                      "start_ticks": 49350211,
+                      "state": "R",
+                      "uid": 0
+                    }
+                  },
+                  "3694604": {
+                    "begin_monotonic_seconds": 496160.353863813,
+                    "begin_unix_seconds": 1794673802.7930365,
+                    "end_monotonic_seconds": 496160.353886893,
+                    "end_unix_seconds": 1794673802.7930596,
+                    "error": {
+                      "errno": 2,
+                      "type": "FileNotFoundError"
+                    }
+                  },
+                  "3694932": {
+                    "begin_monotonic_seconds": 496160.353888803,
+                    "begin_unix_seconds": 1794673802.7930617,
+                    "end_monotonic_seconds": 496160.353903614,
+                    "end_unix_seconds": 1794673802.7930765,
+                    "error": {
+                      "errno": 2,
+                      "type": "FileNotFoundError"
+                    }
+                  }
+                },
+                "discovery_before": {
+                  "3689792": {
+                    "begin_monotonic_seconds": 496160.215896057,
+                    "begin_unix_seconds": 1794673802.6550689,
+                    "end_monotonic_seconds": 496160.215929018,
+                    "end_unix_seconds": 1794673802.655102,
+                    "value": {
+                      "pid": 3689792,
+                      "ppid": 3689773,
+                      "start_ticks": 49350211,
+                      "state": "R",
+                      "uid": 0
+                    }
+                  },
+                  "3694604": {
+                    "begin_monotonic_seconds": 496160.226727973,
+                    "begin_unix_seconds": 1794673802.6659007,
+                    "end_monotonic_seconds": 496160.226765334,
+                    "end_unix_seconds": 1794673802.6659381,
+                    "error": {
+                      "errno": 2,
+                      "type": "FileNotFoundError"
+                    }
+                  },
+                  "3694932": {
+                    "begin_monotonic_seconds": 496160.226767444,
+                    "begin_unix_seconds": 1794673802.6659403,
+                    "end_monotonic_seconds": 496160.226785564,
+                    "end_unix_seconds": 1794673802.6659584,
+                    "error": {
+                      "errno": 2,
+                      "type": "FileNotFoundError"
+                    }
+                  }
+                },
+                "post_discovery_polls": {
+                  "3689792": {
+                    "begin_monotonic_seconds": 496160.354441277,
+                    "begin_unix_seconds": 1794673802.7936141,
+                    "end_monotonic_seconds": 496160.354447167,
+                    "end_unix_seconds": 1794673802.7936199,
+                    "events": []
+                  },
+                  "3694604": {
+                    "begin_monotonic_seconds": 496160.354457577,
+                    "begin_unix_seconds": 1794673802.7936304,
+                    "end_monotonic_seconds": 496160.354460297,
+                    "end_unix_seconds": 1794673802.793633,
+                    "events": [
+                      1
+                    ]
+                  },
+                  "3694932": {
+                    "begin_monotonic_seconds": 496160.354465697,
+                    "begin_unix_seconds": 1794673802.7936385,
+                    "end_monotonic_seconds": 496160.354467408,
+                    "end_unix_seconds": 1794673802.7936401,
+                    "events": [
+                      1
+                    ]
+                  }
+                },
+                "processes": {
+                  "3689792": {
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 493561.632348364,
+                        "begin_unix_seconds": 1794671204.0715213,
+                        "end_monotonic_seconds": 493561.632384925,
+                        "end_unix_seconds": 1794671204.0715575,
+                        "value": {
+                          "pid": 3689792,
+                          "ppid": 3689773,
+                          "start_ticks": 49350211,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 493561.632278642,
+                        "begin_unix_seconds": 1794671204.0714514,
+                        "end_monotonic_seconds": 493561.632317383,
+                        "end_unix_seconds": 1794671204.0714903,
+                        "value": {
+                          "pid": 3689792,
+                          "ppid": 3689773,
+                          "start_ticks": 49350211,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 493561.630566351,
+                        "begin_unix_seconds": 1794671204.0697393,
+                        "end_monotonic_seconds": 493561.630600752,
+                        "end_unix_seconds": 1794671204.0697737,
+                        "value": {
+                          "pid": 3689792,
+                          "ppid": 3689773,
+                          "start_ticks": 49350211,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 3689792,
+                        "ppid": 3689773,
+                        "start_ticks": 49350211,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 496160.231643693,
+                      "begin_unix_seconds": 1794673802.6708164,
+                      "end_monotonic_seconds": 496160.231647473,
+                      "end_unix_seconds": 1794673802.6708202,
+                      "events": []
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 496160.228041715,
+                      "begin_unix_seconds": 1794673802.6672146,
+                      "end_monotonic_seconds": 496160.228047685,
+                      "end_unix_seconds": 1794673802.6672206,
+                      "events": []
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 496160.228111787,
+                      "begin_unix_seconds": 1794673802.6672845,
+                      "end_monotonic_seconds": 496160.231589612,
+                      "end_unix_seconds": 1794673802.6707623,
+                      "value": {
+                        "Pss": 666982400,
+                        "Rss": 672370688
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 496160.231591832,
+                      "begin_unix_seconds": 1794673802.6707647,
+                      "end_monotonic_seconds": 496160.231640783,
+                      "end_unix_seconds": 1794673802.6708138,
+                      "value": {
+                        "pid": 3689792,
+                        "ppid": 3689773,
+                        "start_ticks": 49350211,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 496160.227988674,
+                      "begin_unix_seconds": 1794673802.6671612,
+                      "end_monotonic_seconds": 496160.228039175,
+                      "end_unix_seconds": 1794673802.667212,
+                      "value": {
+                        "pid": 3689792,
+                        "ppid": 3689773,
+                        "start_ticks": 49350211,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 496160.228049415,
+                      "begin_unix_seconds": 1794673802.6672223,
+                      "end_monotonic_seconds": 496160.228110117,
+                      "end_unix_seconds": 1794673802.667283,
+                      "value": {
+                        "VmHWM": 775708672,
+                        "VmRSS": 672333824
+                      }
+                    }
+                  },
+                  "3694604": {
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 493562.883113033,
+                        "begin_unix_seconds": 1794671205.322286,
+                        "end_monotonic_seconds": 493562.883150504,
+                        "end_unix_seconds": 1794671205.322323,
+                        "value": {
+                          "pid": 3694604,
+                          "ppid": 3689792,
+                          "start_ticks": 49356178,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 493562.883047952,
+                        "begin_unix_seconds": 1794671205.3222208,
+                        "end_monotonic_seconds": 493562.883085773,
+                        "end_unix_seconds": 1794671205.3222587,
+                        "value": {
+                          "pid": 3694604,
+                          "ppid": 3689792,
+                          "start_ticks": 49356178,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 493562.881782341,
+                        "begin_unix_seconds": 1794671205.320955,
+                        "end_monotonic_seconds": 493562.881813981,
+                        "end_unix_seconds": 1794671205.320987,
+                        "value": {
+                          "pid": 3694604,
+                          "ppid": 3689792,
+                          "start_ticks": 49356178,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 3694604,
+                        "ppid": 3689792,
+                        "start_ticks": 49356178,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 496160.231834738,
+                      "begin_unix_seconds": 1794673802.6710074,
+                      "end_monotonic_seconds": 496160.231836588,
+                      "end_unix_seconds": 1794673802.6710093,
+                      "events": [
+                        1
+                      ]
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 496160.231781737,
+                      "begin_unix_seconds": 1794673802.6709545,
+                      "end_monotonic_seconds": 496160.231785277,
+                      "end_unix_seconds": 1794673802.670958,
+                      "events": [
+                        1
+                      ]
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 496160.231805387,
+                      "begin_unix_seconds": 1794673802.670978,
+                      "end_monotonic_seconds": 496160.231819547,
+                      "end_unix_seconds": 1794673802.6709924,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 496160.231820658,
+                      "begin_unix_seconds": 1794673802.6709933,
+                      "end_monotonic_seconds": 496160.231833638,
+                      "end_unix_seconds": 1794673802.6710064,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 496160.231750126,
+                      "begin_unix_seconds": 1794673802.670923,
+                      "end_monotonic_seconds": 496160.231780026,
+                      "end_unix_seconds": 1794673802.6709528,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 496160.231786207,
+                      "begin_unix_seconds": 1794673802.6709588,
+                      "end_monotonic_seconds": 496160.231803977,
+                      "end_unix_seconds": 1794673802.6709769,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    }
+                  },
+                  "3694932": {
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 493565.511957554,
+                        "begin_unix_seconds": 1794671207.9511304,
+                        "end_monotonic_seconds": 493565.511993035,
+                        "end_unix_seconds": 1794671207.951166,
+                        "value": {
+                          "pid": 3694932,
+                          "ppid": 3694604,
+                          "start_ticks": 49356536,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 493565.511896662,
+                        "begin_unix_seconds": 1794671207.9510694,
+                        "end_monotonic_seconds": 493565.511932843,
+                        "end_unix_seconds": 1794671207.9511056,
+                        "value": {
+                          "pid": 3694932,
+                          "ppid": 3694604,
+                          "start_ticks": 49356536,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 493565.510735054,
+                        "begin_unix_seconds": 1794671207.949908,
+                        "end_monotonic_seconds": 493565.510771584,
+                        "end_unix_seconds": 1794671207.9499443,
+                        "value": {
+                          "pid": 3694932,
+                          "ppid": 3694604,
+                          "start_ticks": 49356536,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 3694932,
+                        "ppid": 3694604,
+                        "start_ticks": 49356536,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 496160.231979102,
+                      "begin_unix_seconds": 1794673802.6711519,
+                      "end_monotonic_seconds": 496160.231980571,
+                      "end_unix_seconds": 1794673802.6711533,
+                      "events": [
+                        1
+                      ]
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 496160.23193284,
+                      "begin_unix_seconds": 1794673802.6711059,
+                      "end_monotonic_seconds": 496160.23193563,
+                      "end_unix_seconds": 1794673802.6711082,
+                      "events": [
+                        1
+                      ]
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 496160.231951701,
+                      "begin_unix_seconds": 1794673802.6711245,
+                      "end_monotonic_seconds": 496160.231965071,
+                      "end_unix_seconds": 1794673802.6711378,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 496160.231966121,
+                      "begin_unix_seconds": 1794673802.6711388,
+                      "end_monotonic_seconds": 496160.231978011,
+                      "end_unix_seconds": 1794673802.671151,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 496160.23191262,
+                      "begin_unix_seconds": 1794673802.6710854,
+                      "end_monotonic_seconds": 496160.23193167,
+                      "end_unix_seconds": 1794673802.6711044,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 496160.23193645,
+                      "begin_unix_seconds": 1794673802.6711092,
+                      "end_monotonic_seconds": 496160.231950751,
+                      "end_unix_seconds": 1794673802.6711235,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    }
+                  }
+                },
+                "selected_after": [
+                  3689792,
+                  3694604,
+                  3694932
+                ],
+                "selected_before": [
+                  3689792,
+                  3694604,
+                  3694932
+                ],
+                "stage_after": {
+                  "begin_monotonic_seconds": 496160.354470418,
+                  "begin_unix_seconds": 1794673802.7936432,
+                  "end_monotonic_seconds": 496160.355055902,
+                  "end_unix_seconds": 1794673802.7942288,
+                  "value": "native128"
+                },
+                "stage_before": {
+                  "begin_monotonic_seconds": 496160.101672574,
+                  "begin_unix_seconds": 1794673802.5408454,
+                  "end_monotonic_seconds": 496160.102095744,
+                  "end_unix_seconds": 1794673802.5412686,
+                  "value": "native128"
+                }
+              }
+            ],
+            "excluded_monitor_pid": 3694596,
+            "final_attempt": 0,
+            "identity_semantics": "pid_start_pidfd_owned_ancestry",
+            "max_attempts": 3,
+            "max_collection_seconds": 4.5,
+            "protocol": "proc-identity-state-read-attempts-v10",
+            "root_pid": 3689792,
+            "stage_publish": {
+              "begin_monotonic_seconds": 496160.359509821,
+              "begin_unix_seconds": 1794673802.7986827,
+              "end_monotonic_seconds": 496160.359967203,
+              "end_unix_seconds": 1794673802.7991397,
+              "value": "native128"
+            },
+            "uid_semantics": "proc_inode_owner"
+          },
+          "host_collection_errors": [],
+          "host_observed_attempt_rss_peak_bytes": 672333824,
+          "host_observed_complete_attempt_pss_peak_bytes": 666982400,
+          "host_process_memory_method": "proc-identity-state-read-attempts-v10",
+          "host_pss_complete": true,
+          "process_host_memory": {
+            "3689792": {
+              "Pss_rollup": 666982400,
+              "Rss_rollup": 672370688,
+              "VmHWM": 775708672,
+              "VmRSS": 672333824
+            },
+            "3694604": {
+              "Pss_rollup": 0,
+              "Rss_rollup": 0,
+              "VmRSS": 0,
+              "address_space_released": true
+            },
+            "3694932": {
+              "Pss_rollup": 0,
+              "Rss_rollup": 0,
+              "VmRSS": 0,
+              "address_space_released": true
+            }
+          },
+          "sampling_seconds": 1,
+          "selected_host_pss_sum_bytes": 666982400,
+          "selected_host_rss_sum_bytes": 672333824,
+          "stage": "native128",
+          "stage_serialization": {
+            "acquired_monotonic_seconds": 496160.101166752,
+            "mode": "sample",
+            "observation_finished_monotonic_seconds": 496160.360330512,
+            "protocol": "cosmos.native-qlora-stage-lock.v1",
+            "wait_seconds": 0.00015816400991752744
+          },
+          "telemetry": {
+            "memory_clock_mhz": 1593,
+            "power_milliwatts": 100075,
+            "sm_clock_mhz": 1410,
+            "temperature_celsius": 41,
+            "utilization": {
+              "gpu_percent": 0,
+              "memory_percent": 0
+            }
+          },
+          "unix_seconds": 1794673802.7952116
+        }
+      ],
+      "source_job": 38540661,
+      "source_sha256": "219219964ffd1c35dca694406409f5e9bb5498ae1b98556efdba1c3c1dba58e3"
+    },
+    {
+      "mode": "bf16_lora",
+      "sample_indices": [
+        2042,
+        2043
+      ],
+      "samples": [
+        {
+          "device_compute_processes": [],
+          "device_memory_total_bytes": 85899345920,
+          "device_memory_used_bytes": 730660864,
+          "device_uuid": "GPU-77308eab-c813-5725-ca4b-77e281050e4e",
+          "host_collection": {
+            "attempts": [
+              {
+                "begin_monotonic_seconds": 260667.751829281,
+                "discovery_after": {
+                  "234889": {
+                    "begin_monotonic_seconds": 260671.47081749,
+                    "begin_unix_seconds": 1794677913.9145918,
+                    "end_monotonic_seconds": 260671.47084744,
+                    "end_unix_seconds": 1794677913.9146216,
+                    "value": {
+                      "pid": 234889,
+                      "ppid": 234880,
+                      "start_ticks": 25801869,
+                      "state": "S",
+                      "uid": 0
+                    }
+                  },
+                  "236186": {
+                    "begin_monotonic_seconds": 260671.471154745,
+                    "begin_unix_seconds": 1794677913.9149292,
+                    "end_monotonic_seconds": 260671.471183376,
+                    "end_unix_seconds": 1794677913.9149578,
+                    "value": {
+                      "pid": 236186,
+                      "ppid": 234889,
+                      "start_ticks": 25807860,
+                      "state": "S",
+                      "uid": 0
+                    }
+                  },
+                  "236232": {
+                    "begin_monotonic_seconds": 260671.471283067,
+                    "begin_unix_seconds": 1794677913.9150574,
+                    "end_monotonic_seconds": 260671.471310158,
+                    "end_unix_seconds": 1794677913.9150846,
+                    "value": {
+                      "pid": 236232,
+                      "ppid": 236186,
+                      "start_ticks": 25808205,
+                      "state": "R",
+                      "uid": 65534
+                    }
+                  }
+                },
+                "discovery_before": {
+                  "234889": {
+                    "begin_monotonic_seconds": 260667.846648912,
+                    "begin_unix_seconds": 1794677910.2904234,
+                    "end_monotonic_seconds": 260667.846680032,
+                    "end_unix_seconds": 1794677910.2904546,
+                    "value": {
+                      "pid": 234889,
+                      "ppid": 234880,
+                      "start_ticks": 25801869,
+                      "state": "S",
+                      "uid": 0
+                    }
+                  },
+                  "236186": {
+                    "begin_monotonic_seconds": 260667.846970207,
+                    "begin_unix_seconds": 1794677910.2907445,
+                    "end_monotonic_seconds": 260667.846998527,
+                    "end_unix_seconds": 1794677910.290773,
+                    "value": {
+                      "pid": 236186,
+                      "ppid": 234889,
+                      "start_ticks": 25807860,
+                      "state": "S",
+                      "uid": 0
+                    }
+                  },
+                  "236232": {
+                    "begin_monotonic_seconds": 260667.847094239,
+                    "begin_unix_seconds": 1794677910.2908688,
+                    "end_monotonic_seconds": 260667.847128329,
+                    "end_unix_seconds": 1794677910.2909029,
+                    "value": {
+                      "pid": 236232,
+                      "ppid": 236186,
+                      "start_ticks": 25808205,
+                      "state": "R",
+                      "uid": 65534
+                    }
+                  }
+                },
+                "post_discovery_polls": {
+                  "234889": {
+                    "begin_monotonic_seconds": 260671.488917982,
+                    "begin_unix_seconds": 1794677913.9326923,
+                    "end_monotonic_seconds": 260671.488922983,
+                    "end_unix_seconds": 1794677913.9326973,
+                    "events": []
+                  },
+                  "236186": {
+                    "begin_monotonic_seconds": 260671.488931973,
+                    "begin_unix_seconds": 1794677913.9327064,
+                    "end_monotonic_seconds": 260671.488933633,
+                    "end_unix_seconds": 1794677913.932708,
+                    "events": []
+                  },
+                  "236232": {
+                    "begin_monotonic_seconds": 260671.488937153,
+                    "begin_unix_seconds": 1794677913.9327114,
+                    "end_monotonic_seconds": 260671.488938553,
+                    "end_unix_seconds": 1794677913.932713,
+                    "events": []
+                  }
+                },
+                "processes": {
+                  "234889": {
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 258078.450333405,
+                        "begin_unix_seconds": 1794675320.8941078,
+                        "end_monotonic_seconds": 258078.450370016,
+                        "end_unix_seconds": 1794675320.8941443,
+                        "value": {
+                          "pid": 234889,
+                          "ppid": 234880,
+                          "start_ticks": 25801869,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 258078.450262454,
+                        "begin_unix_seconds": 1794675320.8940368,
+                        "end_monotonic_seconds": 258078.450304474,
+                        "end_unix_seconds": 1794675320.8940787,
+                        "value": {
+                          "pid": 234889,
+                          "ppid": 234880,
+                          "start_ticks": 25801869,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 258078.438077141,
+                        "begin_unix_seconds": 1794675320.8818514,
+                        "end_monotonic_seconds": 258078.438111261,
+                        "end_unix_seconds": 1794675320.8818858,
+                        "value": {
+                          "pid": 234889,
+                          "ppid": 234880,
+                          "start_ticks": 25801869,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 234889,
+                        "ppid": 234880,
+                        "start_ticks": 25801869,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 260667.870353724,
+                      "begin_unix_seconds": 1794677910.3141282,
+                      "end_monotonic_seconds": 260667.870357175,
+                      "end_unix_seconds": 1794677910.3141315,
+                      "events": []
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 260667.864815265,
+                      "begin_unix_seconds": 1794677910.3085895,
+                      "end_monotonic_seconds": 260667.864819975,
+                      "end_unix_seconds": 1794677910.3085945,
+                      "events": []
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 260667.864878716,
+                      "begin_unix_seconds": 1794677910.308653,
+                      "end_monotonic_seconds": 260667.870308564,
+                      "end_unix_seconds": 1794677910.3140829,
+                      "value": {
+                        "Pss": 495640576,
+                        "Rss": 671207424
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 260667.870310484,
+                      "begin_unix_seconds": 1794677910.3140848,
+                      "end_monotonic_seconds": 260667.870350964,
+                      "end_unix_seconds": 1794677910.3141253,
+                      "value": {
+                        "pid": 234889,
+                        "ppid": 234880,
+                        "start_ticks": 25801869,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 260667.864772944,
+                      "begin_unix_seconds": 1794677910.3085473,
+                      "end_monotonic_seconds": 260667.864813115,
+                      "end_unix_seconds": 1794677910.3085876,
+                      "value": {
+                        "pid": 234889,
+                        "ppid": 234880,
+                        "start_ticks": 25801869,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 260667.864821175,
+                      "begin_unix_seconds": 1794677910.3085954,
+                      "end_monotonic_seconds": 260667.864877106,
+                      "end_unix_seconds": 1794677910.3086514,
+                      "value": {
+                        "VmHWM": 775618560,
+                        "VmRSS": 670973952
+                      }
+                    }
+                  },
+                  "236186": {
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 258079.68524231,
+                        "begin_unix_seconds": 1794675322.1290166,
+                        "end_monotonic_seconds": 258079.685277841,
+                        "end_unix_seconds": 1794675322.1290522,
+                        "value": {
+                          "pid": 236186,
+                          "ppid": 234889,
+                          "start_ticks": 25807860,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 258079.685178269,
+                        "begin_unix_seconds": 1794675322.1289525,
+                        "end_monotonic_seconds": 258079.68521708,
+                        "end_unix_seconds": 1794675322.1289916,
+                        "value": {
+                          "pid": 236186,
+                          "ppid": 234889,
+                          "start_ticks": 25807860,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 258079.673748298,
+                        "begin_unix_seconds": 1794675322.1175227,
+                        "end_monotonic_seconds": 258079.673774258,
+                        "end_unix_seconds": 1794675322.1175485,
+                        "value": {
+                          "pid": 236186,
+                          "ppid": 234889,
+                          "start_ticks": 25807860,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 236186,
+                        "ppid": 234889,
+                        "start_ticks": 25807860,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 260667.873831551,
+                      "begin_unix_seconds": 1794677910.317606,
+                      "end_monotonic_seconds": 260667.873834361,
+                      "end_unix_seconds": 1794677910.3176086,
+                      "events": []
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 260667.870496107,
+                      "begin_unix_seconds": 1794677910.3142705,
+                      "end_monotonic_seconds": 260667.870498927,
+                      "end_unix_seconds": 1794677910.3142734,
+                      "events": []
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 260667.870552818,
+                      "begin_unix_seconds": 1794677910.3143272,
+                      "end_monotonic_seconds": 260667.87378823,
+                      "end_unix_seconds": 1794677910.3175626,
+                      "value": {
+                        "Pss": 412127232,
+                        "Rss": 590733312
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 260667.87379005,
+                      "begin_unix_seconds": 1794677910.3175645,
+                      "end_monotonic_seconds": 260667.873829531,
+                      "end_unix_seconds": 1794677910.3176038,
+                      "value": {
+                        "pid": 236186,
+                        "ppid": 234889,
+                        "start_ticks": 25807860,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 260667.870453346,
+                      "begin_unix_seconds": 1794677910.3142278,
+                      "end_monotonic_seconds": 260667.870494257,
+                      "end_unix_seconds": 1794677910.3142686,
+                      "value": {
+                        "pid": 236186,
+                        "ppid": 234889,
+                        "start_ticks": 25807860,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 260667.870499747,
+                      "begin_unix_seconds": 1794677910.314274,
+                      "end_monotonic_seconds": 260667.870551308,
+                      "end_unix_seconds": 1794677910.3143258,
+                      "value": {
+                        "VmHWM": 590143488,
+                        "VmRSS": 590143488
+                      }
+                    }
+                  },
+                  "236232": {
+                    "exit_wait": {
+                      "deadline_monotonic_seconds": 260672.251829281,
+                      "initial_poll": {
+                        "begin_monotonic_seconds": 260667.874082815,
+                        "begin_unix_seconds": 1794677910.3178573,
+                        "end_monotonic_seconds": 260667.874084695,
+                        "end_unix_seconds": 1794677910.3178592,
+                        "events": []
+                      },
+                      "retry_reserve_seconds": 0.25
+                    },
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 258082.176793953,
+                        "begin_unix_seconds": 1794675324.6205683,
+                        "end_monotonic_seconds": 258082.176827154,
+                        "end_unix_seconds": 1794675324.6206017,
+                        "value": {
+                          "pid": 236232,
+                          "ppid": 236186,
+                          "start_ticks": 25808205,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 258082.176732572,
+                        "begin_unix_seconds": 1794675324.6205068,
+                        "end_monotonic_seconds": 258082.176770142,
+                        "end_unix_seconds": 1794675324.6205444,
+                        "value": {
+                          "pid": 236232,
+                          "ppid": 236186,
+                          "start_ticks": 25808205,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 258082.1651954,
+                        "begin_unix_seconds": 1794675324.6089697,
+                        "end_monotonic_seconds": 258082.16522237,
+                        "end_unix_seconds": 1794675324.6089966,
+                        "value": {
+                          "pid": 236232,
+                          "ppid": 236186,
+                          "start_ticks": 25808205,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 236232,
+                        "ppid": 236186,
+                        "start_ticks": 25808205,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 260667.874184166,
+                      "begin_unix_seconds": 1794677910.3179586,
+                      "end_monotonic_seconds": 260671.375135985,
+                      "end_unix_seconds": 1794677913.8189096,
+                      "events": [],
+                      "timeout_milliseconds": 3500
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 260667.873960863,
+                      "begin_unix_seconds": 1794677910.3177352,
+                      "end_monotonic_seconds": 260667.873963243,
+                      "end_unix_seconds": 1794677910.3177378,
+                      "events": []
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 260667.874010254,
+                      "begin_unix_seconds": 1794677910.3177845,
+                      "end_monotonic_seconds": 260667.874043214,
+                      "end_unix_seconds": 1794677910.3178177,
+                      "error": {
+                        "errno": 3,
+                        "type": "ProcessLookupError"
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 260667.874044564,
+                      "begin_unix_seconds": 1794677910.3178189,
+                      "end_monotonic_seconds": 260667.874081165,
+                      "end_unix_seconds": 1794677910.3178556,
+                      "value": {
+                        "pid": 236232,
+                        "ppid": 236186,
+                        "start_ticks": 25808205,
+                        "state": "R",
+                        "uid": 65534
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 260667.873918982,
+                      "begin_unix_seconds": 1794677910.3176935,
+                      "end_monotonic_seconds": 260667.873959183,
+                      "end_unix_seconds": 1794677910.3177335,
+                      "value": {
+                        "pid": 236232,
+                        "ppid": 236186,
+                        "start_ticks": 25808205,
+                        "state": "R",
+                        "uid": 65534
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 260667.873964003,
+                      "begin_unix_seconds": 1794677910.3177385,
+                      "end_monotonic_seconds": 260667.874008934,
+                      "end_unix_seconds": 1794677910.3177834,
+                      "value": {}
+                    }
+                  }
+                },
+                "selected_after": [
+                  234889,
+                  236186,
+                  236232
+                ],
+                "selected_before": [
+                  234889,
+                  236186,
+                  236232
+                ],
+                "stage_after": {
+                  "begin_monotonic_seconds": 260671.488942163,
+                  "begin_unix_seconds": 1794677913.9327166,
+                  "end_monotonic_seconds": 260671.489771136,
+                  "end_unix_seconds": 1794677913.9335456,
+                  "value": "native128"
+                },
+                "stage_before": {
+                  "begin_monotonic_seconds": 260667.751830601,
+                  "begin_unix_seconds": 1794677910.195605,
+                  "end_monotonic_seconds": 260667.752263458,
+                  "end_unix_seconds": 1794677910.1960375,
+                  "value": "native128"
+                }
+              }
+            ],
+            "excluded_monitor_pid": 236185,
+            "final_attempt": 0,
+            "identity_semantics": "pid_start_pidfd_owned_ancestry",
+            "max_attempts": 3,
+            "max_collection_seconds": 4.5,
+            "protocol": "proc-identity-state-read-attempts-v10",
+            "root_pid": 234889,
+            "stage_publish": {
+              "begin_monotonic_seconds": 260671.746385549,
+              "begin_unix_seconds": 1794677914.1901596,
+              "end_monotonic_seconds": 260671.747005829,
+              "end_unix_seconds": 1794677914.1907802,
+              "value": "native128"
+            },
+            "uid_semantics": "proc_inode_owner"
+          },
+          "host_collection_errors": [
+            "live_or_unknown_memory_unreadable"
+          ],
+          "host_observed_attempt_rss_peak_bytes": null,
+          "host_observed_complete_attempt_pss_peak_bytes": null,
+          "host_process_memory_method": "proc-identity-state-read-attempts-v10",
+          "host_pss_complete": false,
+          "process_host_memory": {
+            "234889": {
+              "Pss_rollup": 495640576,
+              "Rss_rollup": 671207424,
+              "VmHWM": 775618560,
+              "VmRSS": 670973952
+            },
+            "236186": {
+              "Pss_rollup": 412127232,
+              "Rss_rollup": 590733312,
+              "VmHWM": 590143488,
+              "VmRSS": 590143488
+            },
+            "236232": {
+              "rollup_unavailable": true
+            }
+          },
+          "sampling_seconds": 1,
+          "selected_host_pss_sum_bytes": 907767808,
+          "selected_host_rss_sum_bytes": 1261117440,
+          "stage": "native128",
+          "stage_serialization": {
+            "acquired_monotonic_seconds": 260667.751236901,
+            "mode": "sample",
+            "observation_finished_monotonic_seconds": 260671.747495377,
+            "protocol": "cosmos.native-qlora-stage-lock.v1",
+            "wait_seconds": 0.00021501301671378314
+          },
+          "telemetry": {
+            "memory_clock_mhz": 1593,
+            "power_milliwatts": 96151,
+            "sm_clock_mhz": 1410,
+            "temperature_celsius": 39,
+            "utilization": {
+              "gpu_percent": 100,
+              "memory_percent": 3
+            }
+          },
+          "unix_seconds": 1794677914.1841168
+        },
+        {
+          "device_compute_processes": [],
+          "device_memory_total_bytes": 85899345920,
+          "device_memory_used_bytes": 727252992,
+          "device_uuid": "GPU-77308eab-c813-5725-ca4b-77e281050e4e",
+          "host_collection": {
+            "attempts": [
+              {
+                "begin_monotonic_seconds": 260672.750233555,
+                "discovery_after": {
+                  "234889": {
+                    "begin_monotonic_seconds": 260672.971235023,
+                    "begin_unix_seconds": 1794677915.4150093,
+                    "end_monotonic_seconds": 260672.971269333,
+                    "end_unix_seconds": 1794677915.4150436,
+                    "value": {
+                      "pid": 234889,
+                      "ppid": 234880,
+                      "start_ticks": 25801869,
+                      "state": "R",
+                      "uid": 0
+                    }
+                  },
+                  "236186": {
+                    "begin_monotonic_seconds": 260672.989352605,
+                    "begin_unix_seconds": 1794677915.433127,
+                    "end_monotonic_seconds": 260672.989369105,
+                    "end_unix_seconds": 1794677915.4331436,
+                    "error": {
+                      "errno": 2,
+                      "type": "FileNotFoundError"
+                    }
+                  },
+                  "236232": {
+                    "begin_monotonic_seconds": 260672.989323575,
+                    "begin_unix_seconds": 1794677915.433098,
+                    "end_monotonic_seconds": 260672.989349915,
+                    "end_unix_seconds": 1794677915.4331243,
+                    "error": {
+                      "errno": 2,
+                      "type": "FileNotFoundError"
+                    }
+                  }
+                },
+                "discovery_before": {
+                  "234889": {
+                    "begin_monotonic_seconds": 260672.847365123,
+                    "begin_unix_seconds": 1794677915.2911396,
+                    "end_monotonic_seconds": 260672.847397073,
+                    "end_unix_seconds": 1794677915.2911713,
+                    "value": {
+                      "pid": 234889,
+                      "ppid": 234880,
+                      "start_ticks": 25801869,
+                      "state": "R",
+                      "uid": 0
+                    }
+                  },
+                  "236186": {
+                    "begin_monotonic_seconds": 260672.865269392,
+                    "begin_unix_seconds": 1794677915.3090436,
+                    "end_monotonic_seconds": 260672.865287142,
+                    "end_unix_seconds": 1794677915.3090613,
+                    "error": {
+                      "errno": 2,
+                      "type": "FileNotFoundError"
+                    }
+                  },
+                  "236232": {
+                    "begin_monotonic_seconds": 260672.865234521,
+                    "begin_unix_seconds": 1794677915.3090088,
+                    "end_monotonic_seconds": 260672.865266962,
+                    "end_unix_seconds": 1794677915.3090413,
+                    "error": {
+                      "errno": 2,
+                      "type": "FileNotFoundError"
+                    }
+                  }
+                },
+                "post_discovery_polls": {
+                  "234889": {
+                    "begin_monotonic_seconds": 260672.99029113,
+                    "begin_unix_seconds": 1794677915.4340653,
+                    "end_monotonic_seconds": 260672.99029821,
+                    "end_unix_seconds": 1794677915.4340725,
+                    "events": []
+                  },
+                  "236186": {
+                    "begin_monotonic_seconds": 260672.990309531,
+                    "begin_unix_seconds": 1794677915.434084,
+                    "end_monotonic_seconds": 260672.990311971,
+                    "end_unix_seconds": 1794677915.4340863,
+                    "events": [
+                      1
+                    ]
+                  },
+                  "236232": {
+                    "begin_monotonic_seconds": 260672.990317291,
+                    "begin_unix_seconds": 1794677915.4340918,
+                    "end_monotonic_seconds": 260672.990318921,
+                    "end_unix_seconds": 1794677915.4340932,
+                    "events": [
+                      1
+                    ]
+                  }
+                },
+                "processes": {
+                  "234889": {
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 258078.450333405,
+                        "begin_unix_seconds": 1794675320.8941078,
+                        "end_monotonic_seconds": 258078.450370016,
+                        "end_unix_seconds": 1794675320.8941443,
+                        "value": {
+                          "pid": 234889,
+                          "ppid": 234880,
+                          "start_ticks": 25801869,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 258078.450262454,
+                        "begin_unix_seconds": 1794675320.8940368,
+                        "end_monotonic_seconds": 258078.450304474,
+                        "end_unix_seconds": 1794675320.8940787,
+                        "value": {
+                          "pid": 234889,
+                          "ppid": 234880,
+                          "start_ticks": 25801869,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 258078.438077141,
+                        "begin_unix_seconds": 1794675320.8818514,
+                        "end_monotonic_seconds": 258078.438111261,
+                        "end_unix_seconds": 1794675320.8818858,
+                        "value": {
+                          "pid": 234889,
+                          "ppid": 234880,
+                          "start_ticks": 25801869,
+                          "state": "S",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 234889,
+                        "ppid": 234880,
+                        "start_ticks": 25801869,
+                        "state": "S",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 260672.872146663,
+                      "begin_unix_seconds": 1794677915.315921,
+                      "end_monotonic_seconds": 260672.872150883,
+                      "end_unix_seconds": 1794677915.3159254,
+                      "events": []
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 260672.866104435,
+                      "begin_unix_seconds": 1794677915.3098788,
+                      "end_monotonic_seconds": 260672.866112075,
+                      "end_unix_seconds": 1794677915.3098865,
+                      "events": []
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 260672.866173516,
+                      "begin_unix_seconds": 1794677915.309948,
+                      "end_monotonic_seconds": 260672.872094012,
+                      "end_unix_seconds": 1794677915.3158684,
+                      "value": {
+                        "Pss": 667052032,
+                        "Rss": 672440320
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 260672.872096142,
+                      "begin_unix_seconds": 1794677915.3158705,
+                      "end_monotonic_seconds": 260672.872143892,
+                      "end_unix_seconds": 1794677915.3159184,
+                      "value": {
+                        "pid": 234889,
+                        "ppid": 234880,
+                        "start_ticks": 25801869,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 260672.866055935,
+                      "begin_unix_seconds": 1794677915.3098302,
+                      "end_monotonic_seconds": 260672.866102146,
+                      "end_unix_seconds": 1794677915.3098764,
+                      "value": {
+                        "pid": 234889,
+                        "ppid": 234880,
+                        "start_ticks": 25801869,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 260672.866113426,
+                      "begin_unix_seconds": 1794677915.3098876,
+                      "end_monotonic_seconds": 260672.866171747,
+                      "end_unix_seconds": 1794677915.309946,
+                      "value": {
+                        "VmHWM": 775618560,
+                        "VmRSS": 672436224
+                      }
+                    }
+                  },
+                  "236186": {
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 258079.68524231,
+                        "begin_unix_seconds": 1794675322.1290166,
+                        "end_monotonic_seconds": 258079.685277841,
+                        "end_unix_seconds": 1794675322.1290522,
+                        "value": {
+                          "pid": 236186,
+                          "ppid": 234889,
+                          "start_ticks": 25807860,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 258079.685178269,
+                        "begin_unix_seconds": 1794675322.1289525,
+                        "end_monotonic_seconds": 258079.68521708,
+                        "end_unix_seconds": 1794675322.1289916,
+                        "value": {
+                          "pid": 236186,
+                          "ppid": 234889,
+                          "start_ticks": 25807860,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 258079.673748298,
+                        "begin_unix_seconds": 1794675322.1175227,
+                        "end_monotonic_seconds": 258079.673774258,
+                        "end_unix_seconds": 1794675322.1175485,
+                        "value": {
+                          "pid": 236186,
+                          "ppid": 234889,
+                          "start_ticks": 25807860,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 236186,
+                        "ppid": 234889,
+                        "start_ticks": 25807860,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 260672.872340086,
+                      "begin_unix_seconds": 1794677915.3161144,
+                      "end_monotonic_seconds": 260672.872341746,
+                      "end_unix_seconds": 1794677915.3161163,
+                      "events": [
+                        1
+                      ]
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 260672.872287845,
+                      "begin_unix_seconds": 1794677915.3160622,
+                      "end_monotonic_seconds": 260672.872291155,
+                      "end_unix_seconds": 1794677915.3160655,
+                      "events": [
+                        1
+                      ]
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 260672.872311165,
+                      "begin_unix_seconds": 1794677915.3160856,
+                      "end_monotonic_seconds": 260672.872325195,
+                      "end_unix_seconds": 1794677915.3160996,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 260672.872326255,
+                      "begin_unix_seconds": 1794677915.3161006,
+                      "end_monotonic_seconds": 260672.872338976,
+                      "end_unix_seconds": 1794677915.3161135,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 260672.872254364,
+                      "begin_unix_seconds": 1794677915.3160286,
+                      "end_monotonic_seconds": 260672.872286295,
+                      "end_unix_seconds": 1794677915.3160608,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 260672.872291975,
+                      "begin_unix_seconds": 1794677915.3160663,
+                      "end_monotonic_seconds": 260672.872310185,
+                      "end_unix_seconds": 1794677915.3160844,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    }
+                  },
+                  "236232": {
+                    "pin": {
+                      "after": {
+                        "begin_monotonic_seconds": 258082.176793953,
+                        "begin_unix_seconds": 1794675324.6205683,
+                        "end_monotonic_seconds": 258082.176827154,
+                        "end_unix_seconds": 1794675324.6206017,
+                        "value": {
+                          "pid": 236232,
+                          "ppid": 236186,
+                          "start_ticks": 25808205,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "backend": "linux_x86_64_pidfd_syscalls",
+                      "before": {
+                        "begin_monotonic_seconds": 258082.176732572,
+                        "begin_unix_seconds": 1794675324.6205068,
+                        "end_monotonic_seconds": 258082.176770142,
+                        "end_unix_seconds": 1794675324.6205444,
+                        "value": {
+                          "pid": 236232,
+                          "ppid": 236186,
+                          "start_ticks": 25808205,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "discovery": {
+                        "begin_monotonic_seconds": 258082.1651954,
+                        "begin_unix_seconds": 1794675324.6089697,
+                        "end_monotonic_seconds": 258082.16522237,
+                        "end_unix_seconds": 1794675324.6089966,
+                        "value": {
+                          "pid": 236232,
+                          "ppid": 236186,
+                          "start_ticks": 25808205,
+                          "state": "R",
+                          "uid": 0
+                        }
+                      },
+                      "flags": 0,
+                      "identity": {
+                        "pid": 236232,
+                        "ppid": 236186,
+                        "start_ticks": 25808205,
+                        "state": "R",
+                        "uid": 0
+                      }
+                    },
+                    "poll_after": {
+                      "begin_monotonic_seconds": 260672.872489168,
+                      "begin_unix_seconds": 1794677915.3162637,
+                      "end_monotonic_seconds": 260672.872490488,
+                      "end_unix_seconds": 1794677915.3162649,
+                      "events": [
+                        1
+                      ]
+                    },
+                    "poll_before": {
+                      "begin_monotonic_seconds": 260672.872443448,
+                      "begin_unix_seconds": 1794677915.316218,
+                      "end_monotonic_seconds": 260672.872445517,
+                      "end_unix_seconds": 1794677915.3162198,
+                      "events": [
+                        1
+                      ]
+                    },
+                    "rollup": {
+                      "begin_monotonic_seconds": 260672.872462318,
+                      "begin_unix_seconds": 1794677915.3162365,
+                      "end_monotonic_seconds": 260672.872475268,
+                      "end_unix_seconds": 1794677915.3162496,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "stat_after": {
+                      "begin_monotonic_seconds": 260672.872476228,
+                      "begin_unix_seconds": 1794677915.3162506,
+                      "end_monotonic_seconds": 260672.872488148,
+                      "end_unix_seconds": 1794677915.3162627,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "stat_before": {
+                      "begin_monotonic_seconds": 260672.872422567,
+                      "begin_unix_seconds": 1794677915.316197,
+                      "end_monotonic_seconds": 260672.872442288,
+                      "end_unix_seconds": 1794677915.3162165,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    },
+                    "status": {
+                      "begin_monotonic_seconds": 260672.872446197,
+                      "begin_unix_seconds": 1794677915.3162208,
+                      "end_monotonic_seconds": 260672.872461188,
+                      "end_unix_seconds": 1794677915.3162355,
+                      "error": {
+                        "errno": 2,
+                        "type": "FileNotFoundError"
+                      }
+                    }
+                  }
+                },
+                "selected_after": [
+                  234889,
+                  236186,
+                  236232
+                ],
+                "selected_before": [
+                  234889,
+                  236186,
+                  236232
+                ],
+                "stage_after": {
+                  "begin_monotonic_seconds": 260672.990321941,
+                  "begin_unix_seconds": 1794677915.4340963,
+                  "end_monotonic_seconds": 260672.990969291,
+                  "end_unix_seconds": 1794677915.4347436,
+                  "value": "native128"
+                },
+                "stage_before": {
+                  "begin_monotonic_seconds": 260672.750235045,
+                  "begin_unix_seconds": 1794677915.1940093,
+                  "end_monotonic_seconds": 260672.750693402,
+                  "end_unix_seconds": 1794677915.1944675,
+                  "value": "native128"
+                }
+              }
+            ],
+            "excluded_monitor_pid": 236185,
+            "final_attempt": 0,
+            "identity_semantics": "pid_start_pidfd_owned_ancestry",
+            "max_attempts": 3,
+            "max_collection_seconds": 4.5,
+            "protocol": "proc-identity-state-read-attempts-v10",
+            "root_pid": 234889,
+            "stage_publish": {
+              "begin_monotonic_seconds": 260672.995560075,
+              "begin_unix_seconds": 1794677915.4393344,
+              "end_monotonic_seconds": 260672.996047923,
+              "end_unix_seconds": 1794677915.4398222,
+              "value": "native128"
+            },
+            "uid_semantics": "proc_inode_owner"
+          },
+          "host_collection_errors": [],
+          "host_observed_attempt_rss_peak_bytes": 672436224,
+          "host_observed_complete_attempt_pss_peak_bytes": 667052032,
+          "host_process_memory_method": "proc-identity-state-read-attempts-v10",
+          "host_pss_complete": true,
+          "process_host_memory": {
+            "234889": {
+              "Pss_rollup": 667052032,
+              "Rss_rollup": 672440320,
+              "VmHWM": 775618560,
+              "VmRSS": 672436224
+            },
+            "236186": {
+              "Pss_rollup": 0,
+              "Rss_rollup": 0,
+              "VmRSS": 0,
+              "address_space_released": true
+            },
+            "236232": {
+              "Pss_rollup": 0,
+              "Rss_rollup": 0,
+              "VmRSS": 0,
+              "address_space_released": true
+            }
+          },
+          "sampling_seconds": 1,
+          "selected_host_pss_sum_bytes": 667052032,
+          "selected_host_rss_sum_bytes": 672436224,
+          "stage": "native128",
+          "stage_serialization": {
+            "acquired_monotonic_seconds": 260672.749624105,
+            "mode": "sample",
+            "observation_finished_monotonic_seconds": 260672.996419799,
+            "protocol": "cosmos.native-qlora-stage-lock.v1",
+            "wait_seconds": 0.00018300299416296184
+          },
+          "telemetry": {
+            "memory_clock_mhz": 1593,
+            "power_milliwatts": 92878,
+            "sm_clock_mhz": 1410,
+            "temperature_celsius": 39,
+            "utilization": {
+              "gpu_percent": 0,
+              "memory_percent": 0
+            }
+          },
+          "unix_seconds": 1794677915.4357505
+        }
+      ],
+      "source_job": 38543002,
+      "source_sha256": "1c5325abacf6c6ccc7150fa05645eac6212ad447f9c76b15150c180e671086ff"
+    }
+  ],
+  "scope": "Exact retained v10 incomplete teardown samples and immediately following complete observations; never retroactively upgraded."
+}

@@ -5,8 +5,12 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from omegaconf import ListConfig
 
 from cosmos_framework.posttrain.config.rl import HFRunConfig, ValidationScheduleConfig, _normalize_factory_kwargs
 
@@ -78,8 +82,64 @@ class SFTDatasetConfig:
 
 
 @dataclass
+class SFTWTSConfig:
+    """Opt-in, source-bound full-development scoring at committed validation steps."""
+
+    enabled: bool = False
+    stop_on_target: bool = True
+    data: SFTDatasetConfig = field(default_factory=lambda: SFTDatasetConfig(shuffle=False))
+    source_sha256: str = ""
+    manifest_path: str = ""
+    manifest_sha256: str = ""
+    expected_rows: int = 0
+    steps: list[int] = field(default_factory=list)
+    cache_bytes: int = 0
+    min_correct: int = 0
+    max_token_ce: float = 0.0
+
+    def __post_init__(self) -> None:
+        if type(self.enabled) is not bool:
+            raise TypeError("validation.wts.enabled must be bool")
+        if type(self.stop_on_target) is not bool:
+            raise TypeError("validation.wts.stop_on_target must be bool")
+        if not self.enabled:
+            return
+        self.data.require_source()
+        if self.data.factory or self.data.path.startswith("s3://") or self.data.shuffle:
+            raise ValueError("validation.wts requires an ordered local JSONL source")
+        for name in ("source_sha256", "manifest_sha256"):
+            if not isinstance(getattr(self, name), str) or not re.fullmatch("[0-9a-f]{64}", getattr(self, name)):
+                raise ValueError(f"validation.wts.{name} must be a SHA256")
+        if not isinstance(self.manifest_path, str) or not self.manifest_path.strip():
+            raise ValueError("validation.wts requires its sealed manifest path")
+        if type(self.expected_rows) is not int or self.expected_rows < 1:
+            raise ValueError("validation.wts.expected_rows must be positive")
+        if type(self.min_correct) is not int or not 0 <= self.min_correct <= self.expected_rows:
+            raise ValueError("validation.wts.min_correct must lie within its row count")
+        if (
+            isinstance(self.max_token_ce, bool)
+            or not isinstance(self.max_token_ce, (int, float))
+            or not (math.isfinite(self.max_token_ce) and self.max_token_ce >= 0)
+        ):
+            raise ValueError("validation.wts.max_token_ce must be finite and nonnegative")
+        if type(self.cache_bytes) is not int or self.cache_bytes < 0:
+            raise ValueError("validation.wts.cache_bytes must be nonnegative")
+        if isinstance(self.steps, ListConfig):
+            self.steps = list(self.steps)
+        if not isinstance(self.steps, list) or not self.steps or any(type(s) is not int or s < 1 for s in self.steps):
+            raise ValueError("validation.wts.steps must be positive optimizer steps")
+        if self.steps != sorted(set(self.steps)):
+            raise ValueError("validation.wts.steps must be unique and increasing")
+
+
+@dataclass
 class SFTValidationConfig(ValidationScheduleConfig):
     data: SFTDatasetConfig = field(default_factory=lambda: SFTDatasetConfig(shuffle=False))
+    wts: SFTWTSConfig = field(default_factory=SFTWTSConfig)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.wts.__post_init__()
 
 
 SFT_LR_SCHEDULE_KINDS = ("constant", "cosine")
@@ -124,8 +184,17 @@ class SFTConfig(HFRunConfig):
     data: SFTDatasetConfig = field(default_factory=SFTDatasetConfig)
     validation: SFTValidationConfig = field(default_factory=SFTValidationConfig)
     micro_batch_size: int = 1
+    # Attempt-only absolute optimizer boundary; never changes max_steps, the LR
+    # horizon or validation identity. A pause commits full resumable state even
+    # when the ordinary checkpoint cadence is disabled or model-only.
+    pause_after_step: int | None = None
     max_length: int = 4096
     processor_kwargs: dict[str, Any] = field(default_factory=dict)
+    # Optional deterministic local-Qwen preprocessing. Caches are bounded CPU
+    # acceleration state; only the consumed source cursor is checkpointed.
+    preprocessing_cache_bytes: int = 0
+    preprocessing_prefetch: bool = False
+    preprocessing_workers: int = 1
     # The objective-level knobs the Cosmos post-training recipe of the Qwen3-VL-MoE backbone sets and the SFT seat
     # did not expose. Framework defaults = the pre-existing behaviour; the native recipe
     # (``configs/sft_qwen3_vl_moe_native.py``) documents its own values per knob.
@@ -136,6 +205,11 @@ class SFTConfig(HFRunConfig):
     # (``weighted_ce_exponent=0.5``, ``cosmos3/algorithm/loss/cross_entropy.py::weighted_cross_entropy_loss``): a row
     # weighs ``sqrt(n)``. ``1.0`` = every row weighs the same.
     ce_exponent: float = 0.0
+    # Opt-in WTS training regularization: mix the first answer-token target with
+    # uniform mass over that question's actual choices, using the full vocabulary
+    # denominator. End-token loss and every evaluation metric remain hard-gold CE.
+    # Zero preserves the original arithmetic and objective identity.
+    wts_answer_smoothing: float = 0.0
     # Unsupervise the ``<think>`` token that opens an assistant turn, and only that token.
     # Keep ``False``: on the lab's serving path of record Codex ``--thinking high`` sends
     # ``reasoning.effort`` AND a tools array on every call, and with tools present vLLM 0.24 prefills no opener -- the
@@ -175,6 +249,18 @@ class SFTConfig(HFRunConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if self.pause_after_step is not None and (
+            type(self.pause_after_step) is not int or not 1 <= self.pause_after_step <= self.max_steps
+        ):
+            raise ValueError("SFT pause_after_step must be an integer in [1, max_steps] or None")
+        if type(self.preprocessing_cache_bytes) is not int or self.preprocessing_cache_bytes < 0:
+            raise ValueError("SFT preprocessing_cache_bytes must be a nonnegative integer")
+        if type(self.preprocessing_prefetch) is not bool:
+            raise TypeError("SFT preprocessing_prefetch must be bool")
+        if type(self.preprocessing_workers) is not int or self.preprocessing_workers not in (1, 2):
+            raise ValueError("SFT preprocessing_workers supports only 1 or 2")
+        if self.preprocessing_workers != 1 and not self.preprocessing_prefetch:
+            raise ValueError("SFT preprocessing_workers=2 requires preprocessing_prefetch=True")
         for name in ("micro_batch_size", "max_length"):
             value = getattr(self, name)
             minimum = 2 if name == "max_length" else 1
@@ -187,6 +273,14 @@ class SFTConfig(HFRunConfig):
             or not 0.0 <= float(self.ce_exponent) <= 1.0
         ):
             raise ValueError(f"SFT ce_exponent={self.ce_exponent!r} must be a real in [0, 1]")
+        if (
+            isinstance(self.wts_answer_smoothing, bool)
+            or not isinstance(self.wts_answer_smoothing, (int, float))
+            or not 0.0 <= float(self.wts_answer_smoothing) < 1.0
+        ):
+            raise ValueError("SFT wts_answer_smoothing must be a finite real in [0, 1)")
+        if self.wts_answer_smoothing and (self.ce_exponent != 0 or self.moe_lbl_coeff != 0):
+            raise ValueError("WTS answer smoothing requires ordinary supervised-token normalization without MoE loss")
         if not isinstance(self.mask_think_opener, bool):
             raise TypeError("SFT mask_think_opener must be bool")
         if self.serve_contract not in SFT_SERVE_CONTRACTS:
@@ -207,5 +301,23 @@ class SFTConfig(HFRunConfig):
         self.validation.__post_init__()
         if self.validation.enabled:
             self.validation.data.require_source()
+        if self.validation.wts.enabled:
+            from cosmos_framework.posttrain.config.rl import FULL_CHECKPOINT_COMPONENTS
+
+            if (
+                not self.validation.enabled
+                or not self.validation.save_checkpoint
+                or set(self.validation.checkpoint_components) != set(FULL_CHECKPOINT_COMPONENTS)
+            ):
+                raise ValueError("validation.wts requires enabled full-checkpoint validation")
+            if self.checkpoint_format != "dcp" or self.save_async or self.checkpoint_store.backend != "local":
+                raise ValueError("validation.wts requires synchronous local DCP checkpoints")
+            if not self.deterministic or self.ce_exponent != 0 or self.moe_lbl_coeff != 0:
+                raise ValueError("validation.wts requires deterministic ordinary token-mean CE")
+            if self.validation.wts.steps[-1] != self.max_steps or any(
+                s != self.max_steps and (not self.validation.every_steps or s % self.validation.every_steps)
+                for s in self.validation.wts.steps
+            ):
+                raise ValueError("validation.wts steps must be validation boundaries ending at max_steps")
         if self.export_dir or self.export_every:
             raise ValueError("SFT uses the offline checkpoint conversion tools, not reserved rl.export_* fields")

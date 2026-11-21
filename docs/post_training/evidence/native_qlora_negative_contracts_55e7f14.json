@@ -1,0 +1,325 @@
+{
+  "evidence_sha256": {
+    "historical_checkpoint_junit": "bfd9e7be832a21b304459de1c51f2b8741af11027bb5567f320bd85413ca47df",
+    "historical_command_audit": "04a780c4bcc83ab6d0d11bf6f822f07a2cf6d0733d4c80d07cf8a67fef2622d7",
+    "loader_environment_after_test": "fd435c5d0b06815886ea4c68708eea8116bcc05b2a8925593a93b36c377630fd",
+    "loader_junit": "0008d6beb6297e8fb3de0b78b56ced749c4de1b5b888198460bbe930128e6e3b",
+    "loader_output_log": "2b4e9006d81fda47a0bace25e3f21dae5e12cd58d158830e74ed0566925429a6",
+    "loader_start": "c50dd136df2ee725c27b6f43c02d995486233b6e993d0fa8acfaefa73521c7cd"
+  },
+  "limitations": [
+    "The 18 fresh loader cases and 21 inherited checkpoint cases are separate executions, not one newly executed 39-case suite.",
+    "The historical 49-case JUnit includes the 21 checkpoint cases plus other tests; its full elapsed time is not a checkpoint-only cost.",
+    "Earlier narrative 78/54 overlapping-suite counts and the 33-pass/one-skip configuration retest are not added to this report.",
+    "CPU/meta fixtures and mocked hardware checks do not establish real NF4 CUDA kernels, accelerator memory, task quality or hardware support.",
+    "Real-GPU lifecycle/kernel evidence is reported separately; these fixtures do not establish a 300-update crash experiment or physical checkpoint-write interruption.",
+    "Portable reload on the same recorded base is distinct from merging into a different base, requantization or serving-backend parity.",
+    "No new GPU or Slurm test allocation was used for this projection or the fresh loader run; no release qualification is inferred."
+  ],
+  "native_package": {
+    "build_receipt_sha256": "0cad791c1788caf629174f56b285797d9871862d3ab0bd13a83dc6fe5b1512e7",
+    "revision": "55e7f14dfeca84002d0324108808a0e682579842",
+    "wheel_sha256": "4939262dbf2de43be0b3f9d579b0bc2fbf72ab84250852397b0dc14087b5792b"
+  },
+  "projection_source_sha256": "8c5f988ec31f00f296248a456339f6bb92e10ee7fcb8d110739ce8048e2f9109",
+  "protocol": "cosmos.native-qlora-negative-contract-evidence.v1",
+  "release_qualified": false,
+  "scope": "CPU contract fixtures for loader, adapter checkpoint identity, incomplete-state rejection and reload/resume semantics.",
+  "source_verification": {
+    "all_recorded_files_match_native_git_build_snapshot_wheel_and_reviewed_checkout": true,
+    "both_test_file_bytes_unchanged_since_revision": "c5b8d49",
+    "checkout_revision_at_fresh_run": "a86bae555d7c582367fbfa8a119dbc893e7b6cb6",
+    "fresh_start_source_hashes_rechecked": true,
+    "historical_limit": "Historical JUnit and command are retained, but no contemporaneous source-hash manifest or exact dependency-version receipt was recorded. Current source/wheel matching is a separate verification, not a reconstructed execution-time attestation.",
+    "recorded_files_sha256": {
+      "cosmos_framework/posttrain/checkpoint/adapter.py": "a125efe987ebd2ab08e8411552d31ca43ae92fca67d02e26c8100fe9314044e6",
+      "cosmos_framework/posttrain/checkpoint/artifact.py": "485b8977ed68dee305a66cc3831594af8e4259d5c83354daaf1247ad04458e6e",
+      "cosmos_framework/posttrain/config/model.py": "91df9057f4e557a26e0fb9f9c47fdc0c90533b17303cd526ba799dc4c09fa5ca",
+      "cosmos_framework/posttrain/model/checkpoint.py": "8da4c293bb1c4c24d07542901c64de3e079f7e43ef0b68ef0983b364d5b800b5",
+      "cosmos_framework/posttrain/model/quantization/bnb.py": "a6fc7e47b060204b5740ab2f1cf04488e59e22d406fdaf814ebf46b06bada72d",
+      "cosmos_framework/posttrain/model/quantization/loader.py": "5992c42dfd9e03df4ac68e6013fc38fe4918c59bdb25e0e86adacf60bd62adaa",
+      "cosmos_framework/posttrain/roles/trainer/llm.py": "b49409543edb2df77916ac4fae95154ce8e028903a2c46e5e8e6f8fb9427e543",
+      "cosmos_framework/posttrain/tests/test_checkpoint_adapter.py": "24278bea2c5d0986ab01b11f0714a27877ad51f89833cb65ad626e43f93d4f86",
+      "cosmos_framework/posttrain/tests/test_model_qwen3_vl_qlora.py": "22c340f872b36ec9381bc4e7df074b68a1cbb15e4af12e3298eb9783291d1e34",
+      "cosmos_framework/utils/generator/lora.py": "e58e8d51e25d2b26f2f1f1122d735c46a6870b3dd6b963d75459774324ea9ff7"
+    }
+  },
+  "suites": {
+    "checkpoint": {
+      "cases": [
+        {
+          "name": "test_adapter_dcp_resume_matches_uninterrupted_run_and_preserves_base",
+          "outcome": "passed",
+          "source_line": 95
+        },
+        {
+          "name": "test_model_only_artifact_carries_metadata_and_reloads",
+          "outcome": "passed",
+          "source_line": 130
+        },
+        {
+          "name": "test_pristine_save_does_not_initialize_optimizer_and_restores_pristine",
+          "outcome": "passed",
+          "source_line": 150
+        },
+        {
+          "name": "test_adapter_reload_rejects_incomplete_or_incompatible_checkpoint[missing_metadata]",
+          "outcome": "passed",
+          "source_line": 165
+        },
+        {
+          "name": "test_adapter_reload_rejects_incomplete_or_incompatible_checkpoint[missing_data]",
+          "outcome": "passed",
+          "source_line": 165
+        },
+        {
+          "name": "test_adapter_reload_rejects_incomplete_or_incompatible_checkpoint[missing_optimizer]",
+          "outcome": "passed",
+          "source_line": 165
+        },
+        {
+          "name": "test_adapter_reload_rejects_incomplete_or_incompatible_checkpoint[revision]",
+          "outcome": "passed",
+          "source_line": 165
+        },
+        {
+          "name": "test_adapter_reload_rejects_incomplete_or_incompatible_checkpoint[shape]",
+          "outcome": "passed",
+          "source_line": 165
+        },
+        {
+          "name": "test_adapter_reload_rejects_incomplete_or_incompatible_checkpoint[dtype]",
+          "outcome": "passed",
+          "source_line": 165
+        },
+        {
+          "name": "test_adapter_reload_rejects_incomplete_or_incompatible_checkpoint[extra]",
+          "outcome": "passed",
+          "source_line": 165
+        },
+        {
+          "name": "test_codec_rejects_optimizer_reordering_and_changed_static_options",
+          "outcome": "passed",
+          "source_line": 194
+        },
+        {
+          "name": "test_codec_membership_references_and_unsupported_operations",
+          "outcome": "passed",
+          "source_line": 206
+        },
+        {
+          "name": "test_checkpoint_rejects_open_accumulation_and_missing_cursor",
+          "outcome": "passed",
+          "source_line": 225
+        },
+        {
+          "name": "test_metadata_preflight_compares_explicit_subset_before_model_build",
+          "outcome": "passed",
+          "source_line": 235
+        },
+        {
+          "name": "test_fresh_torchrun_process_reload_preserves_controlled_logits",
+          "outcome": "passed",
+          "source_line": 243
+        },
+        {
+          "name": "test_adapter_control_tail_is_synchronous_even_when_cpu_snapshot_is_immutable",
+          "outcome": "passed",
+          "source_line": 283
+        },
+        {
+          "name": "test_metadata_rejects_topology_and_missing_rng",
+          "outcome": "passed",
+          "source_line": 295
+        },
+        {
+          "name": "test_model_replacement_or_dtype_change_invalidates_codec",
+          "outcome": "passed",
+          "source_line": 310
+        },
+        {
+          "name": "test_frozen_state_proof_runs_at_checkpoint_boundaries_and_control_refresh_preserves_identity",
+          "outcome": "passed",
+          "source_line": 321
+        },
+        {
+          "name": "test_publish_portable_artifact_from_dcp_needs_no_base_and_detects_changed_bytes",
+          "outcome": "passed",
+          "source_line": 337
+        },
+        {
+          "name": "test_weight_reload_does_not_require_training_contract_but_resume_does",
+          "outcome": "passed",
+          "source_line": 358
+        }
+      ],
+      "containing_suite": {
+        "errors": 0,
+        "failures": 0,
+        "junit_elapsed_seconds": 13.335,
+        "junit_timestamp": "2026-10-30T19:20:28.734291+00:00",
+        "skipped": 0,
+        "tests": 49
+      },
+      "coverage": [
+        "Real CPU DCP save/load and fresh torchrun-process reload on a small adapter model.",
+        "Reject missing metadata, data and optimizer components, wrong revision, shape, dtype and extra tensors.",
+        "Reject changed optimizer membership/order/options, model parameter replacement and changed dtype.",
+        "Refuse open-accumulation publication, missing cursor/RNG and incompatible topology.",
+        "Keep processor/base identity mandatory for reload; omit only the training contract for portable weight reload; require the complete identity for training resume.",
+        "Validate frozen-base proofs at checkpoint boundaries and detect changed portable artifact bytes."
+      ],
+      "execution": "inherited_local_cpu_not_rerun",
+      "runtime_versions": null,
+      "runtime_versions_status": "Unavailable in retained execution artifacts; no versions inferred from the later loader environment.",
+      "selected_cases": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 21
+      },
+      "source": "cosmos_framework/posttrain/tests/test_checkpoint_adapter.py"
+    },
+    "loader": {
+      "cases": [
+        {
+          "name": "test_adapter_runtime_refuses_non_strict_execution_before_cuda[False-False-False]",
+          "outcome": "passed",
+          "source_line": 45
+        },
+        {
+          "name": "test_adapter_runtime_refuses_non_strict_execution_before_cuda[False-False-True]",
+          "outcome": "passed",
+          "source_line": 45
+        },
+        {
+          "name": "test_adapter_runtime_refuses_non_strict_execution_before_cuda[True-True-False]",
+          "outcome": "passed",
+          "source_line": 45
+        },
+        {
+          "name": "test_adapter_runtime_refuses_non_strict_execution_before_cuda[True-True-True]",
+          "outcome": "passed",
+          "source_line": 45
+        },
+        {
+          "name": "test_strict_adapter_runtime_retains_supported_configuration_checks[False]",
+          "outcome": "passed",
+          "source_line": 59
+        },
+        {
+          "name": "test_strict_adapter_runtime_retains_supported_configuration_checks[True]",
+          "outcome": "passed",
+          "source_line": 59
+        },
+        {
+          "name": "test_profile_resolves_exact_language_coverage_without_allocating_dense_weights",
+          "outcome": "passed",
+          "source_line": 119
+        },
+        {
+          "name": "test_profile_rejects_unmatched_or_excluded_alias_targets[missing]",
+          "outcome": "passed",
+          "source_line": 129
+        },
+        {
+          "name": "test_profile_rejects_unmatched_or_excluded_alias_targets[shape]",
+          "outcome": "passed",
+          "source_line": 129
+        },
+        {
+          "name": "test_profile_rejects_unmatched_or_excluded_alias_targets[alias]",
+          "outcome": "passed",
+          "source_line": 129
+        },
+        {
+          "name": "test_profile_rejects_unmatched_or_excluded_alias_targets[bias]",
+          "outcome": "passed",
+          "source_line": 129
+        },
+        {
+          "name": "test_slots_survive_ac_and_dedicated_initialization_ignores_global_rng",
+          "outcome": "passed",
+          "source_line": 176
+        },
+        {
+          "name": "test_nonreentrant_ac_trains_adapters_with_frozen_embedding_over_multiple_updates",
+          "outcome": "passed",
+          "source_line": 188
+        },
+        {
+          "name": "test_materialization_never_fills_quantized_slots_or_missing_buffer_values",
+          "outcome": "passed",
+          "source_line": 212
+        },
+        {
+          "name": "test_source_inventory_checks_duplicate_and_index_completeness",
+          "outcome": "passed",
+          "source_line": 221
+        },
+        {
+          "name": "test_stream_loader_copies_into_final_slots_without_full_state_dict",
+          "outcome": "passed",
+          "source_line": 236
+        },
+        {
+          "name": "test_tensor_fingerprint_hashes_bf16_and_packed_bytes_without_dtype_casts",
+          "outcome": "passed",
+          "source_line": 256
+        },
+        {
+          "name": "test_postconstruction_placement_preserves_identity_and_rejects_casts_before_mutation",
+          "outcome": "passed",
+          "source_line": 266
+        }
+      ],
+      "coverage": [
+        "Refuse non-strict execution before CUDA queries; CPU mocks exercise supported runtime checks.",
+        "Resolve exact language targets using meta tensors; reject missing, malformed, aliased and biased targets.",
+        "Preserve slots through activation checkpointing and initialize adapters independently of global RNG.",
+        "Exercise non-reentrant checkpointing and adapter gradients with frozen embeddings on small CPU modules.",
+        "Reject incomplete source inventories and unsafe blanket placement/casts; stream into final slots."
+      ],
+      "environment_observation": {
+        "execution_time_environment_attestation": false,
+        "observed_after_test": true,
+        "observed_utc": "2026-10-31T12:04:40.736654+00:00",
+        "packages": {
+          "pydantic": "2.14.1",
+          "pytest": "9.2.0",
+          "torch": "2.11.0+cpu",
+          "transformers": "5.8.1"
+        },
+        "python": "3.12.3",
+        "test_environment_overrides": {
+          "CUDA_VISIBLE_DEVICES": "",
+          "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONNOUSERSITE": "1"
+        }
+      },
+      "execution": "fresh_local_cpu",
+      "local_process_cost": {
+        "peak_process_rss_kib": 326208,
+        "process_wall_seconds": 3.29,
+        "scope": "Local test process observation, not model-training throughput or a Slurm allocation.",
+        "system_cpu_seconds": 0.63,
+        "user_cpu_seconds": 11.0
+      },
+      "result": {
+        "errors": 0,
+        "failures": 0,
+        "junit_elapsed_seconds": 2.386,
+        "junit_timestamp": "2026-10-31T12:03:02.997188+00:00",
+        "skipped": 0,
+        "tests": 18
+      },
+      "source": "cosmos_framework/posttrain/tests/test_model_qwen3_vl_qlora.py",
+      "started_utc": "2026-10-31T12:03:02.854474+00:00",
+      "warnings": {
+        "count": 2,
+        "kind": "Unknown L0 and CPU pytest marks under the explicit empty configuration."
+      }
+    }
+  }
+}

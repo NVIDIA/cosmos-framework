@@ -18,10 +18,12 @@ from cosmos_framework.posttrain.embodied.embodiment import EmbodimentMap, regist
 from cosmos_framework.posttrain.embodied.sim import PROTOCOL_VERSION, SimCapabilities, SimProtocolError
 from cosmos_framework.posttrain.embodied.sims.libero.protocol import (
     DEFAULT_EXECUTION_PROFILE,
+    GR00T_QLORA_SPATIAL_EXECUTION_PROFILE,
     HASH_POLICY_REPLICA_ENV_SEEDS,
     LIBERO_PROTOCOLS,
     LIBERO_RUNTIME,
     LIBERO_SUITES,
+    GeneratedLiberoCase,
     LiberoCase,
     LiberoManifest,
     execution_protocol,
@@ -58,6 +60,8 @@ class LiberoSimulator:
         train_manifest: str = "",
         emit_extrinsics: bool = False,
         execution_profile: str = DEFAULT_EXECUTION_PROFILE,
+        generated_scenes: str = "",
+        generated_scenes_sha256: str = "",
     ) -> None:
         if embodiment != "libero_sim" or emit_extrinsics:
             raise ValueError("LIBERO requires libero_sim and emit_extrinsics=False")
@@ -73,6 +77,22 @@ class LiberoSimulator:
         if self._train is not None and (self._train.split != "train" or self._train.suite != suite):
             raise ValueError("LIBERO train_manifest must declare the requested suite and train split")
         self._session: LiberoChunkSession | None = None
+        self._generated = None
+        if generated_scenes or generated_scenes_sha256:
+            if (
+                not generated_scenes
+                or not generated_scenes_sha256
+                or train_manifest
+                or n_lanes != 1
+                or suite != "libero_spatial"
+                or execution_profile != GR00T_QLORA_SPATIAL_EXECUTION_PROFILE
+            ):
+                raise ValueError("generated scenes require explicit evaluation-only Spatial/one-lane configuration")
+            from cosmos_framework.posttrain.embodied.sims.libero.generated import describe_source, read_manifest
+
+            self._generated = read_manifest(generated_scenes, generated_scenes_sha256)
+            if describe_source() != self._generated["plan"]["source"]:
+                raise ValueError("generated scene source/runtime/assets differ")
         # Construction is the actual simulator binding boundary, including direct
         # entrypoint launches that do not use the standalone allocation preflight.
         self.probe()
@@ -125,6 +145,8 @@ class LiberoSimulator:
                 raise RuntimeError(f"RLinf LIBERO source differs: {name}")
 
     def open_window(self, version: int) -> LiberoChunkSession:
+        if self._generated is not None:
+            raise ValueError("generated scenes are evaluation-only")
         if self._session is None:
             seed = self.seed + version * 8 + self.lane_offset
             if self._protocol.seed_derivation == HASH_POLICY_REPLICA_ENV_SEEDS:
@@ -144,6 +166,26 @@ class LiberoSimulator:
         return self._session
 
     def open_evaluation(self, case: dict[str, int | str], seed: int) -> LiberoChunkSession:
+        if self._generated is not None:
+            selected = GeneratedLiberoCase(**case)
+            records = [
+                row
+                for row in self._generated["records"]
+                if row["scene_id"] == selected.scene_id and row["request"]["task_id"] == selected.task_id
+            ]
+            if len(records) != 1:
+                raise ValueError("generated evaluation case is not in the exact manifest")
+            return self.session_class(
+                1,
+                seed,
+                0,
+                auto_reset=False,
+                suite=self.suite,
+                execution_horizon=self.execution_horizon,
+                max_steps=self.max_steps,
+                execution_profile=self.execution_profile,
+                generated_scene=records[0],
+            )
         selected = LiberoCase(**case)
         if selected.suite != self.suite:
             raise ValueError("evaluation case suite differs from the simulator")
@@ -190,6 +232,7 @@ class LiberoChunkSession:
         execution_horizon: int = LIBERO_PROTOCOLS["libero_spatial"].execution_horizon,
         max_steps: int = LIBERO_PROTOCOLS["libero_spatial"].max_episode_steps,
         execution_profile: str = DEFAULT_EXECUTION_PROFILE,
+        generated_scene: dict | None = None,
     ) -> None:
         from libero.libero import benchmark
 
@@ -197,6 +240,15 @@ class LiberoChunkSession:
         self.session_id = uuid.uuid4().hex
         self.suite, self.execution_horizon, self.max_steps = suite, execution_horizon, max_steps
         self._protocol = execution_protocol(suite, execution_profile)
+        self._generated_scene = generated_scene
+        if generated_scene is not None and (
+            n_lanes != 1
+            or auto_reset
+            or cases is not None
+            or suite != "libero_spatial"
+            or execution_profile != GR00T_QLORA_SPATIAL_EXECUTION_PROFILE
+        ):
+            raise ValueError("generated scene sessions are explicit one-lane evaluations only")
         if (execution_horizon, max_steps) != (self._protocol.execution_horizon, self._protocol.max_episode_steps):
             raise ValueError("LIBERO session horizon / episode limit differ from the execution protocol")
         self._seed = seed
@@ -206,7 +258,9 @@ class LiberoChunkSession:
         self._auto_reset = auto_reset
         self._init_states = [-1] * n_lanes
         self._returns = [0.0] * n_lanes
-        if self._suite.n_tasks != 10 or any(len(self._suite.get_task_init_states(i)) != 50 for i in range(10)):
+        if self._suite.n_tasks != 10 or (
+            generated_scene is None and any(len(self._suite.get_task_init_states(i)) != 50 for i in range(10))
+        ):
             raise ValueError(f"{suite} assets must expose ten tasks with fifty initial states each")
         self._envs: list[Any] = [None] * n_lanes
         self._vector = None
@@ -286,6 +340,26 @@ class LiberoChunkSession:
             self._reset_statistics(lane, raw)
 
     def _reset(self, lane: int) -> None:
+        if getattr(self, "_generated_scene", None) is not None:
+            # Match preparation's import-before-seeding order; constructor imports may consume RNG.
+            from libero.libero.envs import OffScreenRenderEnv  # noqa: F401
+            from libero.libero.utils import get_libero_path
+
+            from cosmos_framework.posttrain.embodied.sims.libero.generated import reset_scene
+
+            if self._envs[lane] is not None:
+                raise ValueError("generated scenes cannot reset or substitute another attempt")
+            record = self._generated_scene
+            task_index = record["request"]["task_id"]
+            task = self._suite.get_task(task_index)
+            bddl = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
+            env, raw, _, elapsed = reset_scene(
+                record["request"], lambda: self._open_env(lane, bddl, task.language), expected=record["evidence"]
+            )
+            self._envs[lane], self._tasks[lane] = env, task_index
+            self._scene_regeneration_seconds = elapsed
+            self._reset_statistics(lane, raw)
+            return
         case = self._choose_case()
         task_index = case.task_id
         self._init_states[lane] = case.init_state_id
@@ -387,6 +461,9 @@ class LiberoChunkSession:
                     "episode_index": self._episodes[lane],
                 }
             )
+            if getattr(self, "_generated_scene", None) is not None:
+                result[-1].pop("init_state_id")
+                result[-1]["scene_id"] = self._generated_scene["scene_id"]
         return result
 
     def step_chunk(self, actions: list[np.ndarray]) -> list[ChunkResult]:
@@ -458,6 +535,13 @@ class LiberoChunkSession:
                 "return": self._returns[lane],
                 "episode_id": f"{self.session_id}:{lane + self.lane_offset}:{self._episodes[lane]}",
             }
+            if getattr(self, "_generated_scene", None) is not None:
+                episode.pop("init_state_id")
+                episode.update(
+                    scene_id=self._generated_scene["scene_id"],
+                    scene_regeneration_seconds=self._scene_regeneration_seconds,
+                    scene_manifest_verified=True,
+                )
             if self._auto_reset and reset:
                 self._reset(lane)
         return ChunkResult(

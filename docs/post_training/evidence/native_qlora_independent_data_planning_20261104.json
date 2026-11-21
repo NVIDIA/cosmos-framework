@@ -1,0 +1,173 @@
+{
+  "availability": {
+    "annotation_or_shard_files": 23,
+    "available_old_groups_suitable_for_new_independent_final_claim": 0,
+    "former_untouched32_now_exposed": true,
+    "known_recording_families": 141,
+    "known_source_rows": 8231,
+    "new_labeled_recording_groups_found": 0
+  },
+  "new_model_or_media_execution": false,
+  "nll_noninferiority_planning": [
+    {
+      "assumed_seeds": 3,
+      "gap": 0.02,
+      "groups": 65,
+      "method": "mom_crossed",
+      "normal_approximation": true,
+      "one_sided_alpha": 0.05,
+      "power": 0.8,
+      "predicted_standard_error": 0.008030901910215375,
+      "scenario": "nll_noninferiority_true_ratio1.00",
+      "seed_variance_floor": 0.0,
+      "seeds": 3,
+      "target_variance": 6.469814754457599e-05,
+      "variance_multiplier": 1.0
+    },
+    {
+      "assumed_seeds": 3,
+      "gap": 0.02,
+      "groups": 130,
+      "method": "mom_crossed",
+      "normal_approximation": true,
+      "one_sided_alpha": 0.05,
+      "power": 0.8,
+      "predicted_standard_error": 0.008030901910215375,
+      "scenario": "nll_noninferiority_true_ratio1.00",
+      "seed_variance_floor": 0.0,
+      "seeds": 3,
+      "target_variance": 6.469814754457599e-05,
+      "variance_multiplier": 2.0
+    },
+    {
+      "assumed_seeds": 3,
+      "gap": 0.02,
+      "groups": 90,
+      "method": "mom_crossed",
+      "normal_approximation": true,
+      "one_sided_alpha": 0.05,
+      "power": 0.9,
+      "predicted_standard_error": 0.006824954258656295,
+      "scenario": "nll_noninferiority_true_ratio1.00",
+      "seed_variance_floor": 0.0,
+      "seeds": 3,
+      "target_variance": 4.670797874144736e-05,
+      "variance_multiplier": 1.0
+    },
+    {
+      "assumed_seeds": 3,
+      "gap": 0.02,
+      "groups": 180,
+      "method": "mom_crossed",
+      "normal_approximation": true,
+      "one_sided_alpha": 0.05,
+      "power": 0.9,
+      "predicted_standard_error": 0.006824954258656295,
+      "scenario": "nll_noninferiority_true_ratio1.00",
+      "seed_variance_floor": 0.0,
+      "seeds": 3,
+      "target_variance": 4.670797874144736e-05,
+      "variance_multiplier": 2.0
+    },
+    {
+      "assumed_seeds": 3,
+      "gap": 0.02,
+      "groups": null,
+      "method": "unshrunk_seed_plus_group",
+      "normal_approximation": true,
+      "one_sided_alpha": 0.05,
+      "power": 0.8,
+      "reason": "training-seed variance floor; more groups alone cannot meet requested approximate power",
+      "scenario": "nll_noninferiority_true_ratio1.00",
+      "seed_variance_floor": 0.00015289433227028923,
+      "seeds": 3,
+      "target_variance": 6.469814754457599e-05,
+      "variance_multiplier": 1.0
+    },
+    {
+      "assumed_seeds": 5,
+      "gap": 0.02,
+      "groups": null,
+      "method": "unshrunk_seed_plus_group",
+      "normal_approximation": true,
+      "one_sided_alpha": 0.05,
+      "power": 0.8,
+      "reason": "training-seed variance floor; more groups alone cannot meet requested approximate power",
+      "scenario": "nll_noninferiority_true_ratio1.00",
+      "seed_variance_floor": 9.173659936217354e-05,
+      "seeds": 5,
+      "target_variance": 6.469814754457599e-05,
+      "variance_multiplier": 1.0
+    },
+    {
+      "assumed_seeds": 8,
+      "gap": 0.02,
+      "groups": 570,
+      "method": "unshrunk_seed_plus_group",
+      "normal_approximation": true,
+      "one_sided_alpha": 0.05,
+      "power": 0.8,
+      "predicted_standard_error": 0.00804301632121754,
+      "scenario": "nll_noninferiority_true_ratio1.00",
+      "seed_variance_floor": 5.733537460135846e-05,
+      "seeds": 8,
+      "target_variance": 6.469814754457599e-05,
+      "variance_multiplier": 1.0
+    },
+    {
+      "assumed_seeds": 12,
+      "gap": 0.02,
+      "groups": 159,
+      "method": "unshrunk_seed_plus_group",
+      "normal_approximation": true,
+      "one_sided_alpha": 0.05,
+      "power": 0.8,
+      "predicted_standard_error": 0.008036766835088732,
+      "scenario": "nll_noninferiority_true_ratio1.00",
+      "seed_variance_floor": 3.822358306757231e-05,
+      "seeds": 12,
+      "target_variance": 6.469814754457599e-05,
+      "variance_multiplier": 1.0
+    }
+  ],
+  "planning_population": {
+    "effective_group_count_from_row_weights": 9.965986792122028,
+    "group_sizes": [
+      12,
+      16,
+      18,
+      39,
+      40,
+      51,
+      64,
+      68,
+      68,
+      68,
+      68,
+      72
+    ],
+    "groups": 12,
+    "rows_per_seed": 584,
+    "seeds": [
+      17,
+      42,
+      123
+    ]
+  },
+  "protocol": "cosmos.native-qlora-independent-data-planning.v1",
+  "release_qualified": false,
+  "scope": [
+    "Metadata audit of the authorized WTS sources only; no claim about unrelated storage.",
+    "All listed counts are previously exposed or related recording families, not available untouched test groups.",
+    "Planning uses development only. No new recording groups or final-test predictions were evaluated.",
+    "These are marginal normal-approximation sensitivity scenarios for true NLL ratio 1.00 against the unchanged 1.02 upper margin, not validated joint power of both bootstrap methods and every quality guard.",
+    "Three selected seeds and twelve groups give uncertain variance estimates; zero estimated seed variance does not prove its absence.",
+    "Accuracy superiority and 10% speed superiority became optional research on 2026-11-04; the historical planning file and its original endpoints remain unchanged.",
+    "Acquire genuinely new independently labeled recording/session/event components with provenance and overlap review. New pilot/development groups cannot enter final confirmation.",
+    "Preserve the 2% relative NLL and 1-percentage-point accuracy-loss bounds under both existing paired group/seed procedures. More seeds do not create independent recordings."
+  ],
+  "source_sha256": {
+    "availability_findings": "9184e36a5937dc055ddf8d1aa2189967804bda5d6079c628f699f26be7df26a3",
+    "development_variance_planning": "786e4786e33088c75d6cc0e0be9cc06d29d31117a2220394a937e0de53d28a33"
+  }
+}

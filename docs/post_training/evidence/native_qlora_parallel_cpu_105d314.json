@@ -1,0 +1,182 @@
+{
+  "allocation": {
+    "allocated_cpu_core_hours": 3.631111111111111,
+    "allocated_cpu_seconds": 13072,
+    "allocated_cpus": 16,
+    "allocated_gpus": 0,
+    "elapsed_seconds": 817,
+    "exit_code": "0:0",
+    "state": "COMPLETED"
+  },
+  "case_order": [
+    "native94_one",
+    "native94_hash2",
+    "native105_sticky2"
+  ],
+  "cases": {
+    "native105_sticky2": {
+      "case_seconds": 164.995497928001,
+      "close_seconds": 1.00819305004552,
+      "parent_rng_scope": "After parent processor/pipeline construction through worker startup, replay and close.",
+      "process_body_seconds": 212.6182027879404,
+      "processing_calls": 160,
+      "processing_seconds_sum": 252.8190807502251,
+      "replay_seconds": 139.3266935190186,
+      "rows": 160,
+      "sample_cache": {
+        "bytes": 260728404,
+        "hits": 0,
+        "limit": 268435456,
+        "misses": 160
+      },
+      "setup_seconds": 24.305056430050172,
+      "supervised_tokens": 320,
+      "video_cache": {
+        "bytes": 725638407,
+        "hits": 37,
+        "limit": 805306368,
+        "misses": 123
+      },
+      "whole_process_seconds": 213.85080433706753,
+      "worker_calls": [
+        82,
+        78
+      ],
+      "workers": 2
+    },
+    "native94_hash2": {
+      "case_seconds": 198.8014194390271,
+      "close_seconds": 1.0795458679785952,
+      "parent_rng_scope": "After parent processor/pipeline construction through worker startup, replay and close.",
+      "process_body_seconds": 240.306312388042,
+      "processing_calls": 160,
+      "processing_seconds_sum": 251.77965416782536,
+      "replay_seconds": 174.00864087801892,
+      "rows": 160,
+      "sample_cache": {
+        "bytes": 260729124,
+        "hits": 0,
+        "limit": 268435456,
+        "misses": 160
+      },
+      "setup_seconds": 23.360071285045706,
+      "supervised_tokens": 320,
+      "video_cache": {
+        "bytes": 725638407,
+        "hits": 37,
+        "limit": 805306368,
+        "misses": 123
+      },
+      "whole_process_seconds": 241.56962333305273,
+      "worker_calls": [
+        73,
+        87
+      ],
+      "workers": 2
+    },
+    "native94_one": {
+      "case_seconds": 195.50227334990632,
+      "close_seconds": 2.8288053800351918,
+      "parent_rng_scope": "After parent processor/pipeline construction through worker startup, replay and close.",
+      "process_body_seconds": 320.34108110598754,
+      "processing_calls": 160,
+      "processing_seconds_sum": 166.29077396984212,
+      "replay_seconds": 167.11570742493495,
+      "rows": 160,
+      "sample_cache": {
+        "bytes": 266654565,
+        "hits": 0,
+        "limit": 268435456,
+        "misses": 160
+      },
+      "setup_seconds": 25.204170453944243,
+      "supervised_tokens": 320,
+      "video_cache": {
+        "bytes": 725638407,
+        "hits": 37,
+        "limit": 805306368,
+        "misses": 123
+      },
+      "whole_process_seconds": 321.72756751906127,
+      "worker_calls": [
+        160
+      ],
+      "workers": 1
+    }
+  },
+  "correctness": {
+    "all_owned_workers_closed": true,
+    "cuda_initialized": false,
+    "exact_prepared_samples_collated_tensors_labels_masks_order": true,
+    "model_or_optimizer_constructed": false,
+    "same_sealed_comparison_result": true,
+    "same_sealed_host_validator_result": true,
+    "total_cache_and_cpu_limits_matched": true,
+    "worker_and_parent_rng_unchanged_within_recorded_scope": true
+  },
+  "followup_effort_gate": {
+    "at_least10percent_lower_than_both": true,
+    "correctness_passed": true,
+    "scope": "Root-predeclared follow-up effort screen only; no formal speed/training/quality/GPU memory qualification.",
+    "source_sha256": "ddea58f21702e199013471b19e2be096cd88de6968142920bc5f061b159e6140",
+    "sticky_reduction_vs_hash2": 0.1700486928434355,
+    "sticky_reduction_vs_one": 0.15604307253913552
+  },
+  "host_sampler_fixture": {
+    "actual_pss_bytes": 17762304,
+    "errors": 0,
+    "failures": 0,
+    "gpu_training_or_speed_qualified": false,
+    "historical_rows_changed": false,
+    "kernel_release": "5.15.0-1032-oracle",
+    "monitor_sha256": "0da96068fc25f3c44ca04ab8df4b433a0655dd643be2ca02c368bc902aacaf80",
+    "original_v3_still_incomplete": true,
+    "passed": true,
+    "protocol": "cosmos.private-live-thread-target-validation.v1",
+    "same_live_group_actual_mm": true,
+    "sample_sha256": "eb26b39cae80787036763499915e42ca3bd7f121f50fe144159b4eb7325631a5",
+    "skipped": 0,
+    "test_cases": 85,
+    "test_source_sha256": "b0ccc5fa9a533974e55028ed5d576fa9d409c2a21fa2142ce0cda9c3a42fd954",
+    "xml_sha256": "6fc571b4267923d308973f195ee7c02b1b72762b50a1d894de0ea6c4156382b8"
+  },
+  "inputs": {
+    "cache_bytes_total": 1073741824,
+    "distinct_training_media": 123,
+    "initial_development_validation_context_included": false,
+    "order": "Source/config-derived seed42 training prefix, not an observed checkpoint cursor payload.",
+    "requested_video_frames": 8,
+    "rows": 160,
+    "selected_logical_cpus": 8,
+    "selected_physical_cpus": 8,
+    "sequence_limit": 4096,
+    "supervised_tokens": 320,
+    "window_rows": 8
+  },
+  "limitations": [
+    "The predeclared10% CPU case screen only authorizes GPU follow-up; it is not the product end-to-end speed gate.",
+    "Fresh imports and source/media verification are outside case_seconds but included in whole_process_seconds and allocation accounting. Their overhead differed substantially between cases.",
+    "All cases had123 video-cache misses and37 hits; the observed difference is not fewer video decodes.",
+    "No counterbalanced repetition or confidence interval; common OS filesystem-cache state was not made cold.",
+    "Process RSS/PSS does not establish all job-charged file-cache memory; allocation-cgroup scope remains unproven.",
+    "The host fixture ran on Linux5.15.0-1032-oracle. GPU allocation kernel identity was not recorded in historical preflights; an actual fixture check is required there before new measurement claims.",
+    "Earlier incomplete host samples and unsuccessful hash-routing/allocator diagnostics remain unchanged."
+  ],
+  "native_revisions": {
+    "balanced": "105d31426da2927eeb5e01243d6db3bdec86ceb5",
+    "control": "94f1b4b88c660cd79d512cea78fa239d87cf8d4a"
+  },
+  "product_objective_qualified": false,
+  "protocol": "cosmos.native-qlora-parallel-cpu-screen.v1",
+  "receipt_sha256": {
+    "capture": "13e65e7e07270c1fd3daefb7dd97e25c1c52c79459827295e8a0467b4c1ef061",
+    "comparison": "858126c61765691fc4eb77b5711ae41b2c07edfa5aa7edfb1632a050235e1afb",
+    "completion": "054da8d2fef9141cb3a5f412b76b5f7064b291d82d3296048230bd56a4c9e621",
+    "independent_review": "1fcc97721782395585db524148725ab188d118892c6358fd33f100fc6794198e",
+    "package": "518413525c7e02cc25615b7d306735d40a37a952ec46a730bf7a286b6de689d2",
+    "plan": "5328c6a70ba9a480443a697f17b9de0d26489aa4a2039002e2e60f59ff73fda4",
+    "terminal_review": "aaa74b18882fc7e6f603dc16a1a7d5973d490f98dc11c6ea61a2a12285c00851"
+  },
+  "scope": "Single ordered CPU mechanism screen; native GPU training, repeated end-to-end timing, total host memory and recovery remain unqualified for balanced two-worker preprocessing.",
+  "workflow_revision": "32836721b0b379332118c890f6aaf61ece27e03e"
+}

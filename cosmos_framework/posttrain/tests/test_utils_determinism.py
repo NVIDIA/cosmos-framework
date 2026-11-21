@@ -29,10 +29,11 @@ def _restore_determinism_state(monkeypatch):
     prev_cudnn_deterministic = torch.backends.cudnn.deterministic
     prev_cudnn_benchmark = torch.backends.cudnn.benchmark
     prev_deterministic_algorithms = torch.are_deterministic_algorithms_enabled()
+    prev_warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
     yield
     torch.backends.cudnn.deterministic = prev_cudnn_deterministic
     torch.backends.cudnn.benchmark = prev_cudnn_benchmark
-    torch.use_deterministic_algorithms(prev_deterministic_algorithms, warn_only=True)
+    torch.use_deterministic_algorithms(prev_deterministic_algorithms, warn_only=prev_warn_only)
 
 
 @pytest.mark.L0
@@ -50,6 +51,35 @@ def test_enable_determinism_sets_every_knob(monkeypatch):
     assert os.environ["FLASH_ATTENTION_DETERMINISTIC"] == "1"
     assert torch.backends.cudnn.deterministic is True
     assert torch.backends.cudnn.benchmark is False
+    assert torch.are_deterministic_algorithms_enabled() is True
+    assert torch.is_deterministic_algorithms_warn_only_enabled() is True
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_explicit_strict_mode_controls_pytorch_enforcement(monkeypatch, strict):
+    monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    monkeypatch.setenv("FLASH_ATTENTION_DETERMINISTIC", "0")
+    enable_determinism(strict=strict)
+    assert torch.are_deterministic_algorithms_enabled() is True
+    assert torch.is_deterministic_algorithms_warn_only_enabled() is not strict
+    assert os.environ["FLASH_ATTENTION_DETERMINISTIC"] == "1"
+
+
+def test_unsupported_deterministic_operation_is_not_silently_downgraded(monkeypatch):
+    monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    monkeypatch.setenv("FLASH_ATTENTION_DETERMINISTIC", "0")
+    calls = []
+
+    def unsupported(mode, *, warn_only):
+        calls.append((mode, warn_only))
+        raise RuntimeError("unsupported deterministic implementation")
+
+    # Use a nested patch scope so the autouse fixture can restore Torch's real setter.
+    with monkeypatch.context() as scoped:
+        scoped.setattr(torch, "use_deterministic_algorithms", unsupported)
+        with pytest.raises(RuntimeError, match="unsupported deterministic implementation"):
+            enable_determinism(strict=True)
+    assert calls == [(True, False)]
 
 
 @pytest.mark.L0

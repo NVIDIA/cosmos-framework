@@ -48,7 +48,13 @@ LIBERO_PROTOCOLS = {
 LIBERO_SUITES = tuple(LIBERO_PROTOCOLS)
 DEFAULT_EXECUTION_PROFILE = "default"
 PI05_SPATIAL_EXECUTION_PROFILE = "rlinf_pi05_spatial_v2"
+GR00T_QLORA_SPATIAL_EXECUTION_PROFILE = "gr00t_qlora_spatial_8_v1"
 HASH_POLICY_REPLICA_ENV_SEEDS = "libero-sha256-policy-rlinf-replica-env-v1"
+# Explicitly distinct from legacy 16-step spatial: selected QLoRA demonstrations
+# supervise ten actions and replan after eight. Preserve every legacy profile.
+_GR00T_QLORA_SPATIAL_PROTOCOL = LiberoProtocol(
+    8, 256, 15, -1.0, False, "relative", "open-gripper-zero", HASH_POLICY_REPLICA_ENV_SEEDS
+)
 _PI05_SPATIAL_PROTOCOL = LiberoProtocol(
     5,
     240,
@@ -70,6 +76,8 @@ def execution_protocol(suite: str, profile: str = DEFAULT_EXECUTION_PROFILE) -> 
         raise ValueError(f"unsupported LIBERO suite {suite!r}")
     if profile == DEFAULT_EXECUTION_PROFILE:
         return LIBERO_PROTOCOLS[suite]
+    if profile == GR00T_QLORA_SPATIAL_EXECUTION_PROFILE and suite == "libero_spatial":
+        return _GR00T_QLORA_SPATIAL_PROTOCOL
     if profile == PI05_SPATIAL_EXECUTION_PROFILE and suite == "libero_spatial":
         return _PI05_SPATIAL_PROTOCOL
     raise ValueError(f"unsupported LIBERO execution_profile {profile!r} for suite {suite!r}")
@@ -164,6 +172,25 @@ class LiberoCase:
     @property
     def id(self) -> str:
         return f"{self.suite}/{self.task_id}/{self.init_state_id}"
+
+
+@dataclass(frozen=True, order=True)
+class GeneratedLiberoCase:
+    """Evaluation-only scene identity, never an alias for a published init-state index."""
+
+    task_id: int
+    scene_id: str
+    suite: str = "libero_spatial"
+
+    def __post_init__(self) -> None:
+        if self.suite != "libero_spatial" or type(self.task_id) is not int or not 0 <= self.task_id < 10:
+            raise ValueError("generated scenes require one of the ten LIBERO Spatial tasks")
+        if not isinstance(self.scene_id, str) or re.fullmatch(r"[0-9a-f]{64}", self.scene_id) is None:
+            raise ValueError("generated scene_id must be a SHA256")
+
+    @property
+    def id(self) -> str:
+        return f"{self.suite}/{self.task_id}/generated/{self.scene_id}"
 
 
 @dataclass(frozen=True)

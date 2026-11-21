@@ -1,0 +1,1684 @@
+{
+  "active_count": 0,
+  "active_full_reservation_resource_seconds": {
+    "cpu_only_core_seconds": 0,
+    "gpu_seconds": 0
+  },
+  "active_observed_resource_seconds": {
+    "cpu_in_gpu_core_seconds": 0,
+    "cpu_only_core_seconds": 0,
+    "gpu_seconds": 0
+  },
+  "all_ledger_allocations_terminal": true,
+  "allocation_count": 48,
+  "allocations": [
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 0,
+      "allocation": "allocation_001",
+      "comparison_kind": null,
+      "elapsed_seconds": 719,
+      "full_cpu_only_reservation_core_seconds": 43200,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_worker_memory",
+      "ledger_record_sha256": "f1af5d3c42f61c8ce2cb9db7a4d327beecbfcf538d2afca22b0d86604916596a",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 11504,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "12ded811d037ffb7078a580d887127e2e5c4958266480f8599e37b84bc9dc86d",
+      "scheduler_state": "CANCELLED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 0,
+      "allocation": "allocation_002",
+      "comparison_kind": null,
+      "elapsed_seconds": 719,
+      "full_cpu_only_reservation_core_seconds": 43200,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_worker_memory",
+      "ledger_record_sha256": "1132f22cebcdf19f351d2c97fe9ac0e5cf3033939013aaf9c4801409117ca8ff",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 11504,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "12ded811d037ffb7078a580d887127e2e5c4958266480f8599e37b84bc9dc86d",
+      "scheduler_state": "CANCELLED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 0,
+      "allocation": "allocation_003",
+      "comparison_kind": null,
+      "elapsed_seconds": 972,
+      "full_cpu_only_reservation_core_seconds": 57600,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_workload_preparation",
+      "ledger_record_sha256": "1fb218a606bc5fad970fbfd7cabef5e0e32613392e81979adbc012decd252988",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 15552,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "7d0ea8abc5d62655c9ba46c403fb9ccd2dbdfd6af3920c30878eebfde25d3dc4",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 0,
+      "allocation": "allocation_004",
+      "comparison_kind": null,
+      "elapsed_seconds": 2143,
+      "full_cpu_only_reservation_core_seconds": 67200,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_worker_memory_v2",
+      "ledger_record_sha256": "c356132d27e3a53735f384972fc76cabd5d5c2c74e407c0d4d5b12a2c90cc70e",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 34288,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "b09c3274d253442aa1f3101e297e6e37a1643581333d89d0b10366e998eb177c",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 0,
+      "allocation": "allocation_005",
+      "comparison_kind": null,
+      "elapsed_seconds": 1857,
+      "full_cpu_only_reservation_core_seconds": 67200,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_worker_memory_v2",
+      "ledger_record_sha256": "65fac6452400e66e25cde24f7f6c9c25313ef0a5159ee8611832f776596c020b",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 29712,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "bfc781ced6dbf5587864f321acd08b2ebbf03f8f31e8d26f9b30f7dd29f82fd4",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_006",
+      "comparison_kind": null,
+      "elapsed_seconds": 54,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 2700,
+      "kind": "gpu_kernel_gate",
+      "ledger_record_sha256": "7d0acf38a461eec980083ce01c819362e3527f6a9d1c33bcf86bf0cdc578f8b1",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 864,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 54
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "347443e1f266c9ad68ad036be76edc982a7f561234190ba7658f807317755c01",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 0,
+      "allocation": "allocation_007",
+      "comparison_kind": null,
+      "elapsed_seconds": 1560,
+      "full_cpu_only_reservation_core_seconds": 57600,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_worker_reclamation_v3",
+      "ledger_record_sha256": "7d9081c4ddb5075e3637040ed7bae6688e7c2ee7f8c70f39711013ac4e752973",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 24960,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "966ee40b0104ae46732d10fa4a515c8c91b07c292c2ea7aa81531c040e85c49e",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 0,
+      "allocation": "allocation_008",
+      "comparison_kind": null,
+      "elapsed_seconds": 2790,
+      "full_cpu_only_reservation_core_seconds": 57600,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_worker_reclamation_v3",
+      "ledger_record_sha256": "b2f2834bb6263cfe451ab43bb2aac89f696396cd1c829a080f16831c7a707a16",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 44640,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "6b411dbedadd4556c87d8c2e61a92ef0046661da3ad77cf30fdc348d761efcf5",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 2,
+      "allocated_gpus": 0,
+      "allocation": "allocation_009",
+      "comparison_kind": null,
+      "elapsed_seconds": 136,
+      "full_cpu_only_reservation_core_seconds": 600,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_pidfd_container_capability",
+      "ledger_record_sha256": "79e648a84e02bbdd464170a69273cc9782e80887d7a4713623df192af89b0bb6",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 272,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 1,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "e3007dd5866d5ceb4d355a52de82356d07a1be78be020cd416a07ef3ac49f9bb",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_010",
+      "comparison_kind": null,
+      "elapsed_seconds": 194,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 1200,
+      "kind": "gpu_kernel_gate_v3",
+      "ledger_record_sha256": "650e0f70d0e039a15f9d4491289b5893640e1323c42115f69e56cd838afef547",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 3104,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 194
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "8ac44ed2f0e2beb18456ebdd1f5dc1ca4756f333664ba8c80617bb22ec233808",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 0,
+      "allocation": "allocation_011",
+      "comparison_kind": null,
+      "elapsed_seconds": 2189,
+      "full_cpu_only_reservation_core_seconds": 56640,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_worker_reclamation_v4",
+      "ledger_record_sha256": "8e1143791f2902897444e7c956892b76941988f3bf439f5f6a7fac94d8f85349",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 35024,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "26f733201d01f8b869f1e4e77edbe68f1c7056461d86eee084792ceefff27988",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 2,
+      "allocated_gpus": 0,
+      "allocation": "allocation_012",
+      "comparison_kind": null,
+      "elapsed_seconds": 117,
+      "full_cpu_only_reservation_core_seconds": 600,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_pidfd_reparent_container_probe_v2",
+      "ledger_record_sha256": "f08fb47d0389419237c3b800cb1cf8104806678e9a923cfc534eb6ae5a6441e3",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 234,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 1,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "08c12416d6a08ef0aa4b914aad3f9c2edbb29390ceb3b50d130a47b573d1141d",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_013",
+      "comparison_kind": null,
+      "elapsed_seconds": 202,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 600,
+      "kind": "gate",
+      "ledger_record_sha256": "e0302547f664dde4d837c4b8f5142cc0080473c207c114615abfddb2698fab2a",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 3232,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 202
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "34d5adcd49e841505e06e19e2f3cdfcd7a06920485813ad2f2772907d405d204",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_014",
+      "comparison_kind": null,
+      "elapsed_seconds": 11912,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 14400,
+      "kind": "development_pair",
+      "ledger_record_sha256": "ca638ea2e809b91ae16de3e8e4d4b4c9bff61767c6e124614aaa8c64e50eb6ec",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 190592,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 11912
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "2294fa7c2dacdf86971222455f76ee954b5d01965a5ed1626062c0b1a5c5e08a",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_015",
+      "comparison_kind": null,
+      "elapsed_seconds": 12741,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 14400,
+      "kind": "development_pair",
+      "ledger_record_sha256": "2deafc918ef3fd35e4b69ada98127039d815b0ea61b930e988b0d5a4d3ff2c91",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 203856,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 12741
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "0698bb4ffd12d104c8457cf9fa82c05a81108778b747ae5084293f8f2641aee1",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_016",
+      "comparison_kind": null,
+      "elapsed_seconds": 12012,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 14400,
+      "kind": "development_pair",
+      "ledger_record_sha256": "386489a08a85debff1ebea6b399f0dcb0641d9081a27e4c12d2e7743765c8c02",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 192192,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 12012
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "c6ce171ebbca21175dbc9b9fd0062e935f6ffca0d4954f2843acdb4abc5f1a08",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_017",
+      "comparison_kind": null,
+      "elapsed_seconds": 593,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 3600,
+      "kind": "crossbuild",
+      "ledger_record_sha256": "669d2b67c8a433344ebcaddda9b6cd1f716db6bb5ee200b7bd4de811096c1a36",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 9488,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 593
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "744a78ee26e57e824245edf613e42e76a161232851cb41f690233a85cf97f099",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_018",
+      "comparison_kind": null,
+      "elapsed_seconds": 11521,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 14400,
+      "kind": "development_pair",
+      "ledger_record_sha256": "020946fe0c4d68d5c91bb3b3bc4de6bf22e732dce0cd1b5cc72cb818a889d910",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 184336,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 11521
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "b92a37ae28a2afd58fda94646cf58f1d2940f939ee484dde9fb6490a65b8180b",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 2,
+      "allocated_gpus": 0,
+      "allocation": "allocation_019",
+      "comparison_kind": null,
+      "elapsed_seconds": 603,
+      "full_cpu_only_reservation_core_seconds": 1200,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_host_monitor_probe_v1",
+      "ledger_record_sha256": "59beb5729d987443e0a01af85593f36c8c22a14fba50bc772ccedf5585b3fb9c",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 1206,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 1,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "c9cd8d7f0ad34b793b5378671d0919b7218e5d0079a4fa338a1e78197f883f05",
+      "scheduler_state": "TIMEOUT",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 0,
+      "allocated_gpus": 0,
+      "allocation": "allocation_020",
+      "comparison_kind": null,
+      "elapsed_seconds": 0,
+      "full_cpu_only_reservation_core_seconds": 480,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_host_monitor_probe_v1_retry",
+      "ledger_record_sha256": "738bad5bd1e3fb987a8e93a82f6a989e616771bb8c694cc77563b4c2ed55fc66",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 1,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "54e3944c40cbb7e1119ce298e692396db1ab966f773815d1624d2646ec24e4d1",
+      "scheduler_state": "CANCELLED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 2,
+      "allocated_gpus": 0,
+      "allocation": "allocation_021",
+      "comparison_kind": null,
+      "elapsed_seconds": 212,
+      "full_cpu_only_reservation_core_seconds": 480,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_host_monitor_probe_v1_retry",
+      "ledger_record_sha256": "06d87dee8df0dada60bf5b485087d18ad82c0c5908e769b3a9533e94cfcb3a42",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 424,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 1,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "a582e2a14eada7e2d32615091e91a0dddacd3bc1310b0584815aa0417ba292f8",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 2,
+      "allocated_gpus": 1,
+      "allocation": "allocation_022",
+      "comparison_kind": null,
+      "elapsed_seconds": 56,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 240,
+      "kind": "gpu_allocated_cpu_host_monitor_probe_v2",
+      "ledger_record_sha256": "b6d3b04474f6d2e7c953277b5f28507a05aed8d1fd64c3d941a874aebf91ace9",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 112,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 56
+      },
+      "requested_cpus": 1,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "4318707181864cc095cd24ea7b851416946eb7e3719a05532722f5fd3ce79c01",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_023",
+      "comparison_kind": null,
+      "elapsed_seconds": 2509,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 3600,
+      "kind": "frozen_pair",
+      "ledger_record_sha256": "1ce6e70a41ad28c428a93d72dce7c864f8c5c0f1cb2579ab3522ea5403ef640e",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 40144,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 2509
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "1ab366fc1edfb39eac0e0250da184e5185f5a6d0a80319740d18671bec691016",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_024",
+      "comparison_kind": null,
+      "elapsed_seconds": 12372,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 14400,
+      "kind": "confirmation_pair",
+      "ledger_record_sha256": "3e7ab0526f6fd03c064b869521a6b43d5f6fc9c91fca47b09c79f11449efceca",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 197952,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 12372
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "f1a1fe90fefc5e2d4fa9f666fbf005e06ba1759457866257ff862ea28d422048",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_025",
+      "comparison_kind": null,
+      "elapsed_seconds": 13017,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 14400,
+      "kind": "confirmation_pair",
+      "ledger_record_sha256": "9648a670af3306e8eb8fe80697c78f716be63c046f68ed08f18b2a3d15f4b13b",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 208272,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 13017
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "94fc3efe5c65b2d81704144774ece0aed04f5d9c77560c947f93830f65102112",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 2,
+      "allocated_gpus": 1,
+      "allocation": "allocation_026",
+      "comparison_kind": null,
+      "elapsed_seconds": 115,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 240,
+      "kind": "gpu_allocated_cpu_host_monitor_probe_v2_affinity_v1",
+      "ledger_record_sha256": "f6d12eefc55c904f71051f95b68752103b3cf1ae0852dd5e116202c09f3d9146",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 230,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 115
+      },
+      "requested_cpus": 1,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "1d7808a826d7effda5f006a92002eb8ff78584ef61d0ff12f146ea326477f602",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_027",
+      "comparison_kind": null,
+      "elapsed_seconds": 201,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 600,
+      "kind": "gate",
+      "ledger_record_sha256": "1b8a716b9592a8c61f58a2deaea11e422c545fda0af8489381c9bb2648e45569",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 3216,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 201
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "51c68c849e30e742e487ddb985ee5fe91675a71bf8efd40d4528904c30c53b0c",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_028",
+      "comparison_kind": null,
+      "elapsed_seconds": 535,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 1200,
+      "kind": "monitored_crossbuild",
+      "ledger_record_sha256": "a7b1dbb25a8716dbccef899d8bc6ecf027013084acd3378b29b2876021fb44cc",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 8560,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 535
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "3466250de3ce73e8bcb14cac8b184cc08c1ddb64ce67b14b6339f0970cf2995e",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_029",
+      "comparison_kind": null,
+      "elapsed_seconds": 589,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 840,
+      "kind": "collector_validation",
+      "ledger_record_sha256": "7c8688c55c03bfe153388870202f2facb3590863ea2a12a303f53222a18e7c05",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 9424,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 589
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "faad055463092bd9fe212ddb06d70a071c0550f256b417757df41b7f7df1b6b7",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_030",
+      "comparison_kind": null,
+      "elapsed_seconds": 1159,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 10800,
+      "kind": "runtime_profile",
+      "ledger_record_sha256": "01eb4507894025afc21754bf54bd09079038c96a3c59294abe49a29d085b4c14",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 18544,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 1159
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "c41c9c53e20d0eb6a89d88bba8da0c59d5481a3c9cbac2b510735b93c0431c3b",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_031",
+      "comparison_kind": null,
+      "elapsed_seconds": 1188,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 7200,
+      "kind": "runtime_profile",
+      "ledger_record_sha256": "9e5d693cc6423e255efc337af4e7b5d731c9887213cb6caa80350c7b67271176",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 19008,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 1188
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "bc14571bc4aca5aa75d923bc3a93c504987155402bc0b9dff61324fed7d44162",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_032",
+      "comparison_kind": null,
+      "elapsed_seconds": 269,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 300,
+      "kind": "collector_validation",
+      "ledger_record_sha256": "ce1ab2ae0e87bbba5768daa0f41ade8737c01a01c6555b90321ece46df919d6b",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 4304,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 269
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "05d57681b6c2a8140d8e660989f7fe511bc441147f1d90b87157de6b0810af2c",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 0,
+      "allocated_gpus": 0,
+      "allocation": "allocation_033",
+      "comparison_kind": null,
+      "elapsed_seconds": 0,
+      "full_cpu_only_reservation_core_seconds": 120,
+      "full_gpu_reservation_seconds": 0,
+      "kind": "cpu_wait_probe_v1",
+      "ledger_record_sha256": "5f12b030b0d24a0826314219b8a151047384ef32d5ffc74442c309af20da06ab",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 0
+      },
+      "requested_cpus": 1,
+      "requested_gpus": 0,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "48d805e187af63954cb424e35f9388e386c7b0f5bac70226aeae8306dbf6e8b0",
+      "scheduler_state": "CANCELLED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_034",
+      "comparison_kind": null,
+      "elapsed_seconds": 79,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 300,
+      "kind": "gpu_hidden_wait_probe_v2",
+      "ledger_record_sha256": "a076dc03c0d3d60539c5c4a26d3474467092153c2e706283fb5319342dc889d2",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 1264,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 79
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "93183c265cb10992f528448db23221ec3b354b0dfcf4831b65168f21535d498c",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_035",
+      "comparison_kind": null,
+      "elapsed_seconds": 45,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 10800,
+      "kind": "runtime_profile",
+      "ledger_record_sha256": "7cb3462fb40cad423080f9cdd1183b98cf52669e21c8d85ef0f63883972ccd9d",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 720,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 45
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "19e36eabbc34c0ddff06dbab3450cb12d3d2a754f045c7131c5ae927de1a3489",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_036",
+      "comparison_kind": null,
+      "elapsed_seconds": 40,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 6000,
+      "kind": "runtime_profile",
+      "ledger_record_sha256": "f0e645e1568085a7783b9ea7a82392931f31fb06058d6b37b7226303252e68c3",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 640,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 40
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "bf487fcd0a519e64ba6dee4df23e469593f9520f784331bc2a28575777276078",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_037",
+      "comparison_kind": null,
+      "elapsed_seconds": 5841,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 10800,
+      "kind": "runtime_profile",
+      "ledger_record_sha256": "21b8f020f4bb73cb37d402d821e5b2679893e78683b767e2aa22cee23e5407ab",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 93456,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 5841
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "72ae12743de5a2347657468b6f26cafd228e8190dc5e4afb0f9b407d5c44a230",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_038",
+      "comparison_kind": null,
+      "elapsed_seconds": 1910,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 5940,
+      "kind": "runtime_profile",
+      "ledger_record_sha256": "4b453957a33801302ab51e02cf5f0f617ed3a888858ce2f6f5d75a27c153d3e6",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 30560,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 1910
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "1:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "08fc0b7f4351cb45d8bfb0d3aeace7f61a754afbf0415961b413f3d14e410d3b",
+      "scheduler_state": "FAILED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_039",
+      "comparison_kind": null,
+      "elapsed_seconds": 1677,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 10800,
+      "kind": "runtime_profile",
+      "ledger_record_sha256": "47f965f841aa70646a35b3bd9c3cc5e8b9a0b14a4e1e8797e17f05692167a0f7",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 26832,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 1677
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "793692c03769d0d8045db5b37bc012f588b9e331eb7eb81c5072e65b2f565049",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_040",
+      "comparison_kind": null,
+      "elapsed_seconds": 8166,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 10800,
+      "kind": "runtime_profile",
+      "ledger_record_sha256": "73b942652bc843b69f716e8c6f514736129e0d6e7b7fea437f2909153b687e42",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 130656,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 8166
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "b3066fe663842be84fafebe7a414e2535ff34aa5cfad42c9ee3fd4dc41ac8551",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_041",
+      "comparison_kind": "selected_fixed_execution",
+      "elapsed_seconds": 12104,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 14400,
+      "kind": "confirmation_pair",
+      "ledger_record_sha256": "611929a12e43ef7e4cf0f879c86a6bc2af39acbce01d0f1aaecbbf42a03c16b2",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 193664,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 12104
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "72f90bb93102eb4874afd963270ad2aaea7bc685933782c466722c15aacaf4ce",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_042",
+      "comparison_kind": "selected_fixed_execution",
+      "elapsed_seconds": 12213,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 14400,
+      "kind": "confirmation_pair",
+      "ledger_record_sha256": "12f8181a3a1968cc55614a99170ecc271f76b1502ccb56e3a57f62678279ca5d",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 195408,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 12213
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "94af9a7da6fce9c7243ab747e91b837bc4a8a47fe9ab69f04b6918fb260743cd",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_043",
+      "comparison_kind": null,
+      "elapsed_seconds": 2858,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 7200,
+      "kind": "long_recovery_pair",
+      "ledger_record_sha256": "c20dfaae8a967d599e5967b0959b00f296b587e4c3691f1d2ac4cb6b094a7ed7",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 45728,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 2858
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "4612bb93394b7110b467dedcdd7c7e663ecc1514a7ffcc5b5c97c8e25b4c5b9e",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_044",
+      "comparison_kind": "controlled",
+      "elapsed_seconds": 6371,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 9000,
+      "kind": "selected_scoring",
+      "ledger_record_sha256": "88bc50d169855e194a1ef2d5698deea2dcc654e179148275e34acfdbcda94164",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 101936,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 6371
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "7ab1268572a40519d8eb47b82f63c62b54a221e4c9139359366cce79926b5ad8",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_045",
+      "comparison_kind": "controlled",
+      "elapsed_seconds": 2853,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 4500,
+      "kind": "selected_scoring",
+      "ledger_record_sha256": "643aa83420842a14d70f2f8cff7409eb0a4e882696d5775b90c06100bdaefc6e",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 45648,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 2853
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "777f8c5778747f0ef796a0141e59bbcdc36c5f831410a0463cd16530a6902160",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_046",
+      "comparison_kind": "selected_fixed_execution",
+      "elapsed_seconds": 8052,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 9000,
+      "kind": "selected_scoring",
+      "ledger_record_sha256": "91f2891d34658f6887ab0d94034206c4bb137c8479b1656ae0fcb19ee2e2fe2e",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 128832,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 8052
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "ccd8866f0d037927537b69b6028531eb28d5aca19429a6664afe391c1dfa5326",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_047",
+      "comparison_kind": "selected_fixed_execution",
+      "elapsed_seconds": 1688,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 4500,
+      "kind": "selected_scoring",
+      "ledger_record_sha256": "92ba7c4fb10c8e0ff3abccb2ef0aca5cdbd63137006ad9e3ac1f785dc47fa17c",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 27008,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 1688
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "unsuccessful_terminal",
+      "scheduler_record_sha256": "c37baf2cb168dd4ed4a772540f10f005e3ba74790f71a17a755863fb065b135c",
+      "scheduler_state": "CANCELLED",
+      "terminal": true
+    },
+    {
+      "allocated_cpus": 16,
+      "allocated_gpus": 1,
+      "allocation": "allocation_048",
+      "comparison_kind": "selected_fixed_execution",
+      "elapsed_seconds": 3004,
+      "full_cpu_only_reservation_core_seconds": null,
+      "full_gpu_reservation_seconds": 4500,
+      "kind": "selected_scoring",
+      "ledger_record_sha256": "4696591f5e4bdcc9ef48a620bc61ef5972739b3d4940b4afebc18f6cea9ff924",
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 48064,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 3004
+      },
+      "requested_cpus": 8,
+      "requested_gpus": 1,
+      "scheduler_exit_code": "0:0",
+      "scheduler_outcome": "successful",
+      "scheduler_record_sha256": "2d40e565530c0af8d4b88bd50bfe17a873f9cba6fc3a6f1671a737f7ef842c9a",
+      "scheduler_state": "COMPLETED",
+      "terminal": true
+    }
+  ],
+  "caps": {
+    "concurrent_gpu_reservations": 4,
+    "cpu_only_core_seconds": 230400,
+    "gpu_seconds": 172800
+  },
+  "categories": [
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "collector_validation",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 2.617777777777778,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.16361111111111112
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 9424,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 589
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "collector_validation",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 1.1955555555555555,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.07472222222222222
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 4304,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 269
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    },
+    {
+      "allocation_count": 2,
+      "comparison_kind": "selected_fixed_execution",
+      "kind": "confirmation_pair",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 108.07555555555555,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 6.754722222222222
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 389072,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 24317
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 2,
+      "comparison_kind": "unspecified",
+      "kind": "confirmation_pair",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 112.84,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 7.0525
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 406224,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 25389
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "cpu_host_monitor_probe_v1",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.0,
+        "cpu_only_core_hours": 0.335,
+        "gpu_hours": 0.0
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 1206,
+        "gpu_seconds": 0
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    },
+    {
+      "allocation_count": 2,
+      "comparison_kind": "unspecified",
+      "kind": "cpu_host_monitor_probe_v1_retry",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.0,
+        "cpu_only_core_hours": 0.11777777777777777,
+        "gpu_hours": 0.0
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 424,
+        "gpu_seconds": 0
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "cpu_pidfd_container_capability",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.0,
+        "cpu_only_core_hours": 0.07555555555555556,
+        "gpu_hours": 0.0
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 272,
+        "gpu_seconds": 0
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "cpu_pidfd_reparent_container_probe_v2",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.0,
+        "cpu_only_core_hours": 0.065,
+        "gpu_hours": 0.0
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 234,
+        "gpu_seconds": 0
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "cpu_wait_probe_v1",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.0,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.0
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 0
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    },
+    {
+      "allocation_count": 2,
+      "comparison_kind": "unspecified",
+      "kind": "cpu_worker_memory",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.0,
+        "cpu_only_core_hours": 6.391111111111111,
+        "gpu_hours": 0.0
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 23008,
+        "gpu_seconds": 0
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    },
+    {
+      "allocation_count": 2,
+      "comparison_kind": "unspecified",
+      "kind": "cpu_worker_memory_v2",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.0,
+        "cpu_only_core_hours": 17.77777777777778,
+        "gpu_hours": 0.0
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 64000,
+        "gpu_seconds": 0
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "cpu_worker_reclamation_v3",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.0,
+        "cpu_only_core_hours": 12.4,
+        "gpu_hours": 0.0
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 44640,
+        "gpu_seconds": 0
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "cpu_worker_reclamation_v3",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.0,
+        "cpu_only_core_hours": 6.933333333333334,
+        "gpu_hours": 0.0
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 24960,
+        "gpu_seconds": 0
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "cpu_worker_reclamation_v4",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.0,
+        "cpu_only_core_hours": 9.72888888888889,
+        "gpu_hours": 0.0
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 35024,
+        "gpu_seconds": 0
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "cpu_workload_preparation",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.0,
+        "cpu_only_core_hours": 4.32,
+        "gpu_hours": 0.0
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 0,
+        "cpu_only_core_seconds": 15552,
+        "gpu_seconds": 0
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "crossbuild",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 2.6355555555555554,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.16472222222222221
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 9488,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 593
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 4,
+      "comparison_kind": "unspecified",
+      "kind": "development_pair",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 214.16,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 13.385
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 770976,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 48186
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "frozen_pair",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 11.151111111111112,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.6969444444444445
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 40144,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 2509
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 2,
+      "comparison_kind": "unspecified",
+      "kind": "gate",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 1.791111111111111,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.11194444444444444
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 6448,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 403
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "gpu_allocated_cpu_host_monitor_probe_v2",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.03111111111111111,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.015555555555555555
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 112,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 56
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "gpu_allocated_cpu_host_monitor_probe_v2_affinity_v1",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.06388888888888888,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.03194444444444444
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 230,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 115
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "gpu_hidden_wait_probe_v2",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.3511111111111111,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.021944444444444444
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 1264,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 79
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "gpu_kernel_gate",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.24,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.015
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 864,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 54
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "gpu_kernel_gate_v3",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 0.8622222222222222,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.05388888888888889
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 3104,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 194
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "long_recovery_pair",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 12.702222222222222,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.7938888888888889
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 45728,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 2858
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "unspecified",
+      "kind": "monitored_crossbuild",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 2.3777777777777778,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.1486111111111111
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 8560,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 535
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    },
+    {
+      "allocation_count": 3,
+      "comparison_kind": "unspecified",
+      "kind": "runtime_profile",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 69.70666666666666,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 4.3566666666666665
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 250944,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 15684
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 5,
+      "comparison_kind": "unspecified",
+      "kind": "runtime_profile",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 19.297777777777778,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 1.2061111111111111
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 69472,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 4342
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    },
+    {
+      "allocation_count": 2,
+      "comparison_kind": "controlled",
+      "kind": "selected_scoring",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 40.995555555555555,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 2.562222222222222
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 147584,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 9224
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 2,
+      "comparison_kind": "selected_fixed_execution",
+      "kind": "selected_scoring",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 49.13777777777778,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 3.071111111111111
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 176896,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 11056
+      },
+      "scheduler_outcome": "successful"
+    },
+    {
+      "allocation_count": 1,
+      "comparison_kind": "selected_fixed_execution",
+      "kind": "selected_scoring",
+      "observed_resource_hours": {
+        "cpu_in_gpu_core_hours": 7.502222222222223,
+        "cpu_only_core_hours": 0.0,
+        "gpu_hours": 0.4688888888888889
+      },
+      "observed_resource_seconds": {
+        "cpu_in_gpu_core_seconds": 27008,
+        "cpu_only_core_seconds": 0,
+        "gpu_seconds": 1688
+      },
+      "scheduler_outcome": "unsuccessful_terminal"
+    }
+  ],
+  "current_gpu_reservations": 0,
+  "current_reservations_within_cap": true,
+  "final": true,
+  "helper_receipt_sha256": "a12f94d9baacf06fac9b66f12bb7126c6f1acf1e311a337da4b17f44c3cd9c78",
+  "helper_source_sha256": "9cb5fd514193a8e60e517035f79b2a5fbb06baea887da7306ae52056c073a050",
+  "interpretation": [
+    "GPU-hidden tests still consume their scheduler-allocated GPUs.",
+    "Each unique allocation is charged once. Reusing seed42 artifacts introduces no second allocation charge.",
+    "Failures, timeouts and cancellations retain all actual allocated cost. Never-started cancellations have zero cost only when explicit accounting proves zero elapsed and zero resources.",
+    "CPU-only resource seconds are compared with the separate64core-hour cap. CPU inside GPU allocations is reported separately and is not silently charged against that separate cap.",
+    "Scheduler completion is not scientific qualification; no quality, memory or recovery pass is inferred.",
+    "Observed active elapsed is a partial snapshot. The admission bound uses terminal actual plus each active full reservation, or actual if already higher; it never adds active elapsed twice.",
+    "Historical concurrency counts allocated intervals, not pending reservations. Pending/running reservation count is reported only for this snapshot."
+  ],
+  "ledger_modified": false,
+  "ledger_sha256": "524de457aa34011932c3270d9a4d55bdb20a88940cfd82c9eb5e38d57b79aede",
+  "observed_allocated_concurrency_within_cap": true,
+  "observed_resource_hours": {
+    "cpu_in_gpu_core_hours": 657.735,
+    "cpu_only_core_hours": 58.144444444444446,
+    "gpu_hours": 41.15
+  },
+  "observed_resource_seconds": {
+    "cpu_in_gpu_core_seconds": 2367846,
+    "cpu_only_core_seconds": 209320,
+    "gpu_seconds": 148140
+  },
+  "outcome_analysis_performed": false,
+  "peak_observed_allocated_gpus": 4,
+  "protocol": "cosmos.private-ledger-compute-cost-projection.v1",
+  "scheduler_queried": false,
+  "scheduler_state_counts": {
+    "CANCELLED": 5,
+    "COMPLETED": 30,
+    "FAILED": 12,
+    "TIMEOUT": 1
+  },
+  "scope": "Exact submitted allocations in the SHA-bound root ledger only; scheduler accounting is the embedded bare-allocation record. Unsubmitted protected reservations, historical work outside this ledger, local analysis CPU, storage and billing tariffs are excluded.",
+  "terminal_actual_plus_active_full_reservation_hours": {
+    "cpu_only_core_hours": 58.144444444444446,
+    "gpu_hours": 41.15
+  },
+  "terminal_actual_plus_active_full_reservation_seconds": {
+    "cpu_only_core_seconds": 209320,
+    "gpu_seconds": 148140
+  },
+  "terminal_actual_resource_hours": {
+    "cpu_in_gpu_core_hours": 657.735,
+    "cpu_only_core_hours": 58.144444444444446,
+    "gpu_hours": 41.15
+  },
+  "terminal_actual_resource_seconds": {
+    "cpu_in_gpu_core_seconds": 2367846,
+    "cpu_only_core_seconds": 209320,
+    "gpu_seconds": 148140
+  },
+  "terminal_count": 48,
+  "within_caps_for_ledger_snapshot": {
+    "cpu_only_core_seconds": true,
+    "gpu_seconds": true
+  }
+}

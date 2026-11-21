@@ -1,0 +1,284 @@
+{
+  "allocation_cost": {
+    "allocated_cpu_hours": 8.04,
+    "allocated_cpu_seconds": 28944,
+    "conservative_whole_allocation_nf4_debit_upper_bound_seconds": 1809,
+    "gpu_allocation_hours": 0.5025,
+    "gpu_seconds": 1809,
+    "outside_stage_timer_seconds": 43.303900862985756,
+    "plan_labelled_bf16_stage_seconds": 0.0,
+    "plan_labelled_nf4_stage_seconds": 1527.7127435069997,
+    "plan_labelled_shared_stage_seconds": 205.72503437800333,
+    "scope": "Original plan labels retained. No shared or unlabelled time is silently assigned to BF16 or removed. Stage timers plus allocation preflight and residual time reconcile once to the full allocation; nested fixture/lifecycle timers must not be added again. Queue and local review time excluded.",
+    "shared_stages": [
+      "verify_actual_v6_host_fixtures",
+      "native_f5e_fresh_kernel_gate",
+      "verify_actual_native_f5e_gate"
+    ],
+    "unlabelled_allocation_preflight_seconds": 32.25832125201123
+  },
+  "completed": true,
+  "cross_execution": {
+    "allowed_metadata_delta": [
+      "metadata.identity.format: v1 to v2",
+      "metadata.identity.execution_policy: exact validated checkpointed-dequant policy"
+    ],
+    "compared_model_payload": "All504 trainable adapter tensors; the frozen base remains bound by its recorded identity and live fingerprint checks.",
+    "controls_rng_data_exact": true,
+    "exact_numerical_updates": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "excluded_storage_identity_fields": [
+      "validation.publication.destination",
+      "validation.publication.id",
+      "validation.publication.manifest"
+    ],
+    "model_maximum_tensor_difference": 0,
+    "optimizer_maximum_tensor_difference": 0,
+    "original_artifacts_unchanged": true,
+    "production_resume_or_checkpoint_interchangeability_qualified": false,
+    "scope": "Allocated diagnostic validates both original identities and compares metadata copies normalized only for the declared execution policy. Production resume remains strict; reviewer replays do not reread tensors."
+  },
+  "end_to_end_speed_qualified": false,
+  "gates": {
+    "actual_host_properties": 3,
+    "actual_v6_host_fixture_cases": 112,
+    "existing_higher_precision_cpu_regression_cases": 1,
+    "fresh_cuda_kernel_cases": 14,
+    "outer_failures": 0,
+    "outer_stages_completed": 11,
+    "production_single_matrix_cuda_cases": 1,
+    "production_two_block_cuda_cases": 1,
+    "sampler_exit_code": 0,
+    "scope": "Host fixtures execute on CPUs inside this GPU allocation; the112 cases are not CUDA/model tests.",
+    "skips_failures_errors": 0
+  },
+  "limitations": [
+    "One seed and four updates on one A10080 allocation do not establish task quality or repeated comparative training speed.",
+    "No residual initialization, mixed higher-precision blocks, selective/no activation checkpointing, compilation, BF16 adapter arithmetic or dropout combination is qualified.",
+    "A backward failure requires process termination; in-process retry is unsupported.",
+    "The original +4.18% regression and unchanged2% release margin remain; no primary-accuracy or10% time-to-quality target is established."
+  ],
+  "memory": {
+    "candidate_lifecycle_outer_samples": 936,
+    "collector_method": "proc-identity-state-read-attempts-v6",
+    "complete_allocation_host_residency_measured": false,
+    "incomplete_rows": [
+      {
+        "errors": [
+          "live_or_unknown_memory_unreadable",
+          "membership_transition_retry_exhausted",
+          "unproven_live_thread_memory"
+        ],
+        "row_index": 5,
+        "stage": "verify_actual_v6_host_fixtures"
+      },
+      {
+        "errors": [
+          "live_or_unknown_memory_unreadable",
+          "membership_transition_retry_exhausted",
+          "unproven_live_thread_memory"
+        ],
+        "row_index": 30,
+        "stage": "verify_actual_v6_host_fixtures"
+      }
+    ],
+    "incomplete_samples": 2,
+    "native_reference_and_lifecycle_sampled_host_complete": true,
+    "native_reference_outer_samples": 177,
+    "physical_24gb_support_qualified": false,
+    "reference_observed_boundaries": {
+      "bnb_reference4": {
+        "first_phase": "adapter_loading_start",
+        "last_phase": "validation_checkpoint_boundary_4",
+        "maximum_recorded_allocator_allocated_bytes": 9052725248,
+        "maximum_recorded_allocator_reserved_bytes": 9302966272,
+        "observed_boundary_records": 20,
+        "sampled": {
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 5812372480,
+          "owned_device_process_peak_bytes": 10374610944,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 106
+        },
+        "scope": "Loading through final validation/checkpoint boundary only. Original allocator phase records and timestamp-selected samples; neither a complete process lifetime nor a speed/quality comparison."
+      },
+      "checkpointed_dequant_reference4": {
+        "first_phase": "adapter_loading_start",
+        "last_phase": "validation_checkpoint_boundary_4",
+        "maximum_recorded_allocator_allocated_bytes": 9354247168,
+        "maximum_recorded_allocator_reserved_bytes": 9611247616,
+        "observed_boundary_records": 20,
+        "sampled": {
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 7694114816,
+          "owned_device_process_peak_bytes": 10682892288,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 106
+        },
+        "scope": "Loading through final validation/checkpoint boundary only. Original allocator phase records and timestamp-selected samples; neither a complete process lifetime nor a speed/quality comparison."
+      }
+    },
+    "scope": "Two incomplete rows occurred during host fixtures and remain false. Reference values cover loading through the final validation/checkpoint boundary; sampled peaks are lower bounds. Later v7 qualification does not repair these v6 records.",
+    "unmapped_filesystem_cache_included": false,
+    "whole_parent_host_pss_complete": false,
+    "whole_parent_sampled": {
+      "device_peak_bytes": 11876368384,
+      "errors": [
+        "incomplete_host_pss"
+      ],
+      "gpu_memory_evidence_valid": true,
+      "host_pss_complete": false,
+      "host_pss_sum_peak_bytes": 7694114816,
+      "host_rss_sum_peak_bytes": 8076591104,
+      "nvml_capacity_bytes": 85899345920,
+      "observed_span_seconds": 1733.3445708751678,
+      "owned_device_process_peak_bytes": 11142168576,
+      "peaks_are_sampled_lower_bounds": true,
+      "samples": 1334,
+      "sampling_gap_seconds": {
+        "count": 1333,
+        "maximum": 1.8781490325927734,
+        "mean": 1.3003335115342594,
+        "median": 1.2843677997589111,
+        "p95": 1.3946866512298584,
+        "sum": 1733.3445708751678
+      }
+    },
+    "whole_parent_samples": 1334
+  },
+  "model": {
+    "activation_checkpointing": "full_nonreentrant",
+    "adapter_compute_dtype": "float32",
+    "adapter_parameter_gradient_optimizer_dtype": "float32",
+    "adapter_parameter_tensors": 504,
+    "alpha": 64,
+    "base_compute_dtype": "bfloat16",
+    "base_revision": "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+    "candidate_execution": "checkpointed_dequant",
+    "compile": false,
+    "default_changed": false,
+    "default_execution": "bnb",
+    "excluded_language_layers": [],
+    "family": "Qwen/Qwen3-VL-8B-Instruct",
+    "gradient_accumulation": 8,
+    "initialization": "kaiming_A_zero_B",
+    "language_blocks": 36,
+    "logits": "full",
+    "microbatch": 1,
+    "optimizer_updates_per_reference": 4,
+    "quantized_language_matrices": 252,
+    "quantized_storage": "nf4_nested_uint8",
+    "rank": 32,
+    "residual_initialization": false,
+    "schedule_cycle_steps": 4,
+    "seed": 42,
+    "warmup_steps": 1
+  },
+  "native_revision": "f5e40cf0d27091abc85af23799a9f59b75761353",
+  "native_wheel_sha256": "45bdf66316585a7daeb27de6f875acb9c8c7904d0e090faee343f0cc9e45b813",
+  "own_recovery": {
+    "committed_source_update": 2,
+    "exact_resumed_updates": [
+      3,
+      4
+    ],
+    "fresh_dcp_and_portable_reload_exact": true,
+    "full_checkpoint_comparisons_atol": 0,
+    "full_checkpoint_comparisons_rtol": 0,
+    "inner_stages_completed": 15,
+    "interruption_modes": [
+      "boundary",
+      "accumulation"
+    ],
+    "probe_shapes": {
+      "image": {
+        "sequence_length": 275,
+        "supervised_tokens": 5
+      },
+      "text": {
+        "sequence_length": 25,
+        "supervised_tokens": 2
+      },
+      "video": {
+        "sequence_length": 340,
+        "supervised_tokens": 2
+      }
+    },
+    "reload_logit_and_loss_max_abs": 0,
+    "reload_modalities": [
+      "text",
+      "image",
+      "video"
+    ],
+    "scope": "Own four-update process-interruption recovery, not arbitrary crash timing, partial-gradient replay or100/300-update continuation.",
+    "source_and_resumed_checkpoint_comparisons": 6
+  },
+  "production_fixture": {
+    "bnb_dequantizations_per_update_with_input_grad": 42,
+    "bnb_dequantizations_per_update_without_input_grad": 39,
+    "candidate_dequantizations_per_update": 28,
+    "exact_output_gradient_updated_adapter_comparisons": 519,
+    "inference_exact": true,
+    "max_simultaneous_dense_blocks": 1,
+    "maximum_live_dense_storage_bytes": 385875968,
+    "maximum_tensor_difference": 0,
+    "packed_state_and_aliases_unchanged": true,
+    "scope_and_bypass_guards_passed": true,
+    "synthetic_language_blocks": 2,
+    "timing_order": "ABBA",
+    "timing_scope": "One uninstrumented synthetic ABBA sequence, two rounds per arm, two warmup and five measured updates per round. Both models resident; not WTS training or end-to-end speed.",
+    "tokens": 128,
+    "updates_per_variant": 3,
+    "variants": 3,
+    "warm_update_median_seconds": {
+      "bnb": 0.02696616100729443,
+      "saved_weight": 0.024123226525261998
+    }
+  },
+  "projection_source_sha256": "3521a67226363c33144d310384220c71ae902cda53aad383ffef8020a0f39e5b",
+  "protocol": "cosmos.native-qlora-checkpointed-dequant-native-evidence.v1",
+  "qualification_scope": "Bounded four-update native full-model correctness, own interruption/recovery and fresh reload on one A100 80GB. No task-quality, comparative end-to-end speed, release or cross-mode production-resume qualification.",
+  "quality_qualified": false,
+  "release_qualified": false,
+  "runtime": {
+    "allocated_cpus": 16,
+    "gpu_memory_bytes": 85174583296,
+    "gpu_name": "NVIDIA A100-SXM4-80GB",
+    "gpus": 1,
+    "selected_physical_cpu_cores": 8,
+    "versions": {
+      "accelerate": "1.13.0",
+      "bitsandbytes": "0.49.2",
+      "safetensors": "0.8.0",
+      "torch": "2.11.0+cu128",
+      "torchcodec": "0.11.0+cpu",
+      "torchvision": "0.26.0+cu128",
+      "transformers": "5.8.1"
+    }
+  },
+  "source_sha256": {
+    "cross_execution_payload_comparison": "7e1fabb8b50731d3f7d33da86b108a7cc28e90e57cc565865046fbe8dba42f85",
+    "cross_execution_trajectory": "70bf97e51a6544a88d494a0978fe6067e4fe9c1789ed07fcc3f2fea1b9b54309",
+    "higher_precision_regression_xml": "004727e9796eea5e870b392b299a5f4e5a295311ace653ed45cb7f0a5cc11b73",
+    "independent_fixture_review": "354f826f059621ff3511b9e9e31a4904cf6fca018abc0ff8eb497d16dbb70670",
+    "independent_lifecycle_review": "9e219f4b5bed4cb5a109c736450e2a1301e720930551588bd8181d611ac94cc8",
+    "native_build_receipt": "3603dd285142bf963eacdde8fa9c2502a2223ae892a7cf2eebf3de5d9800c517",
+    "native_kernel_xml": "7e5594491c75e752035b6a500c3ad648f0e8029dce051de801e61d9fc0517648",
+    "own_lifecycle": "83ac364a71d2bdc74dd62165ac1224c1da32f4271935ccbbe79d23486cb702b7",
+    "production_canary_xml": "4239df798a9ec86b0c24b80b090b6b8b2151ddb731c5007516b736a6afc76f3b",
+    "production_fixture": "a5676eec8762972e3a9241ef9ee877fc4a95ff1c16d21bb2d2f15a44b04d43ae",
+    "production_fixture_xml": "1905f1555deb888120d4be6876eb31402f6d70e7b8350360bf1ecf8ee037022a",
+    "raw_host_samples": "28bbf8b819feb9a5995ebc1ffa9c3ead085a7c89680ca965930a45de9ca2f416",
+    "scientific_review": "dc9ff4002e6d1a483ae4d04f69957f6201b0a11ae98275955ebfc9716a5b7789",
+    "submitted_plan": "a89a11cf111d2d1ccb5236a3eaea1fe6b9c6f3eb1ee46e6adc102d7c0f45334c",
+    "terminal_capture": "abbd896115359db9f7b53cf60f03fe284f71322bb6611810faa95f535c1c57d4",
+    "workflow_receipt": "bc8fd21b31dcad5f1c4a3d3061cd01a5d6f7edbb1946999fee8bfa3621ea8bb9"
+  },
+  "workflow_revision": "eb9c4362e4e8c110efdbdff4e36c94cf4604c886"
+}

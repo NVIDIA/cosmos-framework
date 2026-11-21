@@ -1,0 +1,265 @@
+{
+  "scope": "Ten-update native GR00T LIBERO engineering, not recipe-quality or performance qualification",
+  "implementation_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+  "wheel_sha256": "9113351965b501d293f9a71f476926fc212c51732144a63f90aca144120f0697",
+  "receipt_archive_sha256": "4ba70eb4cdc0fee3975ea67da8a4353e0113fdcb4ab21688eda4c73c8bbbc28b",
+  "receipt_archive": "cosmos-qlora-family-20261113/gr00t-engineering-4cba88f-receipts-v1.tar.gz",
+  "recovery_job": "38507341",
+  "allocation_seconds": 931,
+  "modes": {
+    "nf4_lora": {
+      "source_job": "38507341",
+      "native_workflow_seconds": 142.44669828994665,
+      "phase_seconds": {
+        "checkpoint_seconds": 45.05914421193302,
+        "evaluation_seconds": 32.21483112196438,
+        "portable_export_seconds": 15.679795768926851,
+        "startup_seconds": 42.17441292491276,
+        "training_seconds": 5.251817098585889
+      },
+      "mean_update_seconds_steps3_to10": 0.49486820871243253,
+      "peak_allocated_bytes": 30844224000,
+      "peak_reserved_bytes": 31578914816,
+      "native_host_hwm_bytes": 31324098560,
+      "masked_action_elements_per_update": 70,
+      "history": [
+        {
+          "metrics": {
+            "action_mae_environment_units": 0.04305506357311991,
+            "action_mae_gripper_environment_units": 0.10367178410291672,
+            "action_mae_pitch_environment_units": 0.017059048866584554,
+            "action_mae_roll_environment_units": 0.007828179598227666,
+            "action_mae_x_environment_units": 0.050336155237478454,
+            "action_mae_y_environment_units": 0.04366751039674403,
+            "action_mae_yaw_environment_units": 0.005636396366656182,
+            "action_mae_z_environment_units": 0.07318637044323173,
+            "loss": 0.06325565087608993,
+            "normalized_action_mse": 0.049755390474040595
+          },
+          "step": 0
+        },
+        {
+          "metrics": {
+            "action_mae_environment_units": 0.09103156016448007,
+            "action_mae_gripper_environment_units": 0.15171184331178666,
+            "action_mae_pitch_environment_units": 0.042683028105602164,
+            "action_mae_roll_environment_units": 0.024880200533407226,
+            "action_mae_x_environment_units": 0.12492395494254183,
+            "action_mae_y_environment_units": 0.1355487527365608,
+            "action_mae_yaw_environment_units": 0.019635021392593294,
+            "action_mae_z_environment_units": 0.13783812012886842,
+            "loss": 0.278997968416661,
+            "normalized_action_mse": 0.12117881293807711
+          },
+          "step": 5
+        },
+        {
+          "metrics": {
+            "action_mae_environment_units": 0.14649230911813144,
+            "action_mae_gripper_environment_units": 0.19859603494405748,
+            "action_mae_pitch_environment_units": 0.05007805218437625,
+            "action_mae_roll_environment_units": 0.03558189270789547,
+            "action_mae_x_environment_units": 0.21186920898085745,
+            "action_mae_y_environment_units": 0.305235139081819,
+            "action_mae_yaw_environment_units": 0.02362695066837062,
+            "action_mae_z_environment_units": 0.20045888525954378,
+            "loss": 0.5673798341304064,
+            "normalized_action_mse": 0.17404876317296708
+          },
+          "step": 10
+        }
+      ],
+      "fresh_reload": [
+        {
+          "exact_task_score_parity": true,
+          "kind": "checkpoint"
+        },
+        {
+          "exact_task_score_parity": true,
+          "kind": "portable"
+        }
+      ],
+      "recovery5_to10": {
+        "atol": 0,
+        "controls_rng_and_data_exact": true,
+        "excluded_storage_identity_fields": [
+          "validation.publication.destination",
+          "validation.publication.id",
+          "validation.publication.manifest"
+        ],
+        "maximum_tensor_difference": {
+          "model": 0.0,
+          "optim": 0.0
+        },
+        "passed": true,
+        "rtol": 0
+      },
+      "runtime": {
+        "code": "4cba88f4d84ce69037c194e58670e8491388a36d",
+        "versions": {
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6",
+          "bitsandbytes": "0.49.2",
+          "safetensors": "0.8.0",
+          "diffusers": "0.35.1"
+        },
+        "gpu": {
+          "name": "NVIDIA A100-SXM4-80GB",
+          "bytes": 85174583296,
+          "uuid": "6cf26e37-902c-4b91-fe8c-a1f0f50c1e16"
+        },
+        "cpu_affinity": [
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          160,
+          161,
+          162,
+          163,
+          164,
+          165,
+          166,
+          167
+        ],
+        "slurm_job": "38507341",
+        "cuda_visible_devices": "0"
+      },
+      "completion_sha256": "d44aadf34eee4422e61c241701022bdbcd6f677ceb516e605fc0c9fa1c49ded3"
+    },
+    "bf16_lora": {
+      "source_job": "38506697",
+      "native_workflow_seconds": 143.79997712399927,
+      "phase_seconds": {
+        "checkpoint_seconds": 49.97589566101669,
+        "evaluation_seconds": 29.172648010979174,
+        "portable_export_seconds": 15.632464766007615,
+        "startup_seconds": 40.96097898797598,
+        "training_seconds": 5.074472256994341
+      },
+      "mean_update_seconds_steps3_to10": 0.44452023387202644,
+      "peak_allocated_bytes": 32039697920,
+      "peak_reserved_bytes": 32765902848,
+      "native_host_hwm_bytes": 31304994816,
+      "masked_action_elements_per_update": 70,
+      "history": [
+        {
+          "metrics": {
+            "action_mae_environment_units": 0.04242728817956224,
+            "action_mae_gripper_environment_units": 0.10283121585845947,
+            "action_mae_pitch_environment_units": 0.01689657937266358,
+            "action_mae_roll_environment_units": 0.007473425747242102,
+            "action_mae_x_environment_units": 0.04751489658871923,
+            "action_mae_y_environment_units": 0.04149897675463071,
+            "action_mae_yaw_environment_units": 0.005574789992065168,
+            "action_mae_z_environment_units": 0.07520113294315538,
+            "loss": 0.06432044872781262,
+            "normalized_action_mse": 0.048695894023403526
+          },
+          "step": 0
+        },
+        {
+          "metrics": {
+            "action_mae_environment_units": 0.07715370907828052,
+            "action_mae_gripper_environment_units": 0.08868048429489135,
+            "action_mae_pitch_environment_units": 0.03616117170059453,
+            "action_mae_roll_environment_units": 0.02525058694222664,
+            "action_mae_x_environment_units": 0.12935378842299236,
+            "action_mae_y_environment_units": 0.12285941100272467,
+            "action_mae_yaw_environment_units": 0.01474025301453284,
+            "action_mae_z_environment_units": 0.12303026817000112,
+            "loss": 0.3032691323198378,
+            "normalized_action_mse": 0.08128482758998871
+          },
+          "step": 5
+        },
+        {
+          "metrics": {
+            "action_mae_environment_units": 0.1205470203511483,
+            "action_mae_gripper_environment_units": 0.17729298949241637,
+            "action_mae_pitch_environment_units": 0.04522625852346024,
+            "action_mae_roll_environment_units": 0.03553959349829602,
+            "action_mae_x_environment_units": 0.18244905675860734,
+            "action_mae_y_environment_units": 0.21075911106186587,
+            "action_mae_yaw_environment_units": 0.023921864855964113,
+            "action_mae_z_environment_units": 0.16864026826742784,
+            "loss": 0.463089301623404,
+            "normalized_action_mse": 0.15469694435596465
+          },
+          "step": 10
+        }
+      ],
+      "fresh_reload": [
+        {
+          "exact_task_score_parity": true,
+          "kind": "checkpoint"
+        },
+        {
+          "exact_task_score_parity": true,
+          "kind": "portable"
+        }
+      ],
+      "recovery5_to10": {
+        "atol": 0,
+        "controls_rng_and_data_exact": true,
+        "excluded_storage_identity_fields": [
+          "validation.publication.destination",
+          "validation.publication.id",
+          "validation.publication.manifest"
+        ],
+        "maximum_tensor_difference": {
+          "model": 0.0,
+          "optim": 0.0
+        },
+        "passed": true,
+        "rtol": 0
+      },
+      "runtime": {
+        "code": "4cba88f4d84ce69037c194e58670e8491388a36d",
+        "versions": {
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6",
+          "bitsandbytes": "0.49.2",
+          "safetensors": "0.8.0",
+          "diffusers": "0.35.1"
+        },
+        "gpu": {
+          "name": "NVIDIA A100-SXM4-80GB",
+          "bytes": 85174583296,
+          "uuid": "19c99066-d5c0-b2c9-14b1-093dfc9bc9ed"
+        },
+        "cpu_affinity": [
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          150,
+          151,
+          152,
+          153,
+          154,
+          155,
+          156,
+          157
+        ],
+        "slurm_job": "38506697",
+        "cuda_visible_devices": "0"
+      },
+      "completion_sha256": "794b1be0156cbecc9fe32800ada475187b105d0a6553f45f54b77918d98c2082"
+    }
+  },
+  "measurement_limitations": [
+    "Single engineering seed17 and ten updates; different GPU/CPU placement and source jobs across precision arms. No paired performance claim.",
+    "NVML/process sampler exited before collection: Torch2.10 returned a bare UUID, but sampler passed it to NVML without GPU- prefix. Historical sampled GPU-process peaks are unavailable.",
+    "Reported allocator peaks and native per-process host high-water marks remain measured; host HWM is cumulative within each native subprocess.",
+    "Full-development task quality, target attainment, process-loss recovery, dense conversion and rollout success are separate pending checks."
+  ]
+}

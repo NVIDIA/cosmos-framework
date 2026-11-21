@@ -48,6 +48,8 @@ nav:
       - Model and algorithm support: post_training/model_algorithm_support.md
       - SFT:
           - SFT recipes: training.md
+          - Native QLoRA (experimental): post_training/native_qlora.md
+          - Native QLoRA qualification: post_training/native_qlora_qualification.md
           - Datasets:
               - JSONL datasets: dataset_jsonl.md
               - Custom datasets: custom_dataset.md
@@ -143,6 +145,8 @@ hold:
 
 # Repo-only pages: links to them go to GitHub.
 not_on_site:
+  # Design proposal; runtime support and qualification remain pending.
+  - docs/post_training/qlora_native_vlm_design.md
   # How to maintain the docs, for doc developers.
   - docs/README.md
   # Migration record: where each retired cookbook notebook and README went in its agent skill.

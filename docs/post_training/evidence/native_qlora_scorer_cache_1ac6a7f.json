@@ -1,0 +1,488 @@
+{
+  "allocation": {
+    "allocated_cpu_seconds": 23504,
+    "allocation_minus_stage_seconds": 62.51239168306347,
+    "elapsed_seconds": 1469,
+    "exit_code": "0:0",
+    "gpu_seconds": 1469,
+    "stage_seconds_sum": 1406.4876083169365,
+    "state": "COMPLETED"
+  },
+  "cells": [
+    {
+      "allocator_scope": "Model-loading boundaries only; full scoring allocator peak unrecorded.",
+      "arm": "bf16",
+      "cache": null,
+      "cache_bytes": 0,
+      "complete_stage_seconds": 261.64963564503705,
+      "full_scoring_allocator_peak_bytes": null,
+      "host_incomplete_samples": 0,
+      "name": "score_00_bf16_cache_0",
+      "sampled_memory": {
+        "device_peak_bytes": 19971375104,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 5338856448,
+        "host_rss_sum_peak_bytes": 5486817280,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 260.26571345329285,
+        "owned_device_process_peak_bytes": 19237175296,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 206,
+        "sampling_gap_seconds": {
+          "count": 205,
+          "maximum": 1.406512975692749,
+          "mean": 1.2695888461136235,
+          "median": 1.266587495803833,
+          "p95": 1.2944913387298582,
+          "sum": 260.26571345329285
+        }
+      },
+      "scorer_internal_seconds": 254.64731353300158,
+      "scores_sha256": "48116a22a7417e658e5729911f0ad6877e1749d6ee9dc4150d6722a58b080311",
+      "stage_memory_sha256": "25c698379a5ebf63d008dc17641a8e0a7daa639dff12f1d0934fff8fb0fd481f"
+    },
+    {
+      "allocator_scope": "Model-loading boundaries only; full scoring allocator peak unrecorded.",
+      "arm": "nf4",
+      "cache": null,
+      "cache_bytes": 0,
+      "complete_stage_seconds": 199.39117661397904,
+      "full_scoring_allocator_peak_bytes": null,
+      "host_incomplete_samples": 0,
+      "name": "score_01_nf4_cache_0",
+      "sampled_memory": {
+        "device_peak_bytes": 9808576512,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 6458993664,
+        "host_rss_sum_peak_bytes": 6602264576,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 197.74878549575806,
+        "owned_device_process_peak_bytes": 9074376704,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 156,
+        "sampling_gap_seconds": {
+          "count": 155,
+          "maximum": 1.4624719619750977,
+          "mean": 1.2757986161016648,
+          "median": 1.2682511806488037,
+          "p95": 1.3083573818206786,
+          "sum": 197.74878549575806
+        }
+      },
+      "scorer_internal_seconds": 192.70752089103917,
+      "scores_sha256": "28073375132b3f2d9cea11a3c4ffdaf327ee5bd66759592fbb4f4a1496dde39f",
+      "stage_memory_sha256": "b99ce87c38910b08e49fc1d7a21fa716d73149ce8c4ae2dd4a07b052fc614e9b"
+    },
+    {
+      "allocator_scope": "Model-loading boundaries only; full scoring allocator peak unrecorded.",
+      "arm": "nf4",
+      "cache": {
+        "elapsed_scope": "elapsed_seconds includes selection/media hashing, model/reload, all scoring, integrity checks and cache close; excludes final report serialization and process-group teardown",
+        "memory_scope": "bounded retained CPU cache entries, not total host memory",
+        "policy": {
+          "cache_bytes": 1073741824,
+          "max_pending": 1,
+          "prefetch": false,
+          "workers": 1
+        },
+        "stats": {
+          "samples": {
+            "bytes": 266653701,
+            "hits": 0,
+            "limit": 268435456,
+            "misses": 64
+          },
+          "timing": {
+            "processing_calls": 64,
+            "processing_seconds": 7.633142621954903,
+            "wait_calls": 0,
+            "wait_seconds": 0.0
+          },
+          "videos": {
+            "bytes": 23597988,
+            "hits": 60,
+            "limit": 805306368,
+            "misses": 4
+          }
+        }
+      },
+      "cache_bytes": 1073741824,
+      "complete_stage_seconds": 104.47744581795996,
+      "full_scoring_allocator_peak_bytes": null,
+      "host_incomplete_samples": 0,
+      "name": "score_02_nf4_cache_1073741824",
+      "sampled_memory": {
+        "device_peak_bytes": 9808576512,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 6459013120,
+        "host_rss_sum_peak_bytes": 6648918016,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 104.06328749656677,
+        "owned_device_process_peak_bytes": 9074376704,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 83,
+        "sampling_gap_seconds": {
+          "count": 82,
+          "maximum": 1.4972851276397705,
+          "mean": 1.2690644816654484,
+          "median": 1.2644579410552979,
+          "p95": 1.2898109674453735,
+          "sum": 104.06328749656677
+        }
+      },
+      "scorer_internal_seconds": 97.50735129998066,
+      "scores_sha256": "28073375132b3f2d9cea11a3c4ffdaf327ee5bd66759592fbb4f4a1496dde39f",
+      "stage_memory_sha256": "ed0a4042e319ebbba9d7857139dea681c890761f97e09b1fa28ce83fa9309159"
+    },
+    {
+      "allocator_scope": "Model-loading boundaries only; full scoring allocator peak unrecorded.",
+      "arm": "bf16",
+      "cache": {
+        "elapsed_scope": "elapsed_seconds includes selection/media hashing, model/reload, all scoring, integrity checks and cache close; excludes final report serialization and process-group teardown",
+        "memory_scope": "bounded retained CPU cache entries, not total host memory",
+        "policy": {
+          "cache_bytes": 1073741824,
+          "max_pending": 1,
+          "prefetch": false,
+          "workers": 1
+        },
+        "stats": {
+          "samples": {
+            "bytes": 266653701,
+            "hits": 0,
+            "limit": 268435456,
+            "misses": 64
+          },
+          "timing": {
+            "processing_calls": 64,
+            "processing_seconds": 7.967427683703136,
+            "wait_calls": 0,
+            "wait_seconds": 0.0
+          },
+          "videos": {
+            "bytes": 23597988,
+            "hits": 60,
+            "limit": 805306368,
+            "misses": 4
+          }
+        }
+      },
+      "cache_bytes": 1073741824,
+      "complete_stage_seconds": 133.37483025103575,
+      "full_scoring_allocator_peak_bytes": null,
+      "host_incomplete_samples": 0,
+      "name": "score_03_bf16_cache_1073741824",
+      "sampled_memory": {
+        "device_peak_bytes": 19971375104,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 4970263552,
+        "host_rss_sum_peak_bytes": 4930768896,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 132.22392010688782,
+        "owned_device_process_peak_bytes": 19237175296,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 105,
+        "sampling_gap_seconds": {
+          "count": 104,
+          "maximum": 1.3891510963439941,
+          "mean": 1.2713838471816137,
+          "median": 1.26557457447052,
+          "p95": 1.3050763249397277,
+          "sum": 132.22392010688782
+        }
+      },
+      "scorer_internal_seconds": 125.63064775202656,
+      "scores_sha256": "48116a22a7417e658e5729911f0ad6877e1749d6ee9dc4150d6722a58b080311",
+      "stage_memory_sha256": "876bedb6a589c087b1103f704a53c7f3d5936e2ac45bf74282b01404f6803dd0"
+    },
+    {
+      "allocator_scope": "Model-loading boundaries only; full scoring allocator peak unrecorded.",
+      "arm": "bf16",
+      "cache": {
+        "elapsed_scope": "elapsed_seconds includes selection/media hashing, model/reload, all scoring, integrity checks and cache close; excludes final report serialization and process-group teardown",
+        "memory_scope": "bounded retained CPU cache entries, not total host memory",
+        "policy": {
+          "cache_bytes": 1073741824,
+          "max_pending": 1,
+          "prefetch": false,
+          "workers": 1
+        },
+        "stats": {
+          "samples": {
+            "bytes": 266653701,
+            "hits": 0,
+            "limit": 268435456,
+            "misses": 64
+          },
+          "timing": {
+            "processing_calls": 64,
+            "processing_seconds": 7.370604600873776,
+            "wait_calls": 0,
+            "wait_seconds": 0.0
+          },
+          "videos": {
+            "bytes": 23597988,
+            "hits": 60,
+            "limit": 805306368,
+            "misses": 4
+          }
+        }
+      },
+      "cache_bytes": 1073741824,
+      "complete_stage_seconds": 134.4155605340493,
+      "full_scoring_allocator_peak_bytes": null,
+      "host_incomplete_samples": 0,
+      "name": "score_04_bf16_cache_1073741824",
+      "sampled_memory": {
+        "device_peak_bytes": 19971375104,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 6205575168,
+        "host_rss_sum_peak_bytes": 6299279360,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 133.37934637069702,
+        "owned_device_process_peak_bytes": 19237175296,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 106,
+        "sampling_gap_seconds": {
+          "count": 105,
+          "maximum": 1.468158483505249,
+          "mean": 1.2702794892447336,
+          "median": 1.2657434940338135,
+          "p95": 1.2898138999938964,
+          "sum": 133.37934637069702
+        }
+      },
+      "scorer_internal_seconds": 120.17005026299739,
+      "scores_sha256": "48116a22a7417e658e5729911f0ad6877e1749d6ee9dc4150d6722a58b080311",
+      "stage_memory_sha256": "82f0ee748ecffa1404fa11f1defa59994abe8ea41a5203d0b9837a3bd47ebb05"
+    },
+    {
+      "allocator_scope": "Model-loading boundaries only; full scoring allocator peak unrecorded.",
+      "arm": "nf4",
+      "cache": {
+        "elapsed_scope": "elapsed_seconds includes selection/media hashing, model/reload, all scoring, integrity checks and cache close; excludes final report serialization and process-group teardown",
+        "memory_scope": "bounded retained CPU cache entries, not total host memory",
+        "policy": {
+          "cache_bytes": 1073741824,
+          "max_pending": 1,
+          "prefetch": false,
+          "workers": 1
+        },
+        "stats": {
+          "samples": {
+            "bytes": 266653701,
+            "hits": 0,
+            "limit": 268435456,
+            "misses": 64
+          },
+          "timing": {
+            "processing_calls": 64,
+            "processing_seconds": 7.446033234009519,
+            "wait_calls": 0,
+            "wait_seconds": 0.0
+          },
+          "videos": {
+            "bytes": 23597988,
+            "hits": 60,
+            "limit": 805306368,
+            "misses": 4
+          }
+        }
+      },
+      "cache_bytes": 1073741824,
+      "complete_stage_seconds": 113.53335631196387,
+      "full_scoring_allocator_peak_bytes": null,
+      "host_incomplete_samples": 0,
+      "name": "score_05_nf4_cache_1073741824",
+      "sampled_memory": {
+        "device_peak_bytes": 9808576512,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 4344327168,
+        "host_rss_sum_peak_bytes": 4506304512,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 111.82416939735413,
+        "owned_device_process_peak_bytes": 9074376704,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 89,
+        "sampling_gap_seconds": {
+          "count": 88,
+          "maximum": 1.415736198425293,
+          "mean": 1.270729197697206,
+          "median": 1.2651278972625732,
+          "p95": 1.298872148990631,
+          "sum": 111.82416939735413
+        }
+      },
+      "scorer_internal_seconds": 107.47849904000759,
+      "scores_sha256": "28073375132b3f2d9cea11a3c4ffdaf327ee5bd66759592fbb4f4a1496dde39f",
+      "stage_memory_sha256": "bb9c19f2557db112f51f502898bce7d19323f2e0912c5a62cac1ebc710c6f07d"
+    },
+    {
+      "allocator_scope": "Model-loading boundaries only; full scoring allocator peak unrecorded.",
+      "arm": "nf4",
+      "cache": null,
+      "cache_bytes": 0,
+      "complete_stage_seconds": 195.31218528700992,
+      "full_scoring_allocator_peak_bytes": null,
+      "host_incomplete_samples": 0,
+      "name": "score_06_nf4_cache_0",
+      "sampled_memory": {
+        "device_peak_bytes": 9808576512,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 5985901568,
+        "host_rss_sum_peak_bytes": 6104522752,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 194.42814230918884,
+        "owned_device_process_peak_bytes": 9074376704,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 153,
+        "sampling_gap_seconds": {
+          "count": 152,
+          "maximum": 1.3889927864074707,
+          "mean": 1.2791325151920319,
+          "median": 1.2758182287216187,
+          "p95": 1.3143370032310486,
+          "sum": 194.42814230918884
+        }
+      },
+      "scorer_internal_seconds": 189.16385464702034,
+      "scores_sha256": "28073375132b3f2d9cea11a3c4ffdaf327ee5bd66759592fbb4f4a1496dde39f",
+      "stage_memory_sha256": "e49b782db1f02e1a630a6cf1d914b6d9a681d711ac9b492328cc6349e9043475"
+    },
+    {
+      "allocator_scope": "Model-loading boundaries only; full scoring allocator peak unrecorded.",
+      "arm": "bf16",
+      "cache": null,
+      "cache_bytes": 0,
+      "complete_stage_seconds": 219.4599015179556,
+      "full_scoring_allocator_peak_bytes": null,
+      "host_incomplete_samples": 0,
+      "name": "score_07_bf16_cache_0",
+      "sampled_memory": {
+        "device_peak_bytes": 19971375104,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 5185514496,
+        "host_rss_sum_peak_bytes": 5296488448,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 217.54729390144348,
+        "owned_device_process_peak_bytes": 19237175296,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 170,
+        "sampling_gap_seconds": {
+          "count": 169,
+          "maximum": 1.638099193572998,
+          "mean": 1.2872620940913815,
+          "median": 1.2794101238250732,
+          "p95": 1.3630159378051756,
+          "sum": 217.54729390144348
+        }
+      },
+      "scorer_internal_seconds": 213.1547774169594,
+      "scores_sha256": "48116a22a7417e658e5729911f0ad6877e1749d6ee9dc4150d6722a58b080311",
+      "stage_memory_sha256": "ff3879c42872a30be39c715577f16925ffebd52b0b7233baf107dd33e24ee64a"
+    }
+  ],
+  "correctness": {
+    "actual_host_fixture_failures_errors_skips": 0,
+    "actual_host_fixture_tests": 13,
+    "all8_scoring_phases_host_samples_complete": true,
+    "checkpoint_payload_files_unchanged": 28,
+    "checkpoints_unchanged": 4,
+    "cross_precision_inputs_masks_media_tokens_exact": true,
+    "rows_recomputed": 512,
+    "within_precision_scores_and_semantic_identities_exact": true
+  },
+  "descriptive_timing": {
+    "bf16": {
+      "geometric_mean_ratio": 0.5587583888773623,
+      "paired_cached_over_uncached_ratios": [
+        0.5097459047563003,
+        0.612483463285669
+      ]
+    },
+    "nf4": {
+      "geometric_mean_ratio": 0.55189362067387,
+      "paired_cached_over_uncached_ratios": [
+        0.5239822924573443,
+        0.5812917209703398
+      ]
+    }
+  },
+  "hardware": {
+    "accelerator": "NVIDIA A100-SXM4-80GB",
+    "allocated_logical_cpus": 16,
+    "gpus": 1,
+    "host_memory_limit_gib": 64,
+    "physical_cpu_cores": 8
+  },
+  "host_sampler": {
+    "actual_kernel": "5.15.0-1032-oracle",
+    "preserved_incomplete_samples": [
+      {
+        "errors": [
+          "live_or_unknown_memory_unreadable",
+          "membership_transition_retry_exhausted",
+          "unproven_live_thread_memory"
+        ],
+        "host_pss_complete": false,
+        "index": 2,
+        "raw_line_sha256": "e8ab60515e679d990752bc9558c205d34909c320365458a28072625b502ffd6b",
+        "stage": "verify_actual_v5_host_fixtures"
+      }
+    ],
+    "raw_samples_rederived": 1086,
+    "whole_allocation_complete": false
+  },
+  "limitations": [
+    "Exposed development prefix; runtime-only, no quality selection.",
+    "Two counterbalanced repeats per arm in one allocation; no general speed claim or default promotion.",
+    "Stage timers include process startup/load/hash/cold cache/scoring/exit; allocation costs and all failed attempts remain additional scope.",
+    "No full training-to-quality target measured; no host memory pass inferred from this report.",
+    "Cache cap describes retained CPU entries only; complete host residency is not proven.",
+    "All eight cells are fresh processes but filesystem-cache warmth is uncontrolled.",
+    "No full development584, native55 artifact compatibility, training throughput or time-to-quality inference.",
+    "Default cache remains disabled; this report does not change any selection or admission.",
+    "The retained-entry cache limit does not bound total worker/process memory or filesystem cache.",
+    "GPU-process and host peaks are sampled lower bounds; full-scoring allocator peaks remain unrecorded.",
+    "The one incomplete fixture-stage row remains incomplete; no claim of complete allocation-wide host readings."
+  ],
+  "native_revision": "1ac6a7ff975c3e7a2f8851b7495104ca9a1b1b77",
+  "native_wheel_sha256": "4b634e70f07968b3df0c69d2c5815179bbdd4bd84385ca05249cb97addaff400",
+  "plan_sha256": "247ae92fc8ca20c889fb92cd55cff8d66a918beb52b7d1f879d1353862daab6d",
+  "protocol": "cosmos.native-qlora-scorer-cache-evidence.v1",
+  "release_qualified": false,
+  "scope": "Runtime-only exposed development prefix:64 rows,one recording group,four media. No quality selection or full-development/training-speed claim.",
+  "source_sha256": {
+    "actual_host_fixture_proof": "554b68f0519f123ae2811e3e440d0a29c41e2cb4d1ec90bf49d1f98670813771",
+    "final_replay": "d8fd59f0465aef3696efaf6afc74505adb90ecedc2cbbec698e11cebe34d9217",
+    "producer_parity": "315223aa77525b5aead9483357fd941c58fa22ce23afc6efc36d11654ab1a3e3",
+    "scientific_replay": "fc1044ca7adb2e9a7e92fcc51eb4f642a287fe33347ea8aba69233eebf815d2e",
+    "terminal_capture": "61a3c66fdfb3a79aad4e4fe499f051a696d6350bc3ff042bf2b52546fa4ef352"
+  },
+  "versions": {
+    "accelerate": "1.13.0",
+    "bitsandbytes": "0.49.2",
+    "safetensors": "0.8.0",
+    "torch": "2.11.0+cu128",
+    "torchcodec": "0.11.0+cpu",
+    "torchvision": "0.26.0+cu128",
+    "transformers": "5.8.1"
+  },
+  "workflow_receipt_sha256": "38c469ef555df354c2b92ba63ab797eb6ed6bf08d6d1e0893b38996d4fab9b2e"
+}
