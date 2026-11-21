@@ -11,6 +11,7 @@ OpenCV camera-to-world frame (meters), without per-camera recentering.
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import os
@@ -19,18 +20,10 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, TypedDict, cast
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import torch
 
-from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
-from cosmos_framework.utils import log
+from cosmos_framework.data.generator.multiview import camera_geometry_contract
 from cosmos_framework.data.generator.multiview.camera_geometry_contract import (
-    CAMERA_CALIBRATION_SCHEMA,
-    CAMERA_CALIBRATION_SCHEMA_V1_1,
-    POSE_SCHEMA,
-    TIMESTAMPS_SCHEMA,
-    TIMESTAMPS_SCHEMA_V1_1,
     Matrix4,
     QuaternionXyzw,
     normalize_quaternion_xyzw,
@@ -41,8 +34,14 @@ from cosmos_framework.data.generator.multiview.camera_geometry_native import (
     MADS_FULL_FRAME_EXPORT,
     mads_media_from_calibration,
 )
+from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.model.generator.utils.camera_rays import SUPPORTED_RAY_CAMERA_MODELS, validate_token_geometry
+from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.video_preprocess import resize_and_crop_affine
+from cosmos_framework.utils.optional_import import optional_import
+
+pa = optional_import("pyarrow")
+pq = optional_import("pyarrow.parquet")
 
 SOURCE_GEOMETRY_KEY = "_camera_geometry_source"
 SOURCE_FPS_KEY = "_camera_source_fps"
@@ -236,11 +235,16 @@ def format_camera_geometry_captions(captions: object, geometry: dict[str, Any]) 
     return AddCameraGeometryToCaption()({"ai_caption": captions, "camera_geometry": geometry})["ai_caption"]
 
 
-_SIDECAR_SCHEMAS: dict[str, tuple[pa.Schema, ...]] = {
-    "calibration": (CAMERA_CALIBRATION_SCHEMA, CAMERA_CALIBRATION_SCHEMA_V1_1),
-    "pose": (POSE_SCHEMA,),
-    "timestamps": (TIMESTAMPS_SCHEMA, TIMESTAMPS_SCHEMA_V1_1),
-}
+@functools.cache
+def _sidecar_schemas() -> dict[str, tuple[pa.Schema, ...]]:
+    # Resolved on first use: the contract module builds its pyarrow schemas lazily so that
+    # importing this module (and the reasoner config graph above it) needs no pyarrow.
+    contract = camera_geometry_contract
+    return {
+        "calibration": (contract.CAMERA_CALIBRATION_SCHEMA, contract.CAMERA_CALIBRATION_SCHEMA_V1_1),
+        "pose": (contract.POSE_SCHEMA,),
+        "timestamps": (contract.TIMESTAMPS_SCHEMA, contract.TIMESTAMPS_SCHEMA_V1_1),
+    }
 
 
 def _without_list_item_names(schema: pa.Schema) -> pa.Schema:
@@ -258,11 +262,11 @@ def _without_list_item_names(schema: pa.Schema) -> pa.Schema:
 def _match_sidecar_schema(role: str, table_schema: pa.Schema) -> pa.Schema | None:
     metadata = table_schema.metadata or {}
     fields = _without_list_item_names(table_schema)
-    for schema in _SIDECAR_SCHEMAS[role]:
+    for schema in _sidecar_schemas()[role]:
         if not fields.equals(_without_list_item_names(schema), check_metadata=False):
             continue
         expected = (schema.metadata or {}).items()
-        if schema is CAMERA_CALIBRATION_SCHEMA:
+        if schema is camera_geometry_contract.CAMERA_CALIBRATION_SCHEMA:
             # Static camera calibration has no version-specific interpretation beyond
             # its exact Arrow fields.  Older Lance exports may omit only the canonical
             # schema metadata, so accept that bounded legacy form while still rejecting
@@ -340,7 +344,9 @@ def read_camera_sidecars(
             if len(rows) != 1:
                 raise ValueError(f"Expected one static calibration for {stream_id}")
             source.calibration = (
-                _calibration_from_v1_1(rows[0]) if schema is CAMERA_CALIBRATION_SCHEMA_V1_1 else rows[0]
+                _calibration_from_v1_1(rows[0])
+                if schema is camera_geometry_contract.CAMERA_CALIBRATION_SCHEMA_V1_1
+                else rows[0]
             )
             _validate_calibration(source.calibration)
             continue

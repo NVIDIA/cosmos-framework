@@ -31,7 +31,7 @@ from cosmos_framework.inference.common.config import (
 )
 from cosmos_framework.inference.common.init import init_output_dir, is_rank0
 from cosmos_framework.trainer import ImaginaireTrainer
-from cosmos_framework.utils import log
+from cosmos_framework.utils import log, win_compat
 from cosmos_framework.utils.flags import SMOKE
 
 if TYPE_CHECKING:
@@ -120,8 +120,15 @@ def train(args: Args) -> None:
         effective_output_dir.mkdir(parents=True, exist_ok=True)
         symlink_path = effective_output_dir / "job"
         if symlink_path.is_symlink() or symlink_path.exists():
-            os.remove(symlink_path)
-        os.symlink(job_dir, symlink_path)
+            # os.remove off Windows; there a junction may need rmdir. Never recursive.
+            win_compat.remove_dir_link(symlink_path)
+        # os.symlink off Windows. Creating a symlink on Windows requires Developer
+        # Mode or SeCreateSymbolicLinkPrivilege; neither is guaranteed. There link_dir
+        # falls back to a directory junction and then to a pointer file so a
+        # convenience alias never aborts the run.
+        strategy = win_compat.link_dir(job_dir, symlink_path)
+        if strategy != "symlink":
+            log.warning(f"Could not symlink {symlink_path} -> {job_dir}; used {strategy} instead.")
     if torch.distributed.is_initialized():
         torch.distributed.barrier()
 

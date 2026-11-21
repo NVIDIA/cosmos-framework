@@ -34,7 +34,6 @@ from accelerate import init_on_device
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
 
 import cosmos_framework.model.generator.reasoner.cosmos3_edge  # noqa: F401  registers cosmos3_edge with transformers Auto classes
-from cosmos_framework.utils import log
 from cosmos_framework.model.generator.context_parallel import ContextParallelBatchPolicy, ContextParallelModelSpec
 from cosmos_framework.model.generator.reasoner.qwen3_vl_fused_ce import configure_qwen3_vl_fused_ce
 from cosmos_framework.model.generator.reasoner.qwen35_caption import (
@@ -43,6 +42,7 @@ from cosmos_framework.model.generator.reasoner.qwen35_caption import (
     named_parameters_with_qwen35_decay,
 )
 from cosmos_framework.model.generator.utils.safetensors_loader import load_language_model, load_vlm_model
+from cosmos_framework.utils import log, win_compat
 from cosmos_framework.utils.generator.input_probe import maybe_dump_pre_forward
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
@@ -295,6 +295,9 @@ class HFModel(nn.Module):
         qwen3_vl_accumulate_head_grad_fp32: bool = True,
     ):
         super().__init__()
+        # No FlashAttention build exists for Windows and cuDNN has no varlen integration, so the
+        # cosmos adapter's vision-tower path has no backend there; win_compat maps it to sdpa.
+        attn_implementation = win_compat.attention_implementation(attn_implementation)
         self.context_parallel_batch_policy: ContextParallelBatchPolicy | None = None
         self.model_name_or_path = model_name_or_path
         self.configured_model_name_or_path = configured_model_name_or_path or model_name_or_path

@@ -26,7 +26,8 @@ from cosmos_framework.utils.safe_unpickle import safe_loads
 
 # Globals referenced by a DCP ``.metadata`` pickle: the metadata dataclasses, the filesystem storage
 # info, the torch types that describe tensors, and the checkpoint id path (``pathlib._local`` on
-# Python >= 3.13).
+# Python >= 3.13). The path is the concrete class of the platform that wrote the checkpoint:
+# ``PosixPath``, or ``WindowsPath`` for a checkpoint saved on Windows.
 DCP_METADATA_PICKLE_GLOBALS = frozenset(
     {
         ("torch.distributed.checkpoint.metadata", "Metadata"),
@@ -42,6 +43,8 @@ DCP_METADATA_PICKLE_GLOBALS = frozenset(
         ("torch.serialization", "_get_layout"),
         ("pathlib", "PosixPath"),
         ("pathlib._local", "PosixPath"),
+        ("pathlib", "WindowsPath"),
+        ("pathlib._local", "WindowsPath"),
         *(
             ("torch", str(dtype).removeprefix("torch."))
             for dtype in vars(torch).values()

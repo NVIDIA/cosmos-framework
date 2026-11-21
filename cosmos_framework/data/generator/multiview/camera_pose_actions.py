@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
 import torch
 
 from cosmos_framework.data.generator.action.utils.action_processing import (
@@ -42,6 +40,10 @@ from cosmos_framework.data.generator.action.utils.unified_action_schema import (
     RIGHT_WRIST_POSE,
     UNIFIED_ACTION_DIM,
 )
+from cosmos_framework.utils.optional_import import optional_import
+
+pa = optional_import("pyarrow")
+pq = optional_import("pyarrow.parquet")
 
 # Per-sample camera-to-source-stream mapping, carried from the source through the
 # augmentation chain. A sidecar's rows are stamped with the source stream ID, which a
