@@ -367,8 +367,8 @@ post-maintenance Lustre ctime bumps abort the native stat-identity checks.
 - BF16 missed the target and worsened four axes.
 - Both arms got worse at update 100 before improving at 200.
 
-Under the preregistered rule, no rollout was run. The prepared single-policy rollout packet
-(`gr00t-head-lora-rollout-e64a735-v1`) is retained unsubmitted.
+Under the preregistered rule, no rollout was run at the time. The prepared single-policy rollout packet
+(`gr00t-head-lora-rollout-e64a735-v1`) was retained unsubmitted; see the user-override rollout below.
 
 **The memory claim is met.** The NF4 head-adapter training peak of 11.926 GiB is 19.59 GiB (62%)
 below the 31.516 GiB BF16 full-head baseline; the matched BF16 head-adapter arm used 13.049 GiB.
@@ -377,6 +377,47 @@ short-phase sampling gaps as earlier screens; sampled peaks are lower bounds. Th
 from a different build (`4cba88f`) and a 300-update horizon, and almost all of the saving comes
 from not training the 1.6B-parameter FP32 head. The NF4-only increment over BF16 head adapters is
 1.12 GiB. Both arms passed fresh 160-row portable parity. The job used 27 minutes on one A100.
+
+#### Head-LoRA rollout under user override (2026-11-21)
+
+On 2026-11-21 the user asked to "submit the GR00T head-LoRA rollout". This overrides the
+screen-pass admission rule above. **The offline screen failure stands and is not waived.**
+
+Packet `gr00t-head-lora-rollout-e64a735-v2` (protocol `8fa7e2ac…`) differs from v1 only in that
+change. It admits the policy while recording `screen_passed = false` and `screen_quality_passed = false`
+in `screen_override`, in both the admission and acceptance records. Every other admission check
+stays enforced: screen science SHA, a complete uninterrupted 200-update NF4 arm, inventory, and
+training contract.
+
+The setup was fixed before outcomes:
+- **Policy:** NF4 head-LoRA at fixed update 200; not selected for quality.
+- **Cases:** the 400 step-3a cases (`libero_spatial` tasks 0-9 × init states 10-49), rollout seed 17,
+  profile `gr00t_qlora_spatial_8_v1`.
+- **Reference:** BF16 LoRA + full head, seed 17 (`38705843`).
+- **Bar:** the user's practical bar, a point success loss of at most 10 points.
+
+There were three attempts. The first two were packaging errors that stopped before any rollout,
+and neither fix depended on outcomes:
+- `38818257` (97 s): the packet had never been sealed and was missing its file manifest.
+- `38818325` (109 s): admission passed. The EGL preflight copied from the `3c96ce8` rollout still
+  pinned that build's native manifest and revision. Only those two constants were repinned to
+  `e64a735`.
+- `38818425` (4,420 s): completed.
+
+| Policy | Successes | Rate | Per-task (of 40, tasks 0-9) |
+|---|---:|---:|---|
+| BF16 LoRA + full head (`38705843`) | 391/400 | 97.75% | 40 40 40 40 38 38 40 40 40 35 |
+| NF4 head-LoRA, update 200 (`38818425`) | 390/400 | 97.50% | 40 40 40 39 38 38 40 38 39 38 |
+
+**The practical bar is met: a 0.25-point success loss** (analysis SHA-256 `2ce7b51d…`). NF4
+head-LoRA lost one or two episodes on tasks 3, 7 and 8, and gained three on task 9. Host and GPU
+sampling were complete over 3,297 samples.
+
+Scope: one training seed and the exposed development tasks, not real-robot behavior. The
+per-axis offline regressions (y +2.3%, roll +3.2% against the source) did not translate into a
+closed-loop success loss on these cases. With this rollout, the NF4 head-LoRA recipe pairs a
+19.6 GiB training-memory saving with preserved simulated success. It is promoted under the user's
+practical bar, not under the original offline screen.
 
 The subsequent source-versus-update-200 component diagnostic (`38624956`,
 361 GPU-seconds) completed all 84 native calls in both precision arms. Independent
