@@ -20,7 +20,8 @@
 #   EXPERIMENT               suturebot_fd (default) or suturebot_fd_smoke
 #   SMOKE=1                  1 GPU, 2-layer model (COSMOS_SMOKE=1), suturebot_fd_smoke, no base checkpoint
 #   NPROC_PER_NODE           GPUs per node (default 8)
-#   NNODES, NODE_RANK, MASTER_ADDR, MASTER_PORT   multi-node (torchrun)
+#   NNODES, NODE_RANK, MASTER_ADDR, MASTER_PORT   multi-node (torchrun); MASTER_PORT/MASTER_ADDR are taken
+#                            from the environment when set (default port 50012)
 #   EXTRA_OVERRIDES          space-separated Hydra overrides, e.g. "trainer.max_iter=500"
 #   WANDB_API_KEY            with EXTRA_OVERRIDES="job.wandb_mode=online"
 #
@@ -51,8 +52,10 @@ else
     OVERRIDES+=(checkpoint.load_path="$BASE_CHECKPOINT_PATH")
 fi
 : "${NPROC_PER_NODE:=8}"
-WORLD_SIZE=$(( NPROC_PER_NODE * ${NNODES:-1} ))
-OVERRIDES+=(model.config.parallelism.data_parallel_shard_degree="$WORLD_SIZE")
+# Total GPU count. Not named WORLD_SIZE: SLURM/pyxis hooks of NGC PyTorch containers (and some other
+# schedulers) export WORLD_SIZE, and assigning to it would leak into export_config below.
+NUM_GPUS=$(( NPROC_PER_NODE * ${NNODES:-1} ))
+OVERRIDES+=(model.config.parallelism.data_parallel_shard_degree="$NUM_GPUS")
 # shellcheck disable=SC2206
 OVERRIDES+=(${EXTRA_OVERRIDES:-})
 
@@ -71,8 +74,11 @@ LOG_DIR="$IMAGINAIRE_OUTPUT_ROOT/logs"
 CONFIG_YAML="$IMAGINAIRE_OUTPUT_ROOT/configs/$EXPERIMENT.yaml"
 mkdir -p "$LOG_DIR" "$(dirname "$CONFIG_YAML")"
 
-echo ">>> $(date '+%H:%M:%S') experiment $EXPERIMENT on $WORLD_SIZE GPU(s); data $OPENH_DATA_ROOT/suturebot"
-python -m cosmos_framework.scripts.export_config -o "$CONFIG_YAML" \
+echo ">>> $(date '+%H:%M:%S') experiment $EXPERIMENT on $NUM_GPUS GPU(s); data $OPENH_DATA_ROOT/suturebot"
+# export_config is a single process: with an inherited WORLD_SIZE > 1 it would wait in
+# init_process_group for ranks that never start. torchrun below sets the per-rank variables itself.
+env -u WORLD_SIZE -u RANK -u LOCAL_RANK -u LOCAL_WORLD_SIZE \
+    python -m cosmos_framework.scripts.export_config -o "$CONFIG_YAML" \
     --config-file suturebot_fd/config.py --experiment "$EXPERIMENT"
 
 TORCHRUN_ARGS=(--nproc_per_node="$NPROC_PER_NODE" --master_port="${MASTER_PORT:-50012}")
