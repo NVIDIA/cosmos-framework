@@ -1,0 +1,30 @@
+[cosmos] job record cosmos3-reasoner-train-a19f03 slurm 4815390 nodes=gpu-b[031-032] gpus_per_node=8
+[cosmos] container preflight OK: annotations, media, prepared model, results and checkpoints readable
+[cosmos] torchrun --nnodes=2 --nproc-per-node=8 -m cosmos_framework.scripts.train --sft-toml=/spec/sft.toml
+[rank0]: epoch 1 step 450/1350 loss 1.301 lr 1.00e-05 tokens/s 50412
+[rank0]: epoch 2 step 900/1350 loss 1.122 lr 1.00e-05 tokens/s 50377
+[rank0]: checkpoint saved: /lustre/cosmos/checkpoints/cosmos3-reasoner-train-a19f03/iter_000000900
+[rank11]: Traceback (most recent call last):
+[rank11]:   File "/workspace/cosmos_framework/trainer/trainer.py", line 612, in train_step
+[rank11]:     loss = self.model.training_step(batch)
+[rank11]:   File "/workspace/cosmos_framework/model/generator/reasoner/vlm_model.py", line 371, in training_step
+[rank11]:     outputs = self.model(**inputs)
+[rank11]: RuntimeError: CUDA error: unspecified launch failure
+[rank11]: CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+[rank4]:[E1115 15:37:41.552019 ProcessGroupNCCL.cpp:1664] [PG ID 0 PG GUID 0(default_pg) Rank 4] Process group watchdog thread terminated with exception: NCCL error: unhandled system error (run with NCCL_DEBUG=INFO for details), NCCL version 2.27.7
+[rank4]: ncclSystemError: System call (e.g. socket, malloc) or external library call failed or device error.
+[rank4]: Last error: Cuda failure 'unspecified launch failure'
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError:
+============================================================
+cosmos_framework.scripts.train FAILED
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-11-15_15:37:42
+  host      : gpu-b032
+  rank      : 11 (local_rank: 3)
+  exitcode  : 1 (pid: 98812)
+============================================================
+srun: error: gpu-b032: task 1: Exited with exit code 1
+[cosmos] cleanup: syncing partial results to /lustre/cosmos/results/cosmos3-reasoner-train-a19f03
+[cosmos] cleanup complete

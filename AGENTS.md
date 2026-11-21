@@ -77,6 +77,8 @@ For a per-subpackage tour with descriptions, see [`docs/code_structure.md`](./do
 
 Agent skills (codebase navigation, env troubleshooting, inference, post-training, setup) live in [`.agents/skills/`](./.agents/skills) and [`.claude/skills/`](./.claude/skills).
 
+Managed (Docker/SLURM/Kubernetes/Brev) workflows for those skills use the helpers in [`tools/cosmos_workflows/`](./tools/cosmos_workflows/README.md).
+
 ## Common Tasks
 
 AutoML uses the [`cosmos-automl`](./.agents/skills/cosmos-automl/SKILL.md) skill

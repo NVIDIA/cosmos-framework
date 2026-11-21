@@ -1,0 +1,44 @@
+[
+  {
+    "id": "robovqa-14989971876239671643",
+    "video": "14989971876239671643.mp4",
+    "conversations": [
+      {
+        "from": "human",
+        "value": "<video>\nwhat action is possible right now?"
+      },
+      {
+        "from": "gpt",
+        "value": "drop the brown sachet in the plastic glass"
+      }
+    ]
+  },
+  {
+    "id": "robovqa-294863854345401650",
+    "video": "294863854345401650.mp4",
+    "conversations": [
+      {
+        "from": "human",
+        "value": "<video>\nimmediate next step?"
+      },
+      {
+        "from": "gpt",
+        "value": "done"
+      }
+    ]
+  },
+  {
+    "id": "robovqa-8217664127105486720",
+    "video": "8217664127105486720.mp4",
+    "conversations": [
+      {
+        "from": "human",
+        "value": "<video>\nwhat just happened?"
+      },
+      {
+        "from": "gpt",
+        "value": "Put the orange pen in the penholder"
+      }
+    ]
+  }
+]

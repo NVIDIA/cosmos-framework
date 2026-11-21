@@ -1,0 +1,34 @@
+[cosmos] job record cosmos3-reasoner-train-7c41d2 slurm 4815162 nodes=gpu-a[017-018] gpus_per_node=8
+[cosmos] container preflight OK: annotations, media, prepared model, results and checkpoints readable
+[cosmos] torchrun --nnodes=2 --nproc-per-node=8 -m cosmos_framework.scripts.train --sft-toml=/spec/sft.toml
+[rank0]: epoch 1 step 400/1350 loss 1.284 lr 1.00e-05 tokens/s 51234
+[rank0]: epoch 2 step 520/1350 loss 1.197 lr 1.00e-05 tokens/s 50987
+../aten/src/ATen/native/cuda/IndexKernel.cu:92: operator(): block: [113,0,0], thread: [64,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.
+../aten/src/ATen/native/cuda/IndexKernel.cu:92: operator(): block: [113,0,0], thread: [65,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.
+[rank5]: Traceback (most recent call last):
+[rank5]:   File "/workspace/cosmos_framework/scripts/train.py", line 214, in <module>
+[rank5]:     main()
+[rank5]:   File "/workspace/cosmos_framework/trainer/trainer.py", line 612, in train_step
+[rank5]:     loss = self.model.training_step(batch)
+[rank5]:   File "/workspace/cosmos_framework/model/generator/reasoner/vlm_model.py", line 388, in training_step
+[rank5]:     labels = batch["labels"].masked_fill(ignore_mask, IGNORE_INDEX)
+[rank5]: RuntimeError: CUDA error: device-side assert triggered
+[rank5]: CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+[rank5]: For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+[rank2]:[E1114 08:44:51.902118 ProcessGroupNCCL.cpp:632] [Rank 2] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=48211, OpType=ALLREDUCE, NumelIn=262144, NumelOut=262144, Timeout(ms)=600000) ran for 600043 milliseconds before timing out.
+[rank9]:[E1114 08:44:51.902377 ProcessGroupNCCL.cpp:632] [Rank 9] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=48211, OpType=ALLREDUCE, NumelIn=262144, NumelOut=262144, Timeout(ms)=600000) ran for 600051 milliseconds before timing out.
+[rank2]:[E1114 08:44:52.110231 ProcessGroupNCCL.cpp:1664] [PG ID 0 PG GUID 0(default_pg) Rank 2] Process group watchdog thread terminated with exception: NCCL error: unhandled cuda error (run with NCCL_DEBUG=INFO for details)
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError:
+============================================================
+cosmos_framework.scripts.train FAILED
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-11-14_08:44:53
+  host      : gpu-a017
+  rank      : 5 (local_rank: 5)
+  exitcode  : 1 (pid: 211873)
+============================================================
+srun: error: gpu-a017: task 0: Exited with exit code 1
+[cosmos] cleanup: syncing partial results to /lustre/cosmos/results/cosmos3-reasoner-train-7c41d2
+[cosmos] cleanup complete

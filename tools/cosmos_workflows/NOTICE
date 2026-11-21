@@ -4,3 +4,7 @@ Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 The original license is preserved in LICENSE and individual source headers.
 The helpers are maintained here and do not require the source repository.
+
+The full workflow bundle records original paths and hashes in migration.json.
+Native runtime attribution is maintained separately in
+cosmos_framework/licenses/workflows/ at the repository root and in the wheel.

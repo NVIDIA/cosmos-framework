@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# CPU tests for the native workflow runtimes (dataset formats, reasoner
+# inference/serving adapters, checkpoint helpers). They stub torch and model
+# loading, so they run without a GPU or the training stack.
+name: Workflow runtime
+on:
+  pull_request:
+    paths:
+      - 'cosmos_framework/data/reasoner/**'
+      - 'cosmos_framework/inference/reasoner/**'
+      - 'cosmos_framework/checkpoint/**'
+      - 'cosmos_framework/evaluation/reasoner/**'
+      - 'cosmos_framework/scripts/dataset.py'
+      - 'cosmos_framework/scripts/inference_reasoner.py'
+      - 'cosmos_framework/scripts/quantize_reasoner.py'
+      - 'cosmos_framework/scripts/serve_reasoner.py'
+      - 'cosmos_framework/utils/workflow_status.py'
+      - 'docker/**'
+      - 'tests/workflow_runtime/**'
+      - '.github/workflows/workflow-runtime.yml'
+      - '.pytest.toml'
+      - 'pyproject.toml'
+      - 'cosmos_framework/licenses/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - 'cosmos_framework/data/reasoner/**'
+      - 'cosmos_framework/inference/reasoner/**'
+      - 'cosmos_framework/checkpoint/**'
+      - 'cosmos_framework/evaluation/reasoner/**'
+      - 'cosmos_framework/scripts/dataset.py'
+      - 'cosmos_framework/scripts/inference_reasoner.py'
+      - 'cosmos_framework/scripts/quantize_reasoner.py'
+      - 'cosmos_framework/scripts/serve_reasoner.py'
+      - 'cosmos_framework/utils/workflow_status.py'
+      - 'docker/**'
+      - 'tests/workflow_runtime/**'
+      - '.github/workflows/workflow-runtime.yml'
+      - '.pytest.toml'
+      - 'pyproject.toml'
+      - 'cosmos_framework/licenses/workflows/**'
+permissions:
+  contents: read
+jobs:
+  cpu-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest jsonschema fastapi httpx
+      # --noconftest skips the root conftest, which imports the full training stack.
+      - name: Test workflow runtimes without GPU dependencies
+        run: python -m pytest -o addopts= --noconftest tests/workflow_runtime docker/dockerfile_test.py
