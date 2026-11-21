@@ -676,6 +676,7 @@ def generate_multiview_caption_chunks(
                         outputs["vision"][-1],
                         sample_n_views,
                         chunk_frame_count,
+                        assemble_on_cpu=True,
                     )
                 )
                 / 2
