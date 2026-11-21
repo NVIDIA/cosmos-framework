@@ -481,6 +481,10 @@ class TrainerConfig:
     prefetch_validation: bool = False
     # Whether to run the validation on the start of the training.
     run_validation_on_start: bool = False
+    # If set, every validation reseeds the Python, NumPy and torch RNGs (seed + rank) and restores the training RNG
+    # state afterwards, so each validation scores the same samples, frame windows, noise and timesteps. None keeps
+    # the RNG running through validation.
+    validation_seed: int | None = None
     # Kill the process after N seconds since the last iteration (usually means dead job).
     timeout_period: int = 999999999
     # Tensor memory organization format.

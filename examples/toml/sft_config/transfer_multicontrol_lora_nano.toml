@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# transfer_multicontrol_lora_nano: one Cosmos3-Nano LoRA for image->video, seg->video and depth->video
+# (three streams in one run, 720p, 1 x 8 GPUs). Recipe: docs/transfer_multicontrol_lora_nano.md.
+# Experiment: cosmos_framework/configs/base/experiment/sft/transfer_multicontrol_lora_nano.py.
+#
+# Env: DATASET_PATH (vision/seg/depth + val_*.jsonl), BASE_CHECKPOINT_PATH (DCP), WAN_VAE_PATH.
+# Iterations: the reference run used a 200-step cosine schedule and had its lowest validation loss at
+# iteration 150, so this file stops there on the same schedule (max_iter 150, cycle_lengths 200) and
+# reproduces that checkpoint. For another dataset, scale both with its size: the vision stream sees 3 clips
+# per iteration on 8 GPUs, so 5 x clips / 3 iterations is about 5 passes over the data.
+
+[job]
+task       = "vfm"
+experiment = "transfer_multicontrol_lora_nano"
+project    = "cosmos3"
+group      = "sft"
+name       = "transfer_multicontrol_lora_nano"
+wandb_mode = "disabled"
+
+[model]
+precision                    = "bfloat16"
+max_num_tokens_after_packing = 45056     # one 150-frame or 61-frame 720p sample per GPU
+joint_attn_implementation    = "two_way"
+lora_enabled                 = true
+lora_rank                    = 32
+lora_alpha                   = 64
+# Generation tower only: attention + MLP. Path-qualified MLP names so the understanding tower's
+# mlp.*_proj are not matched.
+lora_target_modules          = "q_proj_moe_gen,k_proj_moe_gen,v_proj_moe_gen,o_proj_moe_gen,mlp_moe_gen.gate_proj,mlp_moe_gen.up_proj,mlp_moe_gen.down_proj"
+
+[model.ema]
+enabled = false
+
+[model.parallelism]
+data_parallel_shard_degree     = -1
+data_parallel_replicate_degree = 1
+
+[model.compile]
+enabled = false
+
+# Measured on 8x A100-80GB: selective peaks at 46 GB (p50) / 51 GB (p95) per GPU at 74.6 s/iter; with no
+# activation checkpointing the first step needs more than 80 GB.
+[model.activation_checkpointing]
+mode = "selective"
+
+[model.tokenizer]
+vae_path = "${oc.env:WAN_VAE_PATH}"
+
+[optimizer]
+betas          = [0.9, 0.95]
+eps            = 1.0e-6
+fused          = true
+keys_to_select = ["lora_"]
+lr             = 5.0e-4
+weight_decay   = 0
+
+[scheduler]
+cycle_lengths      = [200]     # schedule length of the reference run; training stops at max_iter
+f_max              = [1.0]
+f_min              = [0.0]
+f_start            = [0.0]
+verbosity_interval = 0
+warm_up_steps      = [50]
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter         = 1
+logging_iter            = 10
+max_iter                = 150
+
+[trainer.callbacks.compile_tokenizer]
+enabled = false
+
+[trainer.callbacks.grad_clip]
+clip_norm    = 0.1
+force_finite = true
+
+[checkpoint]
+keys_to_skip_loading = ["net_ema.", "lora_"]
+load_path            = "${oc.env:BASE_CHECKPOINT_PATH}"
+save_iter            = 25
+
+[dataloader_train]
+max_sequence_length = 45056
+max_caption_tokens  = 2048

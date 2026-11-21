@@ -100,6 +100,7 @@ def make_config() -> Config:
     import cosmos_framework.configs.base.experiment.action.posttrain_config.action_policy_robocasa_nano  # noqa: F401
     import cosmos_framework.configs.base.experiment.action.posttrain_config.action_fd_droid_posttrain  # noqa: F401
     import cosmos_framework.configs.base.experiment.sft.vision_sft_nano  # noqa: F401
+    import cosmos_framework.configs.base.experiment.sft.transfer_multicontrol_lora_nano  # noqa: F401
     import cosmos_framework.configs.base.experiment.sft.vision_sft_super  # noqa: F401
     import cosmos_framework.configs.base.experiment.sft.vision_sft_edge  # noqa: F401
 

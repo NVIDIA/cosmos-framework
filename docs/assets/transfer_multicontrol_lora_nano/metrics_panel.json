@@ -1,0 +1,265 @@
+{
+ "settings": {
+  "every": 2,
+  "models": [
+   "base",
+   "lora"
+  ]
+ },
+ "summary": {
+  "vineyard": {
+   "depth": {
+    "base": {
+     "psnr": {
+      "mean": 12.3097,
+      "std": 1.4569
+     },
+     "ssim": {
+      "mean": 0.3861,
+      "std": 0.0398
+     },
+     "lpips": {
+      "mean": 0.4757,
+      "std": 0.0456
+     },
+     "sat_gap": {
+      "mean": 66.9602,
+      "std": 22.7806
+     },
+     "bright_gap": {
+      "mean": 49.0899,
+      "std": 8.9445
+     },
+     "motion_ratio": {
+      "mean": 1.1302,
+      "std": 0.2823
+     },
+     "clips": 6
+    },
+    "lora": {
+     "psnr": {
+      "mean": 15.3215,
+      "std": 0.8355
+     },
+     "ssim": {
+      "mean": 0.4403,
+      "std": 0.0156
+     },
+     "lpips": {
+      "mean": 0.3335,
+      "std": 0.0285
+     },
+     "sat_gap": {
+      "mean": 31.101,
+      "std": 13.8981
+     },
+     "bright_gap": {
+      "mean": 20.5365,
+      "std": 6.3522
+     },
+     "motion_ratio": {
+      "mean": 1.8254,
+      "std": 0.3886
+     },
+     "clips": 6
+    },
+    "lora_better_on": {
+     "psnr": "5/6",
+     "ssim": "5/6",
+     "lpips": "6/6",
+     "sat_gap": "6/6",
+     "bright_gap": "6/6"
+    }
+   },
+   "i2v": {
+    "base": {
+     "psnr": {
+      "mean": 19.2658,
+      "std": 1.5638
+     },
+     "ssim": {
+      "mean": 0.5056,
+      "std": 0.0238
+     },
+     "lpips": {
+      "mean": 0.3325,
+      "std": 0.0627
+     },
+     "sat_gap": {
+      "mean": 2.5763,
+      "std": 1.3602
+     },
+     "bright_gap": {
+      "mean": 7.1858,
+      "std": 6.6276
+     },
+     "motion_ratio": {
+      "mean": 0.8125,
+      "std": 0.1343
+     },
+     "clips": 6
+    },
+    "lora": {
+     "psnr": {
+      "mean": 19.3903,
+      "std": 1.6829
+     },
+     "ssim": {
+      "mean": 0.4909,
+      "std": 0.0223
+     },
+     "lpips": {
+      "mean": 0.3183,
+      "std": 0.0604
+     },
+     "sat_gap": {
+      "mean": 2.0066,
+      "std": 1.1578
+     },
+     "bright_gap": {
+      "mean": 5.2315,
+      "std": 10.0022
+     },
+     "motion_ratio": {
+      "mean": 0.9554,
+      "std": 0.1542
+     },
+     "clips": 6
+    },
+    "lora_better_on": {
+     "psnr": "4/6",
+     "ssim": "0/6",
+     "lpips": "6/6",
+     "sat_gap": "4/6",
+     "bright_gap": "4/6"
+    }
+   },
+   "seg": {
+    "base": {
+     "psnr": {
+      "mean": 12.1265,
+      "std": 1.5316
+     },
+     "ssim": {
+      "mean": 0.3703,
+      "std": 0.0399
+     },
+     "lpips": {
+      "mean": 0.4663,
+      "std": 0.0257
+     },
+     "sat_gap": {
+      "mean": 70.9877,
+      "std": 19.5118
+     },
+     "bright_gap": {
+      "mean": 52.484,
+      "std": 8.038
+     },
+     "motion_ratio": {
+      "mean": 1.2352,
+      "std": 0.2055
+     },
+     "clips": 6
+    },
+    "lora": {
+     "psnr": {
+      "mean": 15.3002,
+      "std": 1.1674
+     },
+     "ssim": {
+      "mean": 0.4311,
+      "std": 0.0402
+     },
+     "lpips": {
+      "mean": 0.3317,
+      "std": 0.0138
+     },
+     "sat_gap": {
+      "mean": 28.7843,
+      "std": 9.0216
+     },
+     "bright_gap": {
+      "mean": 17.551,
+      "std": 8.2235
+     },
+     "motion_ratio": {
+      "mean": 1.811,
+      "std": 0.3457
+     },
+     "clips": 6
+    },
+    "lora_better_on": {
+     "psnr": "6/6",
+     "ssim": "6/6",
+     "lpips": "6/6",
+     "sat_gap": "6/6",
+     "bright_gap": "6/6"
+    }
+   },
+   "segdepth": {
+    "base": {
+     "psnr": {
+      "mean": 11.8216,
+      "std": 1.3939
+     },
+     "ssim": {
+      "mean": 0.3638,
+      "std": 0.0471
+     },
+     "lpips": {
+      "mean": 0.4627,
+      "std": 0.0313
+     },
+     "sat_gap": {
+      "mean": 73.5591,
+      "std": 17.3642
+     },
+     "bright_gap": {
+      "mean": 54.4587,
+      "std": 6.9448
+     },
+     "motion_ratio": {
+      "mean": 1.1347,
+      "std": 0.191
+     },
+     "clips": 6
+    },
+    "lora": {
+     "psnr": {
+      "mean": 15.6476,
+      "std": 1.2037
+     },
+     "ssim": {
+      "mean": 0.4442,
+      "std": 0.0185
+     },
+     "lpips": {
+      "mean": 0.3235,
+      "std": 0.037
+     },
+     "sat_gap": {
+      "mean": 30.7432,
+      "std": 13.4639
+     },
+     "bright_gap": {
+      "mean": 19.8519,
+      "std": 6.5966
+     },
+     "motion_ratio": {
+      "mean": 1.8109,
+      "std": 0.3731
+     },
+     "clips": 6
+    },
+    "lora_better_on": {
+     "psnr": "6/6",
+     "ssim": "6/6",
+     "lpips": "6/6",
+     "sat_gap": "6/6",
+     "bright_gap": "6/6"
+    }
+   }
+  }
+ }
+}

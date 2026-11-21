@@ -40,6 +40,13 @@ from cosmos_framework.utils.lazy_config import LazyConfig, instantiate
 from cosmos_framework.utils.serialization import to_yaml
 from cosmos_framework.utils.training_telemetry import telemetry
 
+# Loader workers hand samples to the trainer through shared memory. Recipes with very large samples (e.g. transfer
+# streams, ~1.35 GB per 61-frame 720p sample) can run out of file descriptors with torch's default fd-based sharing;
+# they set COSMOS_TORCH_SHARING_STRATEGY=file_system.
+if os.environ.get("COSMOS_TORCH_SHARING_STRATEGY"):
+    torch.multiprocessing.set_sharing_strategy(os.environ["COSMOS_TORCH_SHARING_STRATEGY"])
+
+
 # ---------------------------------------------------------------------------
 # --deterministic: mirrors launch_vfm.sh determinism settings.
 # ---------------------------------------------------------------------------
