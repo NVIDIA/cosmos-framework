@@ -92,7 +92,7 @@ def eval_polynomial_derivative(xs: np.ndarray, coeffs: np.ndarray) -> np.ndarray
     """Evaluates the derivative of polynomial coeffs [D,] at given points [N,] using Horner scheme"""
     ret = np.zeros(len(xs), dtype=xs.dtype)
 
-    for i, coeff in enumerate(reversed(coeffs[:-1])):
+    for i, coeff in enumerate(reversed(coeffs[1:])):
         ret = ret * xs + coeff * (len(coeffs) - 1 - i)
 
     return ret

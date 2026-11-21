@@ -999,13 +999,6 @@ def compute_fw_poly(
             result = result * x + c
         return result
 
-    def eval_polynomial_derivative(x: float, coeffs: list) -> float:
-        result = 0.0
-        n = len(coeffs)
-        for i, c in enumerate(reversed(coeffs[:-1])):
-            result = result * x + c * (n - 1 - i)
-        return result
-
     max_ray_angle_val = 0.0
     for i in range(1, DOMAIN_SAMPLE_COUNT + 1):
         next_angle = i * STEP_SIZE
@@ -1096,6 +1089,15 @@ def eval_polynomial(xs: np.ndarray, coeffs: np.ndarray) -> np.ndarray:
         ret = ret * xs + coeff
 
     return ret
+
+
+def eval_polynomial_derivative(x: float, coeffs: list[float]) -> float:
+    """Evaluate the derivative of a polynomial with ascending-power coefficients."""
+    result = 0.0
+    n = len(coeffs)
+    for i, c in enumerate(reversed(coeffs[1:])):
+        result = result * x + c * (n - 1 - i)
+    return result
 
 
 def refine_triangle_mesh_3d(triangles, max_edge_length):
