@@ -1,0 +1,39 @@
+{
+  "metric": "forward-dynamics video PSNR (dB) on the common 320x176 region, paired against the released checkpoint (same clip, seed, inputs)",
+  "framework": "NVIDIA/cosmos-framework 7cfaf7854b2114eda5deb36250a7e8f00c64d69e",
+  "cosmos3_h_embodied": "NVIDIA-Medtech/Cosmos3-H-Embodied-Nano at 14d1626700b532e1dad27c0f99f0d46389b5234b",
+  "model": "nvidia/Cosmos3-H-Embodied-Nano at 710459f061e0ddc0f4cbd8a581e686efb013839b (checkpoints/h16_50000/c3-h-e-n_model_bf16.safetensors)",
+  "dataset": "jchen396/SutureBot at 59fd8016649d605a041f2b0e4047702d2ea45ac1",
+  "splits": {
+    "val": "90 episodes: 5% of each of tissues 1,2,4-10 (split_seed 42); 3,190 windows; every 24th window, 128 clips",
+    "test": "tissue 3, all 130 episodes; 4,418 windows; every 34th window, 128 clips"
+  },
+  "training": {
+    "experiment": "suturebot_fd",
+    "hardware": "8x NVIDIA A100-SXM4-80GB, one node",
+    "training_seed": 0,
+    "iterations": "recipe default 3,000; the run was trained to 2,000, then resumed with trainer.max_iter=4000 (constant learning rate, so the schedule does not depend on max_iter)",
+    "checkpoints_evaluated": [
+      500,
+      1000,
+      1500,
+      2000,
+      2500,
+      3000,
+      3500,
+      4000
+    ],
+    "weights_evaluated": "EMA (net_ema)"
+  },
+  "evaluation": {
+    "script": "scripts/evaluate.sh (defaults VAL_STRIDE=24, TEST_STRIDE=34, NUM_SAMPLES=128)",
+    "seeds": [
+      20260908
+    ],
+    "sampler": "UniPC, 35 steps, guidance 6.0",
+    "hardware": "1x NVIDIA A100-SXM4-80GB per checkpoint"
+  },
+  "measured": "2026-10-14 to 2026-10-15",
+  "release_check": "The runs used pre-release builds of cosmos3_h_embodied and of the weights. The released safetensors are tensor-for-tensor identical to the measured weights and convert to an identical DCP checkpoint. At cosmos3_h_embodied 14d1626 (2026-11-18): smoke-test losses 26.6416 and 26.3407 (as measured); re-evaluating the control and iteration 3,000 reproduces every split mean within 0.02 dB; paired delta +0.77 +- 0.13 dB (val) and -0.05 +- 0.14 dB (test), n = 128 each.",
+  "independent_reproduction": "A second run of the README from scratch (2026-11-19/20; container nvcr.io/nvidia/pytorch:25.06-py3, 8x A100 80 GB, one continuous 3,000-iteration job, 3 h 17 min, 26.2 GPU-hours) reproduced the control within 0.01 dB and the iteration-3,000 paired delta: +0.74 +- 0.12 dB (val), -0.05 +- 0.15 dB (test); intermediate checkpoints differed from this measured run by up to 0.3 dB. Its values are not part of this file's runs."
+}

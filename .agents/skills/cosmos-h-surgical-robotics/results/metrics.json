@@ -1,0 +1,1255 @@
+{
+  "runs": {
+    "base": {
+      "test": {
+        "psnr": {
+          "all": {
+            "mean": 28.1319,
+            "std": 1.886,
+            "sem": 0.1667,
+            "n": 128,
+            "min": 22.7687,
+            "max": 31.6724
+          },
+          "needle pickup": {
+            "mean": 28.6933,
+            "std": 1.7008,
+            "sem": 0.3902,
+            "n": 19,
+            "min": 24.6083,
+            "max": 30.843
+          },
+          "needle throw": {
+            "mean": 28.3977,
+            "std": 1.9051,
+            "sem": 0.2872,
+            "n": 44,
+            "min": 23.4015,
+            "max": 31.6724
+          },
+          "knot tying": {
+            "mean": 27.7879,
+            "std": 1.8825,
+            "sem": 0.2335,
+            "n": 65,
+            "min": 22.7687,
+            "max": 30.8902
+          }
+        }
+      },
+      "val": {
+        "psnr": {
+          "all": {
+            "mean": 27.0187,
+            "std": 3.0833,
+            "sem": 0.2725,
+            "n": 128,
+            "min": 18.2734,
+            "max": 34.1184
+          },
+          "needle pickup": {
+            "mean": 25.8626,
+            "std": 3.9453,
+            "sem": 0.6576,
+            "n": 36,
+            "min": 18.9288,
+            "max": 34.1184
+          },
+          "needle throw": {
+            "mean": 28.1995,
+            "std": 1.9775,
+            "sem": 0.3296,
+            "n": 36,
+            "min": 24.5564,
+            "max": 32.8537
+          },
+          "knot tying": {
+            "mean": 27.0029,
+            "std": 2.7876,
+            "sem": 0.3725,
+            "n": 56,
+            "min": 18.2734,
+            "max": 32.4032
+          }
+        }
+      }
+    },
+    "iter_500": {
+      "test": {
+        "psnr": {
+          "all": {
+            "mean": 27.7806,
+            "std": 2.2476,
+            "sem": 0.1987,
+            "n": 128,
+            "min": 19.3826,
+            "max": 31.7074
+          },
+          "needle pickup": {
+            "mean": 28.1932,
+            "std": 2.4615,
+            "sem": 0.5647,
+            "n": 19,
+            "min": 21.743,
+            "max": 31.3117
+          },
+          "needle throw": {
+            "mean": 28.442,
+            "std": 2.0525,
+            "sem": 0.3094,
+            "n": 44,
+            "min": 22.8017,
+            "max": 31.4651
+          },
+          "knot tying": {
+            "mean": 27.2122,
+            "std": 2.1932,
+            "sem": 0.272,
+            "n": 65,
+            "min": 19.3826,
+            "max": 31.7074
+          },
+          "delta_vs_base": {
+            "mean": -0.3514,
+            "std": 1.468,
+            "sem": 0.1298,
+            "n": 128,
+            "min": -7.5015,
+            "max": 4.3886
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": -0.5002,
+              "std": 1.4418,
+              "sem": 0.3308,
+              "n": 19,
+              "min": -4.7883,
+              "max": 1.0238
+            },
+            "needle throw": {
+              "mean": 0.0443,
+              "std": 1.2498,
+              "sem": 0.1884,
+              "n": 44,
+              "min": -2.7373,
+              "max": 3.984
+            },
+            "knot tying": {
+              "mean": -0.5758,
+              "std": 1.5738,
+              "sem": 0.1952,
+              "n": 65,
+              "min": -7.5015,
+              "max": 4.3886
+            }
+          }
+        }
+      },
+      "val": {
+        "psnr": {
+          "all": {
+            "mean": 27.2906,
+            "std": 2.8315,
+            "sem": 0.2503,
+            "n": 128,
+            "min": 19.1206,
+            "max": 33.7056
+          },
+          "needle pickup": {
+            "mean": 26.255,
+            "std": 3.3279,
+            "sem": 0.5546,
+            "n": 36,
+            "min": 20.2924,
+            "max": 33.7056
+          },
+          "needle throw": {
+            "mean": 28.4266,
+            "std": 2.2602,
+            "sem": 0.3767,
+            "n": 36,
+            "min": 24.1703,
+            "max": 32.6384
+          },
+          "knot tying": {
+            "mean": 27.226,
+            "std": 2.5815,
+            "sem": 0.345,
+            "n": 56,
+            "min": 19.1206,
+            "max": 32.1444
+          },
+          "delta_vs_base": {
+            "mean": 0.2718,
+            "std": 1.4722,
+            "sem": 0.1301,
+            "n": 128,
+            "min": -8.9744,
+            "max": 4.8088
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": 0.3924,
+              "std": 2.2042,
+              "sem": 0.3674,
+              "n": 36,
+              "min": -8.9744,
+              "max": 4.8088
+            },
+            "needle throw": {
+              "mean": 0.2271,
+              "std": 1.2497,
+              "sem": 0.2083,
+              "n": 36,
+              "min": -3.2515,
+              "max": 2.5035
+            },
+            "knot tying": {
+              "mean": 0.2231,
+              "std": 0.9517,
+              "sem": 0.1272,
+              "n": 56,
+              "min": -1.6608,
+              "max": 2.5785
+            }
+          }
+        }
+      }
+    },
+    "iter_1000": {
+      "test": {
+        "psnr": {
+          "all": {
+            "mean": 27.7461,
+            "std": 2.2697,
+            "sem": 0.2006,
+            "n": 128,
+            "min": 19.3878,
+            "max": 32.1224
+          },
+          "needle pickup": {
+            "mean": 28.1848,
+            "std": 2.233,
+            "sem": 0.5123,
+            "n": 19,
+            "min": 22.052,
+            "max": 30.8932
+          },
+          "needle throw": {
+            "mean": 28.4221,
+            "std": 2.0975,
+            "sem": 0.3162,
+            "n": 44,
+            "min": 23.2694,
+            "max": 32.1224
+          },
+          "knot tying": {
+            "mean": 27.1603,
+            "std": 2.2682,
+            "sem": 0.2813,
+            "n": 65,
+            "min": 19.3878,
+            "max": 31.2388
+          },
+          "delta_vs_base": {
+            "mean": -0.3858,
+            "std": 1.4038,
+            "sem": 0.1241,
+            "n": 128,
+            "min": -7.4963,
+            "max": 4.1445
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": -0.5086,
+              "std": 1.2431,
+              "sem": 0.2852,
+              "n": 19,
+              "min": -4.4793,
+              "max": 0.7994
+            },
+            "needle throw": {
+              "mean": 0.0244,
+              "std": 1.1778,
+              "sem": 0.1776,
+              "n": 44,
+              "min": -2.7185,
+              "max": 4.1445
+            },
+            "knot tying": {
+              "mean": -0.6276,
+              "std": 1.5376,
+              "sem": 0.1907,
+              "n": 65,
+              "min": -7.4963,
+              "max": 1.805
+            }
+          }
+        }
+      },
+      "val": {
+        "psnr": {
+          "all": {
+            "mean": 27.4541,
+            "std": 2.8844,
+            "sem": 0.2549,
+            "n": 128,
+            "min": 19.9513,
+            "max": 33.8305
+          },
+          "needle pickup": {
+            "mean": 26.5757,
+            "std": 3.3861,
+            "sem": 0.5643,
+            "n": 36,
+            "min": 19.9513,
+            "max": 33.8305
+          },
+          "needle throw": {
+            "mean": 28.6355,
+            "std": 2.312,
+            "sem": 0.3853,
+            "n": 36,
+            "min": 22.8124,
+            "max": 32.8495
+          },
+          "knot tying": {
+            "mean": 27.2593,
+            "std": 2.6564,
+            "sem": 0.355,
+            "n": 56,
+            "min": 19.9693,
+            "max": 33.2707
+          },
+          "delta_vs_base": {
+            "mean": 0.4353,
+            "std": 1.4124,
+            "sem": 0.1248,
+            "n": 128,
+            "min": -7.7652,
+            "max": 5.5891
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": 0.7131,
+              "std": 2.0963,
+              "sem": 0.3494,
+              "n": 36,
+              "min": -7.7652,
+              "max": 5.5891
+            },
+            "needle throw": {
+              "mean": 0.436,
+              "std": 1.2213,
+              "sem": 0.2035,
+              "n": 36,
+              "min": -3.7271,
+              "max": 2.412
+            },
+            "knot tying": {
+              "mean": 0.2563,
+              "std": 0.8819,
+              "sem": 0.1178,
+              "n": 56,
+              "min": -1.9279,
+              "max": 2.1496
+            }
+          }
+        }
+      }
+    },
+    "iter_1500": {
+      "test": {
+        "psnr": {
+          "all": {
+            "mean": 27.8314,
+            "std": 2.2033,
+            "sem": 0.1947,
+            "n": 128,
+            "min": 22.6277,
+            "max": 31.6427
+          },
+          "needle pickup": {
+            "mean": 28.3522,
+            "std": 2.2326,
+            "sem": 0.5122,
+            "n": 19,
+            "min": 22.6277,
+            "max": 31.24
+          },
+          "needle throw": {
+            "mean": 28.3159,
+            "std": 2.1766,
+            "sem": 0.3281,
+            "n": 44,
+            "min": 23.321,
+            "max": 31.627
+          },
+          "knot tying": {
+            "mean": 27.3511,
+            "std": 2.1382,
+            "sem": 0.2652,
+            "n": 65,
+            "min": 22.6451,
+            "max": 31.6427
+          },
+          "delta_vs_base": {
+            "mean": -0.3006,
+            "std": 1.3759,
+            "sem": 0.1216,
+            "n": 128,
+            "min": -5.3985,
+            "max": 3.5613
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": -0.3411,
+              "std": 1.1755,
+              "sem": 0.2697,
+              "n": 19,
+              "min": -3.9036,
+              "max": 1.1502
+            },
+            "needle throw": {
+              "mean": -0.0818,
+              "std": 1.2189,
+              "sem": 0.1838,
+              "n": 44,
+              "min": -3.321,
+              "max": 2.028
+            },
+            "knot tying": {
+              "mean": -0.4368,
+              "std": 1.5224,
+              "sem": 0.1888,
+              "n": 65,
+              "min": -5.3985,
+              "max": 3.5613
+            }
+          }
+        }
+      },
+      "val": {
+        "psnr": {
+          "all": {
+            "mean": 27.4637,
+            "std": 2.9055,
+            "sem": 0.2568,
+            "n": 128,
+            "min": 19.8388,
+            "max": 33.7497
+          },
+          "needle pickup": {
+            "mean": 26.4765,
+            "std": 3.348,
+            "sem": 0.558,
+            "n": 36,
+            "min": 20.4752,
+            "max": 33.7497
+          },
+          "needle throw": {
+            "mean": 28.8923,
+            "std": 2.081,
+            "sem": 0.3468,
+            "n": 36,
+            "min": 24.1123,
+            "max": 32.6593
+          },
+          "knot tying": {
+            "mean": 27.18,
+            "std": 2.7474,
+            "sem": 0.3671,
+            "n": 56,
+            "min": 19.8388,
+            "max": 33.1978
+          },
+          "delta_vs_base": {
+            "mean": 0.445,
+            "std": 1.4995,
+            "sem": 0.1325,
+            "n": 128,
+            "min": -9.0187,
+            "max": 5.0841
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": 0.614,
+              "std": 2.2919,
+              "sem": 0.382,
+              "n": 36,
+              "min": -9.0187,
+              "max": 5.0841
+            },
+            "needle throw": {
+              "mean": 0.6928,
+              "std": 1.1656,
+              "sem": 0.1943,
+              "n": 36,
+              "min": -2.3293,
+              "max": 2.7231
+            },
+            "knot tying": {
+              "mean": 0.177,
+              "std": 0.9233,
+              "sem": 0.1234,
+              "n": 56,
+              "min": -2.7009,
+              "max": 2.6609
+            }
+          }
+        }
+      }
+    },
+    "iter_2000": {
+      "test": {
+        "psnr": {
+          "all": {
+            "mean": 27.9115,
+            "std": 2.3424,
+            "sem": 0.207,
+            "n": 128,
+            "min": 20.7706,
+            "max": 32.3274
+          },
+          "needle pickup": {
+            "mean": 28.3365,
+            "std": 2.6328,
+            "sem": 0.604,
+            "n": 19,
+            "min": 20.7706,
+            "max": 31.1056
+          },
+          "needle throw": {
+            "mean": 28.6577,
+            "std": 2.2125,
+            "sem": 0.3335,
+            "n": 44,
+            "min": 23.0082,
+            "max": 32.3274
+          },
+          "knot tying": {
+            "mean": 27.2822,
+            "std": 2.1934,
+            "sem": 0.2721,
+            "n": 65,
+            "min": 20.9642,
+            "max": 30.9339
+          },
+          "delta_vs_base": {
+            "mean": -0.2204,
+            "std": 1.5691,
+            "sem": 0.1387,
+            "n": 128,
+            "min": -5.7032,
+            "max": 3.327
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": -0.3568,
+              "std": 1.4587,
+              "sem": 0.3346,
+              "n": 19,
+              "min": -3.8377,
+              "max": 1.2724
+            },
+            "needle throw": {
+              "mean": 0.2599,
+              "std": 1.2684,
+              "sem": 0.1912,
+              "n": 44,
+              "min": -3.1365,
+              "max": 3.0505
+            },
+            "knot tying": {
+              "mean": -0.5057,
+              "std": 1.7204,
+              "sem": 0.2134,
+              "n": 65,
+              "min": -5.7032,
+              "max": 3.327
+            }
+          }
+        }
+      },
+      "val": {
+        "psnr": {
+          "all": {
+            "mean": 27.6353,
+            "std": 2.9361,
+            "sem": 0.2595,
+            "n": 128,
+            "min": 20.257,
+            "max": 33.9469
+          },
+          "needle pickup": {
+            "mean": 26.5754,
+            "std": 3.4503,
+            "sem": 0.575,
+            "n": 36,
+            "min": 20.257,
+            "max": 33.9469
+          },
+          "needle throw": {
+            "mean": 29.0563,
+            "std": 2.1028,
+            "sem": 0.3505,
+            "n": 36,
+            "min": 24.612,
+            "max": 32.8302
+          },
+          "knot tying": {
+            "mean": 27.4032,
+            "std": 2.7211,
+            "sem": 0.3636,
+            "n": 56,
+            "min": 20.8074,
+            "max": 33.2964
+          },
+          "delta_vs_base": {
+            "mean": 0.6166,
+            "std": 1.4712,
+            "sem": 0.13,
+            "n": 128,
+            "min": -9.4696,
+            "max": 4.5966
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": 0.7128,
+              "std": 2.2065,
+              "sem": 0.3678,
+              "n": 36,
+              "min": -9.4696,
+              "max": 4.5966
+            },
+            "needle throw": {
+              "mean": 0.8568,
+              "std": 1.0014,
+              "sem": 0.1669,
+              "n": 36,
+              "min": -1.0562,
+              "max": 2.9714
+            },
+            "knot tying": {
+              "mean": 0.4003,
+              "std": 1.0817,
+              "sem": 0.1445,
+              "n": 56,
+              "min": -2.1856,
+              "max": 2.5924
+            }
+          }
+        }
+      }
+    },
+    "iter_2500": {
+      "test": {
+        "psnr": {
+          "all": {
+            "mean": 27.8372,
+            "std": 2.4378,
+            "sem": 0.2155,
+            "n": 128,
+            "min": 20.2102,
+            "max": 32.5301
+          },
+          "needle pickup": {
+            "mean": 28.3836,
+            "std": 2.2483,
+            "sem": 0.5158,
+            "n": 19,
+            "min": 22.7558,
+            "max": 31.3404
+          },
+          "needle throw": {
+            "mean": 28.6764,
+            "std": 2.2128,
+            "sem": 0.3336,
+            "n": 44,
+            "min": 23.3766,
+            "max": 32.5301
+          },
+          "knot tying": {
+            "mean": 27.1095,
+            "std": 2.4435,
+            "sem": 0.3031,
+            "n": 65,
+            "min": 20.2102,
+            "max": 30.9135
+          },
+          "delta_vs_base": {
+            "mean": -0.2947,
+            "std": 1.863,
+            "sem": 0.1647,
+            "n": 128,
+            "min": -7.4365,
+            "max": 3.7829
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": -0.3098,
+              "std": 1.2861,
+              "sem": 0.295,
+              "n": 19,
+              "min": -3.7755,
+              "max": 1.3992
+            },
+            "needle throw": {
+              "mean": 0.2787,
+              "std": 1.2864,
+              "sem": 0.1939,
+              "n": 44,
+              "min": -2.9203,
+              "max": 3.7829
+            },
+            "knot tying": {
+              "mean": -0.6785,
+              "std": 2.2214,
+              "sem": 0.2755,
+              "n": 65,
+              "min": -7.4365,
+              "max": 1.8023
+            }
+          }
+        }
+      },
+      "val": {
+        "psnr": {
+          "all": {
+            "mean": 27.6753,
+            "std": 2.8641,
+            "sem": 0.2532,
+            "n": 128,
+            "min": 20.31,
+            "max": 33.7128
+          },
+          "needle pickup": {
+            "mean": 26.622,
+            "std": 3.39,
+            "sem": 0.565,
+            "n": 36,
+            "min": 20.31,
+            "max": 33.7128
+          },
+          "needle throw": {
+            "mean": 29.058,
+            "std": 2.0505,
+            "sem": 0.3418,
+            "n": 36,
+            "min": 23.9292,
+            "max": 32.8937
+          },
+          "knot tying": {
+            "mean": 27.4636,
+            "std": 2.6325,
+            "sem": 0.3518,
+            "n": 56,
+            "min": 20.6055,
+            "max": 33.4722
+          },
+          "delta_vs_base": {
+            "mean": 0.6566,
+            "std": 1.4824,
+            "sem": 0.131,
+            "n": 128,
+            "min": -9.3047,
+            "max": 4.8582
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": 0.7594,
+              "std": 2.2131,
+              "sem": 0.3688,
+              "n": 36,
+              "min": -9.3047,
+              "max": 4.8582
+            },
+            "needle throw": {
+              "mean": 0.8585,
+              "std": 1.0917,
+              "sem": 0.182,
+              "n": 36,
+              "min": -1.5147,
+              "max": 3.5014
+            },
+            "knot tying": {
+              "mean": 0.4606,
+              "std": 1.0613,
+              "sem": 0.1418,
+              "n": 56,
+              "min": -2.5567,
+              "max": 2.5934
+            }
+          }
+        }
+      }
+    },
+    "iter_3000": {
+      "test": {
+        "psnr": {
+          "all": {
+            "mean": 28.0901,
+            "std": 2.3932,
+            "sem": 0.2115,
+            "n": 128,
+            "min": 20.7501,
+            "max": 32.8183
+          },
+          "needle pickup": {
+            "mean": 28.628,
+            "std": 2.1837,
+            "sem": 0.501,
+            "n": 19,
+            "min": 23.1382,
+            "max": 31.1183
+          },
+          "needle throw": {
+            "mean": 28.7121,
+            "std": 2.2369,
+            "sem": 0.3372,
+            "n": 44,
+            "min": 23.5052,
+            "max": 32.8183
+          },
+          "knot tying": {
+            "mean": 27.5118,
+            "std": 2.4436,
+            "sem": 0.3031,
+            "n": 65,
+            "min": 20.7501,
+            "max": 31.9066
+          },
+          "delta_vs_base": {
+            "mean": -0.0419,
+            "std": 1.6239,
+            "sem": 0.1435,
+            "n": 128,
+            "min": -6.4588,
+            "max": 3.0098
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": -0.0654,
+              "std": 1.1992,
+              "sem": 0.2751,
+              "n": 19,
+              "min": -3.3931,
+              "max": 2.2621
+            },
+            "needle throw": {
+              "mean": 0.3144,
+              "std": 1.2856,
+              "sem": 0.1938,
+              "n": 44,
+              "min": -3.7053,
+              "max": 3.0098
+            },
+            "knot tying": {
+              "mean": -0.2761,
+              "std": 1.8908,
+              "sem": 0.2345,
+              "n": 65,
+              "min": -6.4588,
+              "max": 2.1979
+            }
+          }
+        }
+      },
+      "val": {
+        "psnr": {
+          "all": {
+            "mean": 27.8042,
+            "std": 2.9394,
+            "sem": 0.2598,
+            "n": 128,
+            "min": 20.3785,
+            "max": 33.8396
+          },
+          "needle pickup": {
+            "mean": 26.4942,
+            "std": 3.3962,
+            "sem": 0.566,
+            "n": 36,
+            "min": 20.3785,
+            "max": 33.8396
+          },
+          "needle throw": {
+            "mean": 29.4009,
+            "std": 2.1052,
+            "sem": 0.3509,
+            "n": 36,
+            "min": 23.8397,
+            "max": 33.0554
+          },
+          "knot tying": {
+            "mean": 27.62,
+            "std": 2.639,
+            "sem": 0.3527,
+            "n": 56,
+            "min": 21.0064,
+            "max": 33.8067
+          },
+          "delta_vs_base": {
+            "mean": 0.7855,
+            "std": 1.4547,
+            "sem": 0.1286,
+            "n": 128,
+            "min": -9.3424,
+            "max": 4.4752
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": 0.6316,
+              "std": 2.1429,
+              "sem": 0.3571,
+              "n": 36,
+              "min": -9.3424,
+              "max": 4.4752
+            },
+            "needle throw": {
+              "mean": 1.2014,
+              "std": 1.0927,
+              "sem": 0.1821,
+              "n": 36,
+              "min": -1.0914,
+              "max": 3.9239
+            },
+            "knot tying": {
+              "mean": 0.617,
+              "std": 1.0232,
+              "sem": 0.1367,
+              "n": 56,
+              "min": -2.8501,
+              "max": 2.9478
+            }
+          }
+        }
+      }
+    },
+    "iter_3500": {
+      "test": {
+        "psnr": {
+          "all": {
+            "mean": 28.0809,
+            "std": 2.3959,
+            "sem": 0.2118,
+            "n": 128,
+            "min": 20.8511,
+            "max": 32.4788
+          },
+          "needle pickup": {
+            "mean": 28.6028,
+            "std": 2.2806,
+            "sem": 0.5232,
+            "n": 19,
+            "min": 22.9611,
+            "max": 31.5666
+          },
+          "needle throw": {
+            "mean": 28.8242,
+            "std": 2.1412,
+            "sem": 0.3228,
+            "n": 44,
+            "min": 23.9084,
+            "max": 32.4788
+          },
+          "knot tying": {
+            "mean": 27.4252,
+            "std": 2.4393,
+            "sem": 0.3026,
+            "n": 65,
+            "min": 20.8511,
+            "max": 31.6209
+          },
+          "delta_vs_base": {
+            "mean": -0.051,
+            "std": 1.726,
+            "sem": 0.1526,
+            "n": 128,
+            "min": -6.0699,
+            "max": 3.7793
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": -0.0906,
+              "std": 1.3366,
+              "sem": 0.3066,
+              "n": 19,
+              "min": -3.5702,
+              "max": 1.8947
+            },
+            "needle throw": {
+              "mean": 0.4264,
+              "std": 1.3801,
+              "sem": 0.2081,
+              "n": 44,
+              "min": -3.1044,
+              "max": 3.7793
+            },
+            "knot tying": {
+              "mean": -0.3627,
+              "std": 1.9682,
+              "sem": 0.2441,
+              "n": 65,
+              "min": -6.0699,
+              "max": 2.8223
+            }
+          }
+        }
+      },
+      "val": {
+        "psnr": {
+          "all": {
+            "mean": 27.784,
+            "std": 2.8592,
+            "sem": 0.2527,
+            "n": 128,
+            "min": 20.4176,
+            "max": 33.696
+          },
+          "needle pickup": {
+            "mean": 26.4901,
+            "std": 3.2856,
+            "sem": 0.5476,
+            "n": 36,
+            "min": 20.4176,
+            "max": 33.696
+          },
+          "needle throw": {
+            "mean": 29.3249,
+            "std": 2.0738,
+            "sem": 0.3456,
+            "n": 36,
+            "min": 23.676,
+            "max": 32.8481
+          },
+          "knot tying": {
+            "mean": 27.6252,
+            "std": 2.5681,
+            "sem": 0.3432,
+            "n": 56,
+            "min": 22.1007,
+            "max": 33.6103
+          },
+          "delta_vs_base": {
+            "mean": 0.7652,
+            "std": 1.4806,
+            "sem": 0.1309,
+            "n": 128,
+            "min": -9.2329,
+            "max": 4.4965
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": 0.6276,
+              "std": 2.2103,
+              "sem": 0.3684,
+              "n": 36,
+              "min": -9.2329,
+              "max": 4.4965
+            },
+            "needle throw": {
+              "mean": 1.1254,
+              "std": 1.1466,
+              "sem": 0.1911,
+              "n": 36,
+              "min": -0.9596,
+              "max": 3.5199
+            },
+            "knot tying": {
+              "mean": 0.6222,
+              "std": 0.9992,
+              "sem": 0.1335,
+              "n": 56,
+              "min": -2.9363,
+              "max": 3.8273
+            }
+          }
+        }
+      }
+    },
+    "iter_4000": {
+      "test": {
+        "psnr": {
+          "all": {
+            "mean": 28.0919,
+            "std": 2.4354,
+            "sem": 0.2153,
+            "n": 128,
+            "min": 20.8462,
+            "max": 32.58
+          },
+          "needle pickup": {
+            "mean": 28.6782,
+            "std": 2.152,
+            "sem": 0.4937,
+            "n": 19,
+            "min": 23.5675,
+            "max": 31.5809
+          },
+          "needle throw": {
+            "mean": 28.7974,
+            "std": 2.3199,
+            "sem": 0.3497,
+            "n": 44,
+            "min": 22.9191,
+            "max": 32.58
+          },
+          "knot tying": {
+            "mean": 27.4429,
+            "std": 2.4453,
+            "sem": 0.3033,
+            "n": 65,
+            "min": 20.8462,
+            "max": 31.9655
+          },
+          "delta_vs_base": {
+            "mean": -0.0401,
+            "std": 1.7048,
+            "sem": 0.1507,
+            "n": 128,
+            "min": -7.0834,
+            "max": 4.1173
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": -0.0151,
+              "std": 1.0892,
+              "sem": 0.2499,
+              "n": 19,
+              "min": -2.9638,
+              "max": 1.645
+            },
+            "needle throw": {
+              "mean": 0.3997,
+              "std": 1.4911,
+              "sem": 0.2248,
+              "n": 44,
+              "min": -3.2827,
+              "max": 4.1173
+            },
+            "knot tying": {
+              "mean": -0.3451,
+              "std": 1.9266,
+              "sem": 0.239,
+              "n": 65,
+              "min": -7.0834,
+              "max": 2.3531
+            }
+          }
+        }
+      },
+      "val": {
+        "psnr": {
+          "all": {
+            "mean": 27.7602,
+            "std": 2.7948,
+            "sem": 0.247,
+            "n": 128,
+            "min": 20.4287,
+            "max": 33.6647
+          },
+          "needle pickup": {
+            "mean": 26.4355,
+            "std": 3.2179,
+            "sem": 0.5363,
+            "n": 36,
+            "min": 20.4287,
+            "max": 33.6647
+          },
+          "needle throw": {
+            "mean": 29.2038,
+            "std": 2.0453,
+            "sem": 0.3409,
+            "n": 36,
+            "min": 23.8024,
+            "max": 32.9387
+          },
+          "knot tying": {
+            "mean": 27.6838,
+            "std": 2.5032,
+            "sem": 0.3345,
+            "n": 56,
+            "min": 21.5023,
+            "max": 33.6155
+          },
+          "delta_vs_base": {
+            "mean": 0.7415,
+            "std": 1.5346,
+            "sem": 0.1356,
+            "n": 128,
+            "min": -9.2334,
+            "max": 5.1008
+          },
+          "delta_vs_base_by_task": {
+            "needle pickup": {
+              "mean": 0.5729,
+              "std": 2.329,
+              "sem": 0.3882,
+              "n": 36,
+              "min": -9.2334,
+              "max": 5.1008
+            },
+            "needle throw": {
+              "mean": 1.0043,
+              "std": 1.1758,
+              "sem": 0.196,
+              "n": 36,
+              "min": -1.613,
+              "max": 3.8133
+            },
+            "knot tying": {
+              "mean": 0.6809,
+              "std": 1.019,
+              "sem": 0.1362,
+              "n": 56,
+              "min": -2.8983,
+              "max": 3.229
+            }
+          }
+        }
+      }
+    }
+  },
+  "paired_samples": 256,
+  "unpaired_samples_dropped": {},
+  "metadata": {
+    "metric": "forward-dynamics video PSNR (dB) on the common 320x176 region, paired against the released checkpoint (same clip, seed, inputs)",
+    "framework": "NVIDIA/cosmos-framework 7cfaf7854b2114eda5deb36250a7e8f00c64d69e",
+    "cosmos3_h_embodied": "NVIDIA-Medtech/Cosmos3-H-Embodied-Nano at 14d1626700b532e1dad27c0f99f0d46389b5234b",
+    "model": "nvidia/Cosmos3-H-Embodied-Nano at 710459f061e0ddc0f4cbd8a581e686efb013839b (checkpoints/h16_50000/c3-h-e-n_model_bf16.safetensors)",
+    "dataset": "jchen396/SutureBot at 59fd8016649d605a041f2b0e4047702d2ea45ac1",
+    "splits": {
+      "val": "90 episodes: 5% of each of tissues 1,2,4-10 (split_seed 42); 3,190 windows; every 24th window, 128 clips",
+      "test": "tissue 3, all 130 episodes; 4,418 windows; every 34th window, 128 clips"
+    },
+    "training": {
+      "experiment": "suturebot_fd",
+      "hardware": "8x NVIDIA A100-SXM4-80GB, one node",
+      "training_seed": 0,
+      "iterations": "recipe default 3,000; the run was trained to 2,000, then resumed with trainer.max_iter=4000 (constant learning rate, so the schedule does not depend on max_iter)",
+      "checkpoints_evaluated": [
+        500,
+        1000,
+        1500,
+        2000,
+        2500,
+        3000,
+        3500,
+        4000
+      ],
+      "weights_evaluated": "EMA (net_ema)"
+    },
+    "evaluation": {
+      "script": "scripts/evaluate.sh (defaults VAL_STRIDE=24, TEST_STRIDE=34, NUM_SAMPLES=128)",
+      "seeds": [
+        20260908
+      ],
+      "sampler": "UniPC, 35 steps, guidance 6.0",
+      "hardware": "1x NVIDIA A100-SXM4-80GB per checkpoint"
+    },
+    "measured": "2026-10-14 to 2026-10-15",
+    "release_check": "The runs used pre-release builds of cosmos3_h_embodied and of the weights. The released safetensors are tensor-for-tensor identical to the measured weights and convert to an identical DCP checkpoint. At cosmos3_h_embodied 14d1626 (2026-11-18): smoke-test losses 26.6416 and 26.3407 (as measured); re-evaluating the control and iteration 3,000 reproduces every split mean within 0.02 dB; paired delta +0.77 +- 0.13 dB (val) and -0.05 +- 0.14 dB (test), n = 128 each.",
+    "independent_reproduction": "A second run of the README from scratch (2026-11-19/20; container nvcr.io/nvidia/pytorch:25.06-py3, 8x A100 80 GB, one continuous 3,000-iteration job, 3 h 17 min, 26.2 GPU-hours) reproduced the control within 0.01 dB and the iteration-3,000 paired delta: +0.74 +- 0.12 dB (val), -0.05 +- 0.15 dB (test); intermediate checkpoints differed from this measured run by up to 0.3 dB. Its values are not part of this file's runs."
+  }
+}
