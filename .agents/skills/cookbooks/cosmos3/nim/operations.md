@@ -97,7 +97,7 @@ Transfer Generator with `-e NIM_TRITON_REQUEST_TIMEOUT=3600000000`. The
 multiview default is applied inside the server, so `docker exec ... env` shows
 `NIM_TRITON_REQUEST_TIMEOUT` only when you set it at launch.
 
-A multiview Generator container runs one `/v1/infer` request at a time.
+A Generator with latency profile container runs one `/v1/infer` request at a time.
 Concurrent requests wait in a queue, and the wait counts toward each request's
 `NIM_TRITON_REQUEST_TIMEOUT` and the client's own timeout, so a request queued
 behind a long eleven-camera job can time out before it starts generating.
