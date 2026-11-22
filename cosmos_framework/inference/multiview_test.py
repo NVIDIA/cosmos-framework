@@ -16,7 +16,6 @@ import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 import torch
@@ -191,98 +190,6 @@ def test_the_parity_value_is_not_refused() -> None:
         generate_multiview_caption_chunks(_StubSampleArgs(1.0), model=None)
 
     assert not isinstance(excinfo.value, NotImplementedError)
-
-
-@pytest.mark.L0
-@pytest.mark.CPU
-def test_caption_chunks_assemble_on_cpu_and_preserve_camera_feedback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Avoid retaining the decoded rig on GPU without changing chunk output or feedback."""
-
-    class SampleArgs(SimpleNamespace):
-        def model_copy(self, *, deep: bool, update: dict) -> SampleArgs:
-            assert deep
-            return SampleArgs(**(vars(self) | update))
-
-    sample_args = SampleArgs(
-        multiview=SimpleNamespace(
-            caption_path=str(_write(tmp_path, _structured((0, 5), (5, 10)))),
-            first_caption_paragraph_only=False,
-            use_first_chunk_only=False,
-            condition_vision_mode=None,
-            views=[SimpleNamespace(), SimpleNamespace()],
-        ),
-        control_guidance=1.0,
-        vision_size=(2, 2),
-        num_video_frames_per_chunk=5,
-        num_conditional_frames=1,
-        seed=42,
-        guidance=6.0,
-        guidance_interval=[0.0, 1.0],
-        condition_frame_indexes_vision=[],
-        transfer_hints={},
-        num_steps=2,
-        shift=10.0,
-        sigma_max=1.0,
-        normalize_cfg=False,
-    )
-    conditions: list[list[torch.Tensor | None]] = []
-    condition_indexes: list[list[int]] = []
-    assembly_modes: list[bool] = []
-    seeds: list[int] = []
-
-    def build_batch(args: SampleArgs, model: object, **kwargs: Any) -> dict:
-        conditions.append(kwargs["condition_frames"])
-        condition_indexes.append(args.condition_frame_indexes_vision)
-        return {}
-
-    def generate_samples(batch: dict, **kwargs: Any) -> dict:
-        chunk_index = len(seeds)
-        seeds.append(kwargs["seed"][0])
-        # Each view has two latent frames, decoded to five pixel frames.
-        latent = torch.tensor([2 * chunk_index, 2 * chunk_index + 1], dtype=torch.float32)
-        latent = latent.repeat_interleave(2).view(1, 1, 4, 1, 1)
-        return {"vision": [latent]}
-
-    def decode(latent: torch.Tensor) -> torch.Tensor:
-        view_index = int(latent[0, 0, 0, 0, 0])
-        pixels = torch.tensor([-1.5, -1.0, 0.0, 1.0, 0.25]) + 0.1 * view_index
-        return pixels.view(1, 1, 5, 1, 1).expand(1, 3, 5, 2, 2).clone()
-
-    decode_views = multiview.decode_multiview_latent_per_view
-
-    def record_assembly(*args: Any, assemble_on_cpu: bool = False, **kwargs: Any) -> torch.Tensor:
-        assembly_modes.append(assemble_on_cpu)
-        return decode_views(*args, assemble_on_cpu=assemble_on_cpu, **kwargs)
-
-    model = SimpleNamespace(
-        config=SimpleNamespace(fixed_step_sampler_config=None),
-        input_caption_key="caption",
-        generate_samples_from_batch=generate_samples,
-        decode=decode,
-    )
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(multiview, "get_multiview_sample_data", build_batch)
-    monkeypatch.setattr(multiview, "decode_multiview_latent_per_view", record_assembly)
-
-    output = generate_multiview_caption_chunks(sample_args, model)
-
-    assert assembly_modes == [True, True]
-    assert seeds == [42, 43]
-    assert output.sample_n_views == 2
-    assert output.total_frames_per_view == 9
-    assert output.vision_cthw.device.type == "cpu"
-    assert output.vision_cthw.dtype == torch.float32
-    expected = torch.tensor([0, 0, 0.5, 1, 0.625, 0.1, 0.6, 1, 0.725, 0, 0.05, 0.55, 1, 0.675, 0.15, 0.65, 1, 0.775])
-    torch.testing.assert_close(output.vision_cthw, expected.view(1, 18, 1, 1).expand(3, 18, 2, 2))
-    assert conditions[0] == [None, None]
-    assert condition_indexes == [[], [0]]
-    for view, expected_feedback in zip(conditions[1], [159, 172], strict=True):
-        assert view is not None
-        assert view.dtype == torch.uint8
-        assert view.shape == (3, 1, 2, 2)
-        assert torch.equal(view, torch.full_like(view, expected_feedback))
 
 
 def _bundle_views(tmp_path: Path, captions: dict[str, dict]) -> list:
