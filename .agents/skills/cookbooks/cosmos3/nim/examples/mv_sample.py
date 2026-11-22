@@ -9,8 +9,8 @@ multiview.md.
 
 import argparse
 import os
-from pathlib import Path
 
+from common import existing_dir
 from mv_joint import prepare_lidar_control
 from mv_rgb import fetch_sample
 
@@ -19,7 +19,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
         "--sample-root",
-        type=Path,
+        type=existing_dir,
         default=os.environ.get("AUTO_SAMPLE_ROOT"),
         help="Local copy of the daytime sample; downloaded from Hugging Face when unset.",
     )

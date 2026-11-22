@@ -9,7 +9,14 @@ import sys
 from pathlib import Path
 
 import requests
-from common import decode_video, media_to_data_url, require_generator_profile
+from common import (
+    decode_video,
+    existing_dir,
+    media_to_data_url,
+    positive_float,
+    raise_for_http_error,
+    require_generator_profile,
+)
 
 NIM_URL = os.environ.get("NIM_URL", "http://localhost:8000").rstrip("/")
 SKILLS_ROOT = Path(__file__).resolve().parents[4]
@@ -38,14 +45,19 @@ CASES = ("wsm_t2v", "i2v")
 def add_sample_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--sample-root",
-        type=Path,
+        type=existing_dir,
         default=os.environ.get("AUTO_SAMPLE_ROOT"),
         help="Local copy of the daytime sample; downloaded from Hugging Face when unset.",
     )
     parser.add_argument(
         "--caption-folder", choices=CAPTION_FOLDERS, default="captions_with_timestamp"
     )
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument(
+        "--timeout",
+        type=positive_float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help="Client timeout in seconds (default %(default)s).",
+    )
 
 
 def build_views(sample_root: Path, caption_folder: str, *, with_vision: bool) -> list[dict]:
@@ -106,7 +118,7 @@ def main() -> None:
     request = build_request(args.case, sample_root, args.caption_folder)
 
     response = requests.post(f"{NIM_URL}/v1/infer", json=request, timeout=args.timeout)
-    response.raise_for_status()
+    raise_for_http_error(response)
 
     save_cameras(response.json()["multiview"], request, OUTPUTS / f"mv_rgb_{args.case}")
 

@@ -143,9 +143,13 @@ per-device memory, HTTP status and error body, and a redacted log excerpt.
 
 Generator requests are synchronous
 ([long-running requests](../../../operations.md#long-running-requests)): the
-examples use 30-minute (Generator) and 60-minute (Transfer) client timeouts as
-ceilings, not expected latency, and the backend still stops at 30 minutes unless
-the container sets `NIM_TRITON_REQUEST_TIMEOUT`. Check whether a request is
+examples use 30-minute (Generator), 60-minute (Transfer), and two-hour
+(multiview) client timeouts as ceilings, not expected latency. The backend stops
+at 30 minutes, or 4 hours for the `multiview` variant, unless the container sets
+`NIM_TRITON_REQUEST_TIMEOUT`; never apply the Transfer value
+(`3600000000`) to a multiview container, because it lowers that default. A
+multiview container runs one request at a time, and queued time counts toward
+each request's timeout. Check whether a request is
 still running before retrying. Do not recommend an unsafe override as a fix. If
 the customer chooses one for a diagnostic, state the risk, limit it to that
 diagnostic, and restore the default.
