@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 import requests
-from common import decode_video, media_to_data_url, require_generator_profile
+from common import decode_video, media_to_data_url, raise_for_http_error, require_generator_profile
 
 NIM_URL = os.environ.get("NIM_URL", "http://localhost:8000").rstrip("/")
 SKILLS_ROOT = Path(__file__).resolve().parents[4]
@@ -106,7 +106,7 @@ def main() -> None:
     request = build_request(args.case, sample_root, args.caption_folder)
 
     response = requests.post(f"{NIM_URL}/v1/infer", json=request, timeout=args.timeout)
-    response.raise_for_status()
+    raise_for_http_error(response)
 
     save_cameras(response.json()["multiview"], request, OUTPUTS / f"mv_rgb_{args.case}")
 

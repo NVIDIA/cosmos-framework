@@ -91,11 +91,22 @@ Generator `/v1/infer` requests are synchronous: the connection stays quiet
 until inference and serialization finish, which alone does not mean a hang.
 The backend queue-plus-execution ceiling is
 [`NIM_TRITON_REQUEST_TIMEOUT`](configuration.md#generator-configuration),
-default 30 minutes. A longer client timeout does not extend it. For the
-60-minute Transfer client, launch the Generator with
-`-e NIM_TRITON_REQUEST_TIMEOUT=3600000000`. Before retrying a quiet request,
-check the container logs and GPU activity rather than readiness, and avoid
-blind retries that duplicate expensive work.
+default 30 minutes, or 4 hours for the `multiview` variant. A longer client
+timeout does not extend it. For the 60-minute Transfer client, launch the
+Transfer Generator with `-e NIM_TRITON_REQUEST_TIMEOUT=3600000000`. The
+multiview default is applied inside the server, so `docker exec ... env` shows
+`NIM_TRITON_REQUEST_TIMEOUT` only when you set it at launch.
+
+A Generator with latency profile container runs one `/v1/infer` request at a time.
+Concurrent requests wait in a queue, and the wait counts toward each request's
+`NIM_TRITON_REQUEST_TIMEOUT` and the client's own timeout, so a request queued
+behind a long eleven-camera job can time out before it starts generating.
+While a request runs, health checks, `/v1/metadata`, and invalid requests,
+which are rejected with HTTP 422 before they reach the queue, still get an
+immediate response. For parallel generation, use throughput profile, which will run generation requests on each GPU in parallel.
+
+Before retrying a quiet request, check the container logs and GPU activity
+rather than readiness, and avoid blind retries that duplicate expensive work.
 
 ## Unified-Memory Diagnostics
 

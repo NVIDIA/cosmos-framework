@@ -86,6 +86,12 @@ profiles therefore default `NIM_TRITON_REQUEST_TIMEOUT` to four hours instead
 of the 30 minutes used by other variants; set it at launch, in microseconds,
 only to change that. The examples use a two-hour client timeout (`--timeout`).
 See [Generator configuration](configuration.md#generator-configuration).
+- **One request at a time.** A multiview container runs one `/v1/infer`
+request at a time; concurrent requests queue, and the wait counts toward each
+request's timeout. Health checks, `/v1/metadata`, and invalid requests,
+which are rejected with HTTP 422 before they reach the queue, still get an
+immediate response meanwhile. Run more containers for parallel generation. See
+[Long-Running Requests](operations.md#long-running-requests).
 - **Attention backend.** `VLLM_OMNI_COSMOS3_MULTIVIEW_BACKEND` accepts
 `maskless` or `triton`. Leave it unset normally: the runtime then selects
 `maskless` when its bundled FlashAttention is available and `triton`
@@ -171,6 +177,8 @@ JSON-object caption is also rejected.
 one string applied to every camera, and an empty string disables it.
 
 The scripts parse their command line before doing endpoint or media work.
+When the NIM rejects a request, they print its HTTP status and error message,
+which you can match against [Common failures](#common-failures).
 Before submitting a request, each requires `/v1/metadata` to report the
 Generator runtime, `/v1/infer`, a selected profile ID, and model variant
 `multiview`. Requests are large: every control and RGB clip is inlined as
@@ -197,7 +205,7 @@ defaults](#generation-defaults-and-limits):
 ```bash
 WSM=$AUTO_SAMPLE_ROOT/daytime_scene/wsm
 
-curl -fsS -X POST "$NIM_URL/v1/infer" \
+curl -sS --fail-with-body -X POST "$NIM_URL/v1/infer" \
   -H 'Content-Type: application/json' \
   --data-binary @- \
   -o /tmp/cosmos3-mv-response.json <<EOF
@@ -233,7 +241,10 @@ import base64
 import json
 from pathlib import Path
 
-result = json.loads(Path("/tmp/cosmos3-mv-response.json").read_text())["multiview"]
+payload = json.loads(Path("/tmp/cosmos3-mv-response.json").read_text())
+if "error" in payload:
+    raise SystemExit(f"NIM rejected the request: {payload['error'].get('message')}")
+result = payload["multiview"]
 for video in result["videos"]:
     Path(f"{video['camera_key']}.mp4").write_bytes(base64.b64decode(video["b64_video"]))
 print(result["camera_order"], result["frames_per_view"], result["fps"])
@@ -357,7 +368,7 @@ that `mv_sample.py` prepared:
 WSM=$AUTO_SAMPLE_ROOT/daytime_scene/wsm
 LIDAR=examples/outputs/prepared/lidar_control.safetensors
 
-curl -fsS -X POST "$NIM_URL/v1/infer" \
+curl -sS --fail-with-body -X POST "$NIM_URL/v1/infer" \
   -H 'Content-Type: application/json' \
   --data-binary @- \
   -o /tmp/cosmos3-mv-joint-response.json <<EOF
@@ -396,7 +407,10 @@ import base64
 import json
 from pathlib import Path
 
-result = json.loads(Path("/tmp/cosmos3-mv-joint-response.json").read_text())["multiview"]
+payload = json.loads(Path("/tmp/cosmos3-mv-joint-response.json").read_text())
+if "error" in payload:
+    raise SystemExit(f"NIM rejected the request: {payload['error'].get('message')}")
+result = payload["multiview"]
 for video in result["videos"]:
     Path(f"{video['camera_key']}.mp4").write_bytes(base64.b64decode(video["b64_video"]))
 lidar = result["lidar"]

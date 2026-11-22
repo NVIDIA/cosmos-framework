@@ -11,7 +11,7 @@ import struct
 from pathlib import Path
 
 import requests
-from common import require_generator_profile
+from common import raise_for_http_error, require_generator_profile
 from mv_rgb import (
     NEGATIVE_PROMPT_PATH,
     NUM_FRAMES,
@@ -117,7 +117,7 @@ def main() -> None:
     )
 
     response = requests.post(f"{NIM_URL}/v1/infer", json=request, timeout=args.timeout)
-    response.raise_for_status()
+    raise_for_http_error(response)
 
     multiview = response.json()["multiview"]
     if not isinstance(multiview.get("lidar"), dict):
