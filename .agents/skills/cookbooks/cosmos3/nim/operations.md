@@ -103,8 +103,7 @@ Concurrent requests wait in a queue, and the wait counts toward each request's
 behind a long eleven-camera job can time out before it starts generating.
 While a request runs, health checks, `/v1/metadata`, and invalid requests,
 which are rejected with HTTP 422 before they reach the queue, still get an
-immediate response. For parallel generation, run more containers, each on its
-own GPUs, rather than sending concurrent requests to one container.
+immediate response. For parallel generation, use throughput profile, which will run generation requests on each GPU in parallel.
 
 Before retrying a quiet request, check the container logs and GPU activity
 rather than readiness, and avoid blind retries that duplicate expensive work.
