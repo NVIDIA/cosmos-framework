@@ -11,7 +11,7 @@ import struct
 from pathlib import Path
 
 import requests
-from common import existing_file, positive_int, raise_for_http_error, require_generator_profile
+from common import raise_for_http_error, require_generator_profile
 from mv_rgb import (
     NEGATIVE_PROMPT_PATH,
     NUM_FRAMES,
@@ -94,12 +94,12 @@ def main() -> None:
     add_sample_arguments(parser)
     parser.add_argument(
         "--lidar-condition",
-        type=existing_file,
+        type=Path,
         help="Optional measured-LiDAR safetensors file with a [3, sweeps, 128, 1800] frames tensor.",
     )
     parser.add_argument(
         "--num-conditional-sweeps",
-        type=positive_int,
+        type=int,
         help="Measured sweeps to condition on; requires --lidar-condition (the service defaults to 1).",
     )
     args = parser.parse_args()

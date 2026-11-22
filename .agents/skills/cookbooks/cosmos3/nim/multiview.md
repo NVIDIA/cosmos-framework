@@ -88,8 +88,9 @@ only to change that. The examples use a two-hour client timeout (`--timeout`).
 See [Generator configuration](configuration.md#generator-configuration).
 - **One request at a time.** A multiview container runs one `/v1/infer`
 request at a time; concurrent requests queue, and the wait counts toward each
-request's timeout. Readiness, metadata, and HTTP 422 validation stay
-responsive meanwhile. Run more containers for parallel generation. See
+request's timeout. Health checks, `/v1/metadata`, and invalid requests,
+which are rejected with HTTP 422 before they reach the queue, still get an
+immediate response meanwhile. Run more containers for parallel generation. See
 [Long-Running Requests](operations.md#long-running-requests).
 - **Attention backend.** `VLLM_OMNI_COSMOS3_MULTIVIEW_BACKEND` accepts
 `maskless` or `triton`. Leave it unset normally: the runtime then selects
@@ -175,12 +176,9 @@ JSON-object caption is also rejected.
 - **Negative prompt.** `multiview.per_view_negative_prompt` is required. It is
 one string applied to every camera, and an empty string disables it.
 
-The scripts parse and validate their command line before doing endpoint or
-media work: unknown flags, non-positive `--timeout` or
-`--num-conditional-sweeps`, and missing `--sample-root` or `--lidar-condition`
-paths exit with status 2. When the NIM rejects a request, they print its HTTP
-status and error message, which you can match against
-[Common failures](#common-failures).
+The scripts parse their command line before doing endpoint or media work.
+When the NIM rejects a request, they print its HTTP status and error message,
+which you can match against [Common failures](#common-failures).
 Before submitting a request, each requires `/v1/metadata` to report the
 Generator runtime, `/v1/infer`, a selected profile ID, and model variant
 `multiview`. Requests are large: every control and RGB clip is inlined as
@@ -247,10 +245,8 @@ payload = json.loads(Path("/tmp/cosmos3-mv-response.json").read_text())
 if "error" in payload:
     raise SystemExit(f"NIM rejected the request: {payload['error'].get('message')}")
 result = payload["multiview"]
-out = Path("examples/outputs/mv_curl_camera")
-out.mkdir(parents=True, exist_ok=True)
 for video in result["videos"]:
-    (out / f"{video['camera_key']}.mp4").write_bytes(base64.b64decode(video["b64_video"]))
+    Path(f"{video['camera_key']}.mp4").write_bytes(base64.b64decode(video["b64_video"]))
 print(result["camera_order"], result["frames_per_view"], result["fps"])
 PY2
 ```
@@ -415,12 +411,10 @@ payload = json.loads(Path("/tmp/cosmos3-mv-joint-response.json").read_text())
 if "error" in payload:
     raise SystemExit(f"NIM rejected the request: {payload['error'].get('message')}")
 result = payload["multiview"]
-out = Path("examples/outputs/mv_curl_joint")
-out.mkdir(parents=True, exist_ok=True)
 for video in result["videos"]:
-    (out / f"{video['camera_key']}.mp4").write_bytes(base64.b64decode(video["b64_video"]))
+    Path(f"{video['camera_key']}.mp4").write_bytes(base64.b64decode(video["b64_video"]))
 lidar = result["lidar"]
-(out / "lidar.safetensors").write_bytes(base64.b64decode(lidar["b64_frames"]))
+Path("lidar.safetensors").write_bytes(base64.b64decode(lidar["b64_frames"]))
 print(lidar["shape"], lidar["fps"], lidar["channels"])
 PY2
 ```

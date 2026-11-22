@@ -9,14 +9,7 @@ import sys
 from pathlib import Path
 
 import requests
-from common import (
-    decode_video,
-    existing_dir,
-    media_to_data_url,
-    positive_float,
-    raise_for_http_error,
-    require_generator_profile,
-)
+from common import decode_video, media_to_data_url, raise_for_http_error, require_generator_profile
 
 NIM_URL = os.environ.get("NIM_URL", "http://localhost:8000").rstrip("/")
 SKILLS_ROOT = Path(__file__).resolve().parents[4]
@@ -45,19 +38,14 @@ CASES = ("wsm_t2v", "i2v")
 def add_sample_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--sample-root",
-        type=existing_dir,
+        type=Path,
         default=os.environ.get("AUTO_SAMPLE_ROOT"),
         help="Local copy of the daytime sample; downloaded from Hugging Face when unset.",
     )
     parser.add_argument(
         "--caption-folder", choices=CAPTION_FOLDERS, default="captions_with_timestamp"
     )
-    parser.add_argument(
-        "--timeout",
-        type=positive_float,
-        default=DEFAULT_TIMEOUT_SECONDS,
-        help="Client timeout in seconds (default %(default)s).",
-    )
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
 
 
 def build_views(sample_root: Path, caption_folder: str, *, with_vision: bool) -> list[dict]:

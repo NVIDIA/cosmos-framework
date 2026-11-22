@@ -3,7 +3,6 @@
 
 """Small client and media helpers shared by the Cosmos3 NIM examples."""
 
-import argparse
 import base64
 import binascii
 import json
@@ -35,38 +34,6 @@ def raise_for_http_error(response: requests.Response) -> None:
         f"{response.status_code} {response.reason} from {response.url}: {detail}",
         response=response,
     )
-
-
-def positive_float(value: str) -> float:
-    """argparse type: a number greater than zero."""
-    number = float(value)
-    if not number > 0:
-        raise argparse.ArgumentTypeError(f"must be greater than 0, got {value}")
-    return number
-
-
-def positive_int(value: str) -> int:
-    """argparse type: an integer greater than zero."""
-    number = int(value)
-    if number <= 0:
-        raise argparse.ArgumentTypeError(f"must be greater than 0, got {value}")
-    return number
-
-
-def existing_file(value: str) -> Path:
-    """argparse type: a path to an existing file."""
-    path = Path(value)
-    if not path.is_file():
-        raise argparse.ArgumentTypeError(f"file not found: {value}")
-    return path
-
-
-def existing_dir(value: str) -> Path:
-    """argparse type: a path to an existing directory."""
-    path = Path(value)
-    if not path.is_dir():
-        raise argparse.ArgumentTypeError(f"directory not found: {value}")
-    return path
 
 
 def require_runtime(
