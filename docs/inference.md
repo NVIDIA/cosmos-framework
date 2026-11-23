@@ -227,7 +227,7 @@ For debugging, the full set of sample arguments is saved to `<output_dir>/<sampl
 Common arguments:
 
 - `model_mode`: Generation modality. See [Modes](#modes) above for all options.
-- `seed`: Random seed for reproducibility.
+- `seed`: Random seed for reproducibility, from 0 to 2**32 - 1. Without a seed, one is derived from the sample name and output directory. With `num_outputs` > 1, output `i` uses `seed + i`, so `seed + num_outputs - 1` must also be at most 2**32 - 1. Multiview and Transfer chunks use `seed + chunk_index`, wrapped modulo 2**32, so a seed near the top of the range stays valid for later chunks; a wrapped chunk seed can equal the seed of another sample.
 
 **Note:** Condition file paths are relative to the input file.
 
