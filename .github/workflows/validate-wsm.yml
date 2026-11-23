@@ -4,6 +4,7 @@
 name: Validate standalone WSM
 on:
   push:
+    branches: [main]
     paths: ['.agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/**', '.github/workflows/validate-wsm.yml', '.gitattributes', '.pytest.toml']
   pull_request:
     paths: ['.agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/**', '.github/workflows/validate-wsm.yml', '.gitattributes', '.pytest.toml']

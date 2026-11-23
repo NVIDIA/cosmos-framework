@@ -12,8 +12,8 @@
 #
 # A single ``pre-commit`` (lint) job and a changed-path check run first. The GPU
 # jobs wait on both. Pre-commit authorizes PRs before checkout, then lints.
-# GPU jobs skip lint failures and changes limited to ``.agents/**`` and Markdown.
-# The relevant docs, cookbook, and WSM workflows still validate docs-only changes.
+# GPU jobs skip lint failures and changes limited to agent files, Markdown,
+# issue templates, CI ownership, or the root license and notice files below.
 # The six GPU jobs then run (one at a time on the single runner):
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
 #   * generator-training-regression — vision_sft_nano loss vs goldens
@@ -84,11 +84,12 @@ jobs:
           done
 
           run_gpu=true
-          if git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_files"; then
+          if git diff --name-only -z --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_files"; then
             run_gpu=false
-            while IFS= read -r path; do
+            while IFS= read -r -d '' path; do
               case "$path" in
                 .agents/*|*.md) ;;
+                .github/CODEOWNERS|.github/ISSUE_TEMPLATE/*|LICENSE|NOTICE|THIRD_PARTY_LICENSES) ;;
                 *)
                   run_gpu=true
                   break
