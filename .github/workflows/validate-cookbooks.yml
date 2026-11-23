@@ -25,7 +25,15 @@ env:
   BIMANUAL_TESTS: tests/skills/cosmos3-inference-simulation-bimanual
   TRANSFER: .agents/skills/cosmos3-inference-simulation-transfer
 jobs:
+  authorize-ci:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/authorize-ci.yml
+    permissions:
+      pull-requests: read
+
   validate-cookbooks:
+    needs: authorize-ci
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.authorize-ci.result == 'success') }}
     name: Validate cookbooks
     runs-on: ubuntu-latest
     timeout-minutes: 20

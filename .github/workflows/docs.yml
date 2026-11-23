@@ -28,7 +28,15 @@ concurrency:
   group: docs-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  authorize-ci:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/authorize-ci.yml
+    permissions:
+      pull-requests: read
+
   build:
+    needs: authorize-ci
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.authorize-ci.result == 'success') }}
     name: Docs build
     runs-on: ubuntu-latest
     timeout-minutes: 15

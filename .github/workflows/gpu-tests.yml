@@ -11,10 +11,8 @@
 # everything.
 #
 # A single ``pre-commit`` (lint) job and a changed-path check run first. The GPU
-# jobs wait on both, so they skip lint failures and changes limited to
-# ``.agents/**`` and Markdown. GPU PR runs also require repository write access
-# or a write-access review approving the exact PR head. After such a review,
-# re-run all workflow jobs. The normal GitHub fork approval still applies.
+# jobs wait on both. Pre-commit authorizes PRs before checkout, then lints.
+# GPU jobs skip lint failures and changes limited to ``.agents/**`` and Markdown.
 # The relevant docs, cookbook, and WSM workflows still validate docs-only changes.
 # The six GPU jobs then run (one at a time on the single runner):
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
@@ -54,8 +52,12 @@ jobs:
   # and is skipped if it fails.
   pre-commit:
     uses: ./.github/workflows/pre-commit.yml
+    permissions:
+      contents: read
+      pull-requests: read
 
   changes:
+    needs: pre-commit
     name: Detect GPU-relevant changes
     runs-on: ubuntu-latest
     outputs:
@@ -100,60 +102,9 @@ jobs:
           echo "run_gpu=$run_gpu" >> "$GITHUB_OUTPUT"
           echo "Run GPU tests: \`$run_gpu\`" >> "$GITHUB_STEP_SUMMARY"
 
-  authorize-gpu:
-    name: Authorize GPU tests
-    needs: [pre-commit, changes]
-    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      pull-requests: read
-    steps:
-      - name: Check repository permissions and approvals
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          script: |
-            const eventPr = context.payload.pull_request;
-            const params = { ...context.repo, pull_number: eventPr.number };
-            const { data: pr } = await github.rest.pulls.get(params);
-            if (pr.state !== 'open' || pr.base.ref !== 'main' || pr.head.sha !== eventPr.head.sha) {
-              throw new Error('This run no longer matches the current open PR.');
-            }
-
-            const canWrite = async (username) => {
-              try {
-                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-                  ...context.repo, username,
-                });
-                return ['admin', 'maintain', 'write'].includes(data.permission);
-              } catch (error) {
-                if (error.status === 404) return false;
-                throw error;
-              }
-            };
-            if (await canWrite(pr.user.login) &&
-                (context.actor === pr.user.login || await canWrite(context.actor))) return;
-
-            // The API returns reviews in chronological order. A later change
-            // request or dismissal supersedes an approval from the same reviewer.
-            const reviews = await github.paginate(github.rest.pulls.listReviews, { ...params, per_page: 100 });
-            const decisions = new Map();
-            for (const review of reviews) {
-              if (review.user?.type === 'User' &&
-                  ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)) {
-                decisions.set(review.user.login, review);
-              }
-            }
-            for (const [reviewer, review] of decisions) {
-              if (review.state === 'APPROVED' && review.commit_id === pr.head.sha &&
-                  reviewer !== pr.user.login && await canWrite(reviewer)) return;
-            }
-            core.setFailed('GPU tests require a repository maintainer to approve this PR head, then select Re-run all jobs.');
-
   # Keep the existing required check meaningful: GitHub accepts a skipped job.
   unittest:
-    needs: [pre-commit, changes, authorize-gpu, gpu-unittest]
+    needs: [pre-commit, changes, gpu-unittest]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -164,20 +115,15 @@ jobs:
           LINT_RESULT: ${{ needs.pre-commit.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           RUN_GPU: ${{ needs.changes.outputs.run_gpu }}
-          AUTHORIZATION_RESULT: ${{ needs.authorize-gpu.result }}
           UNITTEST_RESULT: ${{ needs.gpu-unittest.result }}
         run: |
           if [[ "$LINT_RESULT" != success ]]; then
-            echo "::error::GPU unit tests require pre-commit to pass."
+            echo "::error::See pre-commit for the PR authorization and lint result."
             exit 1
           fi
           if [[ "$CHANGES_RESULT" == success && "$RUN_GPU" == false ]]; then
             echo "No GPU tests required for these paths."
             exit 0
-          fi
-          if [[ "$AUTHORIZATION_RESULT" != success ]]; then
-            echo "::error::See Authorize GPU tests for the authorization result."
-            exit 1
           fi
           if [[ "$UNITTEST_RESULT" != success ]]; then
             echo "::error::GPU unit tests did not pass."
@@ -185,7 +131,8 @@ jobs:
           fi
 
   training-smoke:
-    needs: [authorize-gpu]
+    needs: [pre-commit, changes]
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 90
     env:
@@ -233,7 +180,8 @@ jobs:
           rm -rf "$PYTEST_DEBUG_TEMPROOT" || true
 
   generator-training-regression:
-    needs: [authorize-gpu]
+    needs: [pre-commit, changes]
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 75
     env:
@@ -276,7 +224,8 @@ jobs:
           rm -rf "$PYTEST_DEBUG_TEMPROOT" || true
 
   generator-inference-smoke:
-    needs: [authorize-gpu]
+    needs: [pre-commit, changes]
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     # 105 (not 60) since the Nano step gained the three ModelOpt FP8 cases (two
     # parallelism layouts + mixed-precision diffusion steps): a 20 GB checkpoint
@@ -346,7 +295,8 @@ jobs:
           rm -rf "$PYTEST_DEBUG_TEMPROOT" || true
 
   distilled-inference-smoke:
-    needs: [authorize-gpu]
+    needs: [pre-commit, changes]
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 120
     env:
@@ -389,7 +339,8 @@ jobs:
           rm -rf "$PYTEST_DEBUG_TEMPROOT" || true
 
   reasoner-inference-smoke:
-    needs: [authorize-gpu]
+    needs: [pre-commit, changes]
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 60
     env:
@@ -461,7 +412,8 @@ jobs:
           rm -rf "$PYTEST_DEBUG_TEMPROOT" || true
 
   reasoner-training-regression:
-    needs: [authorize-gpu]
+    needs: [pre-commit, changes]
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 60
     env:
@@ -507,7 +459,8 @@ jobs:
   # above (all gated on the single pre-commit lint and changed-path check).
   gpu-unittest:
     name: GPU unit tests
-    needs: [authorize-gpu]
+    needs: [pre-commit, changes]
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     # 60 (not 30) so the first cold-cache run can download the Cosmos3-Nano
     # checkpoint for scripts/_test's convert->export->inference pipeline; steady

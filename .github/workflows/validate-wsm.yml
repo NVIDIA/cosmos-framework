@@ -11,7 +11,15 @@ on:
 permissions:
   contents: read
 jobs:
+  authorize-ci:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/authorize-ci.yml
+    permissions:
+      pull-requests: read
+
   standalone:
+    needs: authorize-ci
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.authorize-ci.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

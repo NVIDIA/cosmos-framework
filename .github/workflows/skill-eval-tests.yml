@@ -21,7 +21,15 @@ permissions:
   contents: read
 
 jobs:
+  authorize-ci:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/authorize-ci.yml
+    permissions:
+      pull-requests: read
+
   tests:
+    needs: authorize-ci
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.authorize-ci.result == 'success') }}
     name: orchestrator tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
