@@ -702,19 +702,18 @@ def generate_multiview_caption_chunks(
             }
         )
 
-    total_frames = sum(int(chunk.shape[1]) for chunk in output_chunks_by_view[0])
-    # Flatten in camera-major order, without intermediate per-camera concatenations.
-    full_vision = (
-        vision_cthw
-        if len(caption_chunks) == 1
-        else torch.cat([chunk for view_chunks in output_chunks_by_view for chunk in view_chunks], dim=1)
-    )  # [C,V*F_total,H,W]
+    if len(caption_chunks) == 1:
+        full_vision = vision_cthw
+        total_frames = chunk_frame_count
+    else:
+        full_view_videos = [torch.cat(view_chunks, dim=1) for view_chunks in output_chunks_by_view]
+        total_frames = int(full_view_videos[0].shape[1])
+        full_vision = torch.cat(full_view_videos, dim=1)  # [C,V*F_total,H,W]
 
     control_video: torch.Tensor | None = None
     if control_chunks_by_view and control_chunks_by_view[0]:
-        control_video = build_camera_major_video(
-            [chunk for view_chunks in control_chunks_by_view for chunk in view_chunks], device=full_vision.device
-        )
+        full_control_views = [torch.cat(view_chunks, dim=1) for view_chunks in control_chunks_by_view]
+        control_video = build_camera_major_video(full_control_views, device=full_vision.device)
 
     return MultiviewCaptionChunksOutput(
         vision_cthw=full_vision,
