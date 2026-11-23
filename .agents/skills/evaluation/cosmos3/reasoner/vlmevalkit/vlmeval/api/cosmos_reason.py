@@ -300,6 +300,8 @@ class CosmosReason(BaseAPI):
         # Opt-in; never forward evidence configuration to BaseAPI or the endpoint.
         self.execution_evidence_dir = kwargs.pop('execution_evidence_dir', None)
         self.execution_processor_profile = kwargs.pop('execution_processor_profile', None)
+        # Separate opt-in directory for unredacted model identities; never share it.
+        self.execution_identity_dir = kwargs.pop('execution_identity_dir', None)
         self._last_execution_record = None
         # Default Qwen3 / Reason2 setup.
         self.image_patch_size = kwargs.pop('image_patch_size', None)
@@ -542,18 +544,23 @@ class CosmosReason(BaseAPI):
             return
         from pathlib import Path
         import tempfile
-        from vlmeval.execution_evidence import build_execution_record
+        from vlmeval.execution_evidence import build_execution_record, private_identity_record
 
+        revision = os.environ.get("COSMOS_MODEL_REVISION", "unknown")
         record = build_execution_record(payload, raw, media=media,
                                         processor_profile=self.execution_processor_profile,
-                                        requested_model_revision=os.environ.get("COSMOS_MODEL_REVISION", "unknown"))
-        directory = Path(self.execution_evidence_dir)
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        # O_EXCL + mode 0600 from mkstemp, unique across processes/threads/retries.
-        fd, path = tempfile.mkstemp(prefix='response-', suffix='.json', dir=directory)
-        with os.fdopen(fd, 'w') as output:
-            json.dump(record, output, allow_nan=False)
-            output.write('\n')
+                                        requested_model_revision=revision)
+        writes = [(self.execution_evidence_dir, record)]
+        if self.execution_identity_dir is not None:
+            writes.append((self.execution_identity_dir, private_identity_record(payload, raw, revision)))
+        for target, content in writes:
+            directory = Path(target)
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            # O_EXCL + mode 0600 from mkstemp, unique across processes/threads/retries.
+            fd, path = tempfile.mkstemp(prefix='response-', suffix='.json', dir=directory)
+            with os.fdopen(fd, 'w') as output:
+                json.dump(content, output, allow_nan=False)
+                output.write('\n')
         self._last_execution_record = record
 
     def generate_inner(self, inputs, **kwargs) -> str:
