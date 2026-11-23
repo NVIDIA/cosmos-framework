@@ -9,8 +9,8 @@ from cosmos_framework.utils.generator.mixed_precision import use_w8a16_step
 
 def test_config_defaults_disable_mixed_precision() -> None:
     config = QuantizationConfig()
-    assert config.mixed_precision_first_steps == 0
-    assert config.mixed_precision_last_steps == 0
+    assert config.mixed_precision_first_steps is None
+    assert config.mixed_precision_last_steps is None
     assert config.mixed_precision_reasoner_policy == "high_precision"
     assert config.mixed_precision_w8a16_cache == "none"
     assert not config.mixed_precision_enabled

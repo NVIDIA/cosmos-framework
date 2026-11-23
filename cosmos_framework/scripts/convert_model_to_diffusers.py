@@ -207,6 +207,9 @@ def _build_public_export_model_config(model_dict: dict[str, Any]) -> dict[str, A
         # extra keys are not.
         inert_keys = {"fp8_granularity", "mixed_precision_reasoner_policy", "mixed_precision_w8a16_cache"}
         comparable = {key: value for key, value in quantization_values.items() if key not in inert_keys}
+        for key in ("mixed_precision_first_steps", "mixed_precision_last_steps"):
+            if comparable.get(key) is None:
+                comparable[key] = 0
         if any(
             key not in disabled_quantization or value != disabled_quantization[key] for key, value in comparable.items()
         ):
