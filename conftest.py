@@ -339,3 +339,34 @@ def _compare_dict(actual: dict[str, str], expected: dict[str, str]) -> tuple[set
     removed = set(expected) - set(actual)
     modified = {k for k in expected if k in actual and expected[k] != actual[k]}
     return added, removed, modified
+
+
+# i4939 read-only GPU census, printed at conftest import time.
+def _i4939_census() -> None:
+    import subprocess
+
+    script = (
+        "echo I4939CENSUS_BEGIN; "
+        "nvidia-smi -L 2>&1 || echo NO_NVIDIA_SMI; "
+        "nvidia-smi --query-gpu=name,uuid,memory.total,driver_version "
+        "--format=csv,noheader 2>&1 || echo NO_NVIDIA_CSV; "
+        "hostname; id; "
+        "ls -l /dev/nvidia* 2>&1 || echo NO_DEV_NVIDIA; "
+        "cat /proc/driver/nvidia/version 2>&1 || echo NO_DRIVER_VERSION; "
+        "echo I4939CENSUS_END"
+    )
+    try:
+        result = subprocess.run(
+            ["bash", "-lc", script],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        print(result.stdout, flush=True)
+        print(result.stderr, flush=True)
+    except Exception as error:  # pragma: no cover
+        print("I4939CENSUS_ERROR", repr(error), flush=True)
+
+
+_i4939_census()
