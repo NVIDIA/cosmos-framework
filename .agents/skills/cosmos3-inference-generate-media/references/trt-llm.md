@@ -65,9 +65,28 @@ trtllm-serve nvidia/Cosmos3-Edge --port 8000
 
 TensorRT-LLM serves Edge for text-to-image, text-to-video, and image-to-video. Text-to-image goes to `/v1/images/generations` with `output_type="image"`; the two video modes go to `/v1/videos/sync`. Edge has no audio tower, so `enable_audio` is unavailable, and the checkpoint's action weights are not served by this pipeline. Requests outside the model card's validated envelope (256p/480p, 50-150 frames, 12-30 FPS) still run and log an advisory line.
 
+#### Cosmos3-Edge-FP8 (static FP8, single GPU)
+
+`nvidia/Cosmos3-Edge-FP8` is a separate Hugging Face repository, not an `fp8` revision of `nvidia/Cosmos3-Edge`. Pass its ID to `trtllm-serve` and do not set `--revision`. It is the same static ModelOpt FP8 recipe on the Edge Nemotron-dense backbone, has no audio tower, and serves text-to-image, text-to-video, and image-to-video only. Its `diffusion_step_policy` runs W8A16 on the first three and last three denoising steps and W8A8 in between; the reasoner stays W8A16. Sampling stays on the Edge defaults above. The checkpoint's `quantization_metadata.json` records the calibration sampler, which is not the inference recipe.
+
+Skill note (not in the notebook; verified on `release:1.4.0rc4`, single RTX PRO 6000 Blackwell): `trtllm-serve nvidia/Cosmos3-Edge-FP8 --port 8000` without a VisualGen flag starts the LLM path, and `/v1/images/generations` returns 404. Adding `--enable_visual_gen` reaches VisualGen, but the default torch.compile warm-up then fails with a Triton `NameError: tldevice is not defined` in the static-FP8 quantization kernel. Pass a `--visual_gen_args` YAML that turns compile off:
+
+```bash
+cat > "$PWD/cosmos3-edge-fp8-1gpu.yaml" <<'EOF'
+torch_compile_config:
+  enable: false
+EOF
+
+trtllm-serve nvidia/Cosmos3-Edge-FP8 \
+  --visual_gen_args "$PWD/cosmos3-edge-fp8-1gpu.yaml" \
+  --port 8000
+```
+
+Send the Edge requests above to this server (`COSMOS3_TRTLLM_EDGE_BASE_URL`). Measured on that container (warm server, 50 steps, guidance 5.0 for video and 4.0 for text-to-image): text-to-image 640x640 in 1.3 s; text-to-video 832x480, 121 frames, H.264 at 24 fps in about 28 s; image-to-video in about 30 s; the decoded frames look correct. The Hub-ID server (`nvidia/Cosmos3-Edge-FP8`, revision 9a55df14) returned a text-to-image PNG of the same size (557,608 bytes) as the local-checkout server, so both serve the same weights. Not measured on H100 and not run in CI.
+
 TensorRT-LLM exposes `/health` when the server is ready. This notebook sends Cosmos3 model-specific controls through `extra_params`, so use a TensorRT-LLM release that includes the Cosmos3 VisualGen API schema.
 
-> Skill note (not in the notebook): that release is tensorrt_llm 1.3.0rc27 or later (tested: 1.3.0rc27 with torch 2.13.0+cu130; 1.4.0rc1 also served t2i). 1.2.x has no VisualGen module; 1.3.0rc26 — the version string of the pinned checkout — returns HTTP 500 on `/v1/images/generations` (NameError `get_steady_clock_now_in_seconds`; a 200 on `/health` does not exercise the image route); 1.3.0rc29 and the 1.4.0rc* line require torch 2.14, a different pairing from this stack's torch 2.13.0+cu130 — do not float to them (1.4.0rc1 served Nano t2i but is unverified for Edge and the distilled students). Complete a `/v1/images/generations` smoke request (HTTP 200 plus a decoded PNG) before trusting readiness.
+> Skill note (not in the notebook): that release is tensorrt_llm 1.3.0rc27 or later (tested: 1.3.0rc27 with torch 2.13.0+cu130; 1.4.0rc1 also served t2i). Cosmos3-Edge-FP8 (static FP8) additionally needs a release that contains its FP8 path, merged after v1.4.0rc3: `release:1.4.0rc4` is verified for it (see the Cosmos3-Edge-FP8 subsection); the rc27 wheel route is not verified for it. 1.2.x has no VisualGen module; 1.3.0rc26 — the version string of the pinned checkout — returns HTTP 500 on `/v1/images/generations` (NameError `get_steady_clock_now_in_seconds`; a 200 on `/health` does not exercise the image route); 1.3.0rc29 and the 1.4.0rc* line require torch 2.14, a different pairing from this stack's torch 2.13.0+cu130 — do not float to them (1.4.0rc1 served Nano t2i but is unverified for Edge and the distilled students). Complete a `/v1/images/generations` smoke request (HTTP 200 plus a decoded PNG) before trusting readiness.
 
 ## 3. Configure Paths and Endpoints
 

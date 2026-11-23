@@ -290,6 +290,31 @@ weights are not served by this pipeline, and video-to-video is validated for Nan
 and Super. Requests outside the model card's validated envelope (256p/480p,
 50-150 frames, 12-30 FPS) still run and log an advisory line.
 
+**Cosmos3-Edge-FP8** (single GPU, static FP8). `nvidia/Cosmos3-Edge-FP8` is its own repository, so do not pass `--revision`. Edge-FP8 needs a TensorRT-LLM that contains the Cosmos3 static-FP8 path, which `release:1.4.0rc4` includes. Without `--visual_gen_args`, `trtllm-serve` starts the LLM path and image requests return 404. The YAML below turns off torch.compile, because the default warm-up fails in the static-FP8 quantization kernel:
+
+```bash
+cat > "$PWD/cosmos3-edge-fp8-1gpu.yaml" <<'EOF'
+torch_compile_config:
+  enable: false
+EOF
+
+trtllm-serve nvidia/Cosmos3-Edge-FP8 \
+  --visual_gen_args "$PWD/cosmos3-edge-fp8-1gpu.yaml" \
+  --port "$COSMOS3_TRTLLM_PORT"
+```
+
+The step policy, sampling defaults, and supported tasks are the same as Edge above: W8A16 on the first and last three denoising steps, W8A8 in between, no audio or video-to-video. The offline entry point takes the same Hub ID, run from the TensorRT-LLM checkout where the YAML above was written:
+
+```bash
+python3 examples/visual_gen/models/cosmos3/cosmos3.py \
+  --model nvidia/Cosmos3-Edge-FP8 \
+  --visual_gen_args cosmos3-edge-fp8-1gpu.yaml \
+  --prompt_file examples/visual_gen/models/cosmos3/prompts/t2v.json \
+  --output_path edge_fp8_t2v.mp4
+```
+
+MP4 output needs `ffmpeg` on the `PATH`. The requests in the VisualGen server section above can be sent to this server unchanged.
+
 **Cosmos3-Super-Text2Image-4Step** (single GPU; DMD2-distilled text-to-image):
 
 ```bash
