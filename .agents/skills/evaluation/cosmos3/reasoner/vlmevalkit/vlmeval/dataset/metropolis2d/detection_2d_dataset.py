@@ -294,20 +294,26 @@ class Metropolis2DDetectionDataset(ImageBaseDataset):
             # Sort predictions by confidence (descending)
             pred_boxes_car = sorted(pred_boxes_car, key=lambda x: x.get('score', 1.0), reverse=True)
 
+            # Compute pairwise IoUs once and reuse them across all thresholds.
+            # Kept as a nested list (not a numpy array) so the exact values
+            # returned by compute_2d_iou are compared, with no dtype conversion.
+            iou_matrix = [
+                [compute_2d_iou(pred['bbox'], gt['bbox']) for gt in gt_boxes_car]
+                for pred in pred_boxes_car
+            ]
+
             # Match predictions to ground truth at each IoU threshold
             for iou_thresh in iou_thresholds:
                 gt_matched = [False] * len(gt_boxes_car)
 
-                for pred in pred_boxes_car:
-                    pred_bbox = pred['bbox']
+                for pred, pred_ious in zip(pred_boxes_car, iou_matrix):
                     confidence = pred.get('score', 1.0)
                     best_iou = 0.0
                     best_gt_idx = -1
 
-                    for gt_idx, gt in enumerate(gt_boxes_car):
+                    for gt_idx, iou in enumerate(pred_ious):
                         if gt_matched[gt_idx]:
                             continue
-                        iou = compute_2d_iou(pred_bbox, gt['bbox'])
                         if iou > best_iou:
                             best_iou = iou
                             best_gt_idx = gt_idx
