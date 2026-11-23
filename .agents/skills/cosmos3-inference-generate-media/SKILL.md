@@ -97,10 +97,13 @@ the first command (Quickstart; § 7 `get_pipe` / `run_diffusers_payload`; use-ca
 
 The notebook's venv, with the torch backend matching the driver's CUDA major
 version (13.x → `cu130`, 12.x → `cu128`; check `nvidia-smi`), plus the setup guide's
-headless OpenCV swap:
+headless OpenCV swap. For Cosmos3-Edge on an Intel GPU, set
+`COSMOS3_TORCH_BACKEND=xpu` (validated stack: setup guide, Diffusers section). XPU
+is Edge-only; Nano, Super, and the distilled checkpoints stay on CUDA.
 
 ```bash
 export COSMOS3_DIFFUSERS_VENV="${COSMOS3_DIFFUSERS_VENV:-$PWD/.venv-cosmos3-diffusers}"
+export COSMOS3_TORCH_BACKEND="${COSMOS3_TORCH_BACKEND:-cu130}"
 # This skill sits inside the cosmos-framework checkout, whose pyproject.toml pins uv ==0.11.29 for the
 # framework venv; --no-config (or UV_NO_CONFIG=1) keeps that pin, and the framework's other [tool.uv]
 # settings, away from this standalone venv. UV_* environment variables still apply. Running the two
@@ -117,7 +120,7 @@ source "$COSMOS3_DIFFUSERS_VENV/bin/activate"
 # cosmos_guardrail pulls the GUI opencv-python wheel (needs libxcb/libGL). The headless swap (setup guide,
 # TensorRT-LLM section) is part of this install step — one compound command, so the import check below cannot
 # run before it (eval run 2026-10-24: an agent ran the check before the separate swap lines -> libxcb ImportError).
-uv pip install --no-config --python "$COSMOS3_DIFFUSERS_VENV" --torch-backend=cu130 \
+uv pip install --no-config --python "$COSMOS3_DIFFUSERS_VENV" --torch-backend="$COSMOS3_TORCH_BACKEND" \
   "diffusers @ git+https://github.com/huggingface/diffusers.git" \
   accelerate av cosmos_guardrail huggingface_hub imageio imageio-ffmpeg \
   torch torchvision transformers \
