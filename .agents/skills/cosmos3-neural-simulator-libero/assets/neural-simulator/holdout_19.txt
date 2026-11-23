@@ -1,0 +1,22 @@
+# LIBERO-10 held-out episodes: 19 of 379 (5%), stratified by task_index, seed=0
+# root=examples/data/LIBERO_LeRobot_v3/libero_10
+# columns: episode_index task_index length task
+26	1	296	put both the alphabet soup and the tomato sauce in the basket
+46	8	409	put both moka pots on the stove
+62	6	251	put the white mug on the plate and put the chocolate pudding to the right of the plate
+65	7	255	put both the cream cheese box and the butter in the basket
+142	5	300	put the yellow and white mug in the microwave and close it
+161	9	323	put both the alphabet soup and the cream cheese box in the basket
+176	6	275	put the white mug on the plate and put the chocolate pudding to the right of the plate
+198	3	235	put the black bowl in the bottom drawer of the cabinet and close it
+199	1	250	put both the alphabet soup and the tomato sauce in the basket
+213	4	184	pick up the book and place it in the back compartment of the caddy
+240	0	289	turn on the stove and put the moka pot on it
+253	0	275	turn on the stove and put the moka pot on it
+297	9	236	put both the alphabet soup and the cream cheese box in the basket
+298	4	170	pick up the book and place it in the back compartment of the caddy
+300	3	237	put the black bowl in the bottom drawer of the cabinet and close it
+309	2	264	put the white mug on the left plate and put the yellow and white mug on the right plate
+315	2	233	put the white mug on the left plate and put the yellow and white mug on the right plate
+357	5	256	put the yellow and white mug in the microwave and close it
+378	7	252	put both the cream cheese box and the butter in the basket

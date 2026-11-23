@@ -1,0 +1,183 @@
+{
+  "_about": "Every number in the results tables of README.md (recipe: Cosmos Neural Simulator, LIBERO-10), with the record it came from. 'record' paths are relative to the recipe's run/evaluation record set (runs/<run>/RECORD.md, eval/<run>/RECORD.md, README_recipe_workspace.md); those records are not shipped in this folder. Values are copied verbatim from the records; README rounding is noted where it differs.",
+  "weights_scored": "All forward-dynamics and inverse-dynamics numbers were produced by loading the DCP training checkpoint (checkpoints/iter_*) with the run's config.yaml, which loads the regular weights (use_ema_weights:true is recorded in run_config.json but ignored by the YAML loader; records: runs/cell2/RECORD.md correction 2026-10-06, PROVENANCE.md section 2). The base-model control ran with --no-ema (no EMA copy exists). The 30 GB export holds EMA weights and was not evaluated.",
+  "fd_fidelity": {
+    "protocol": {
+      "held_out_episodes": 19, "generated_frames_scored": 4971, "rollout_fps": 20, "sampler": "UniPC", "steps": 30, "guidance": 1.0, "shift": 3.0,
+      "metric_resolution_hxw": "160x320 content of the 320x192 canvas", "lpips_net": "alex",
+      "record": "eval/iter0250/RECORD.md (protocol), eval/iter1000/RECORD.md, eval/cell2_iter1000/RECORD.md"
+    },
+    "columns": {
+      "base_model_control": {
+        "record": "eval/control_base/RECORD.md", "sampling_seeds": [0], "weights": "regular (--no-ema)",
+        "psnr_db": 12.83, "ssim": 0.402, "lpips": 0.534,
+        "psnr_chunk0_db": 19.42, "psnr_chunk5_db": 12.69, "psnr_chunk10_db": 11.96,
+        "psnr_third_person_db": 13.13, "psnr_wrist_db": 13.13,
+        "psnr_views_unrounded": {"third_person": 13.1272, "wrist": 13.1308, "whole_frame": 12.8312, "record": "PROVENANCE.md section 2 (eval/control_base/summary.json)"},
+        "gripper_cmd_followed_within_20_frames": 0.046, "gripper_frame_agreement": 0.536, "gen_lag_frames": 13.0
+      },
+      "fd_iter250": {
+        "record": "eval/iter0250/RECORD.md; README_recipe_workspace.md section 6 table 'Control and sampling seeds'", "sampling_seeds": [0],
+        "psnr_db": 17.73, "ssim": 0.711, "lpips": 0.211,
+        "psnr_chunk0_db": 27.80, "psnr_chunk5_db": 17.66, "psnr_chunk10_db": 16.27,
+        "psnr_third_person_db": 19.71,
+        "psnr_third_person_note": "eval/iter0250/RECORD.md prints 19.72; the compare_cells table and the README print 19.71 (rounding of the same summary.json value)",
+        "psnr_wrist_db": 16.96,
+        "gripper_cmd_followed_within_20_frames": 0.631, "gripper_frame_agreement": 0.860, "gen_lag_frames": 7.9
+      },
+      "fdid_iter250": {
+        "record": "eval/cell2_iter0250/RECORD.md; README_recipe_workspace.md section 6", "sampling_seeds": [0],
+        "psnr_db": 17.85, "ssim": 0.712, "lpips": 0.213,
+        "psnr_chunk0_db": 26.75, "psnr_chunk5_db": 17.66, "psnr_chunk10_db": 16.66,
+        "psnr_third_person_db": 20.07, "psnr_wrist_db": 17.11,
+        "gripper_cmd_followed_within_20_frames": 0.615, "gripper_frame_agreement": 0.860, "gen_lag_frames": 7.5
+      },
+      "fd_iter1000": {
+        "record": "eval/iter1000/RECORD.md (seeds 0, 1, 2 table; the seed-1/2 directories eval/iter1000_seed1 and eval/iter1000_seed2 are summarised inside it, they have no RECORD.md of their own); chunk-5 and per-view means from README_recipe_workspace.md section 6 (compare_cells output eval/cell1_summary_table.md)",
+        "sampling_seeds": [0, 1, 2], "spread": "population std over sampling seeds",
+        "psnr_db": {"mean": 20.58, "std": 0.06, "per_seed": [20.49, 20.64, 20.60]},
+        "ssim": {"mean": 0.781, "std": 0.002, "per_seed": [0.778, 0.783, 0.782]},
+        "lpips": {"mean": 0.131, "std": 0.002, "per_seed": [0.134, 0.130, 0.129]},
+        "psnr_chunk0_db": {"mean": 31.06, "std": 0.09, "per_seed": [31.00, 31.18, 30.99]},
+        "psnr_chunk5_db": {"mean": 20.56, "std": 0.15},
+        "psnr_chunk10_db": {"mean": 19.27, "std": 0.11, "per_seed": [19.19, 19.43, 19.18]},
+        "psnr_third_person_db": {"mean": 23.49, "std": 0.11},
+        "psnr_wrist_db": {"mean": 19.41, "std": 0.02},
+        "gripper_cmd_followed_within_20_frames": {"mean": 0.600, "std": 0.045, "per_seed": [0.554, 0.585, 0.662]},
+        "gripper_frame_agreement": {"mean": 0.914, "std": 0.011, "per_seed": [0.900, 0.914, 0.927]},
+        "gen_lag_frames": {"mean": 7.6, "std": 0.1},
+        "rollout_wall_s_per_seed": [1056, 1028, 970]
+      },
+      "fdid_iter1000": {
+        "record": "eval/cell2_iter1000/RECORD.md (covers eval/cell2_iter1000, _seed1, _seed2)",
+        "sampling_seeds": [0, 1, 2], "spread": "population std over sampling seeds",
+        "psnr_db": {"mean": 20.20, "std": 0.07}, "ssim": {"mean": 0.773, "std": 0.002}, "lpips": {"mean": 0.137, "std": 0.002},
+        "psnr_chunk0_db": {"mean": 29.88, "std": 0.18}, "psnr_chunk5_db": {"mean": 20.12, "std": 0.27}, "psnr_chunk10_db": {"mean": 18.90, "std": 0.13},
+        "psnr_third_person_db": {"mean": 23.03, "std": 0.13}, "psnr_wrist_db": {"mean": 19.04, "std": 0.05},
+        "gripper_cmd_followed_within_20_frames": {"mean": 0.646, "std": 0.038}, "gripper_frame_agreement": {"mean": 0.923, "std": 0.005},
+        "gen_lag_frames": {"mean": 7.8, "std": 0.2},
+        "rollout_wall_s_per_seed": [1035, 1006, 998]
+      }
+    },
+    "gripper_event_check": {
+      "record": "eval/iter0250/RECORD.md, eval/iter1000/RECORD.md",
+      "classifier_accuracy_on_heldout_real_frames": 0.936, "training_crops": 21256, "labelled_heldout_frames": 4365, "train_time_cpu_s": 424,
+      "gripper_command_changes_in_heldout": 65, "real_video_followed_within_20_frames": 0.692, "real_video_followed_count": 45, "real_mean_lag_frames": 7.0
+    }
+  },
+  "drift_fd_iter1000_seed0": {
+    "record": "eval/iter1000/RECORD.md (drift line, sampling seed 0)",
+    "psnr_db_by_chunk": {"0": 31.00, "1": 27.70, "2": 24.14, "4": 21.33, "6": 19.41, "8": 18.77, "10": 19.19, "12": 17.96, "14": 16.73},
+    "readme_rounding": {"0": 31.0, "1": 27.7, "2": 24.1, "4": 21.3, "6": 19.4, "8": 18.8, "10": 19.2, "14": 16.7},
+    "comparison_fdid_iter1000_3seed_mean_by_chunk": {"0": 29.88, "5": 20.12, "10": 18.90, "record": "eval/cell2_iter1000/RECORD.md"}
+  },
+  "fdid_vs_fd_iter1000": {
+    "record": "README_recipe_workspace.md section 6 'Final: cell 2 ... versus cell 1 ... at iteration 1000' (compare_cells delta over eval/cell2_iter1000* and eval/iter1000*); eval/cell2_iter1000/RECORD.md",
+    "psnr_delta_db": -0.38, "psnr_delta_standard_error_db": 0.05, "ssim_delta": -0.008, "lpips_delta": 0.006,
+    "psnr_delta_chunk0_db": -1.18, "psnr_delta_chunk1_db": -1.32, "psnr_delta_chunk5_db": -0.44, "psnr_delta_chunk10_db": -0.36, "psnr_delta_chunk15_db": 0.16,
+    "episodes_where_fdid_better_psnr": "4 of 19 (3-seed episode means)", "per_episode_psnr_delta_range_db": [-0.98, 0.27],
+    "iter250_psnr_db": {"fdid": 17.85, "fd": 17.73},
+    "gain_250_to_1000_db": {"fd": 2.85, "fdid": 2.35}
+  },
+  "inverse_dynamics_iter1000": {
+    "protocol": {
+      "record": "runs/id_eval/RECORD.md; eval/id_cell2_iter1000/RECORD.md",
+      "windows": 301, "target_actions": 4816, "tail_actions_excluded": 155, "held_out_episodes": 19, "real_gripper_transitions": 63,
+      "mm_per_command_unit": 11.62, "mm_per_unit_fit": {"x": 10.79, "y": 12.12, "z": 11.62, "r2": [0.861, 0.931, 0.912], "frame_pairs": 96119},
+      "sampler": "UniPC", "steps": 30, "guidance": 1.0, "shift": 3.0, "per_window_seed": "seed*100000 + ep*100 + k",
+      "leak_check": "zeros vs real action in the batch, same seed: bit-identical output in every run",
+      "wall_s_per_run": {"id_cell2_iter1000": 645, "id_cell2_iter1000_seed1": 702, "id_cell2_iter1000_seed2": 671, "id_cell2_iter1000_shuffled": 698, "id_cell1_iter1000": 703, "id_control_base": 700},
+      "s_per_window": {"min": 1.88, "max": 2.09}, "peak_gpu_gb": 33.61
+    },
+    "columns": {
+      "mean_training_action": {
+        "record": "eval/id_cell2_iter1000/RECORD.md (analytic 'train-mean constant' column; identical in every id_eval run)", "type": "analytic constant",
+        "position_error_mm_per_frame": 6.05, "rotation_error_deg_mean": 4.81, "rotation_error_deg_median": 3.52,
+        "gripper_sign_accuracy": 0.545, "transitions_recall": 0.00, "transitions_precision": null,
+        "r2_x_y_z_gripper": [-0.00, -0.00, -0.00, -0.00], "r2_readme_rounding": [0, 0, 0, 0],
+        "integrated_error_chunk_end_mm": 87.7, "integrated_error_episode_end_mm": 174.6,
+        "vector_over_96479_train_frames": [0.01799, 0.05849, -0.05597, 0.99472, -0.00757, -0.00313, 0.00762, 0.99549, 0.00435, 0.54535]
+      },
+      "zero_motion": {
+        "record": "eval/id_cell2_iter1000/RECORD.md (analytic 'zero motion + open' column)", "type": "analytic constant",
+        "position_error_mm_per_frame": 6.13, "rotation_error_deg_mean": 4.80, "rotation_error_deg_median": 3.56,
+        "gripper_sign_accuracy": 0.545, "transitions_recall": 0.00, "transitions_precision": null,
+        "r2_x_y_z_gripper": [-0.01, -0.03, -0.02, -0.84],
+        "integrated_error_chunk_end_mm": 89.4, "integrated_error_episode_end_mm": 304.5
+      },
+      "base_model": {
+        "record": "eval/id_control_base/RECORD.md", "sampling_seeds": [0], "weights": "regular (--no-ema)",
+        "position_error_mm_per_frame": 17.43, "rotation_error_deg_mean": 18.93, "rotation_error_deg_median": 17.77,
+        "gripper_sign_accuracy": 0.507, "transitions_recall": 1.00, "transitions_precision": 0.03,
+        "r2_x_y_z_gripper": [-8.20, -5.77, -6.77, -1.01], "r2_readme_rounding": [-8.2, -5.8, -6.8, -1.0],
+        "integrated_error_chunk_end_mm": 116.7, "integrated_error_episode_end_mm": 579.3, "gripper_flips": 2425
+      },
+      "fd_only_cell1": {
+        "record": "eval/id_cell1_iter1000/RECORD.md", "sampling_seeds": [0],
+        "position_error_mm_per_frame": 17.24, "rotation_error_deg_mean": 19.01, "rotation_error_deg_median": 17.88,
+        "gripper_sign_accuracy": 0.507, "transitions_recall": 1.00, "transitions_precision": 0.03,
+        "r2_x_y_z_gripper": [-7.81, -5.67, -6.67, -1.02], "r2_readme_rounding": [-7.8, -5.7, -6.7, -1.0],
+        "integrated_error_chunk_end_mm": 115.5, "integrated_error_episode_end_mm": 531.9, "gripper_flips": 2435
+      },
+      "fdid_cell2": {
+        "record": "eval/id_cell2_iter1000/RECORD.md (seed 0 and the three-seed summary), eval/id_cell2_iter1000_seed1/RECORD.md, eval/id_cell2_iter1000_seed2/RECORD.md; runs/id_eval/RECORD.md result table",
+        "sampling_seeds": [0, 1, 2], "spread": "population std over sampling seeds",
+        "position_error_mm_per_frame": {"mean": 0.71, "std": 0.00, "per_seed": [0.72, 0.71, 0.71]},
+        "position_error_units_per_frame": {"per_seed": [0.062, 0.061, 0.061]},
+        "dpos_mae_units_x_y_z": {"mean": [0.038, 0.022, 0.033], "per_seed": [[0.038, 0.022, 0.034], [0.037, 0.022, 0.033], [0.037, 0.022, 0.033]]},
+        "rotation_error_deg_mean": {"mean": 0.88, "std": 0.00, "per_seed": [0.88, 0.88, 0.89]},
+        "rotation_error_deg_median": {"mean": 0.69, "per_seed": [0.68, 0.69, 0.69]},
+        "gripper_sign_accuracy": {"mean": 0.997, "std": 0.000, "per_seed": [0.998, 0.998, 0.997]},
+        "transitions_recall": {"mean": 0.97, "std": 0.00, "per_seed": [0.97, 0.97, 0.97]},
+        "transitions_precision": {"mean": 0.87, "std": 0.02, "per_seed": [0.88, 0.88, 0.84]},
+        "r2_x_y_z_gripper": {"mean": [0.96, 0.99, 0.98, 0.99], "per_seed": [[0.96, 0.99, 0.98, 0.99], [0.96, 0.99, 0.98, 0.99], [0.96, 0.99, 0.98, 0.99]]},
+        "integrated_error_chunk_end_mm": {"mean": 7.5, "std": 0.1, "per_seed": [7.6, 7.4, 7.5]},
+        "integrated_error_episode_end_mm": {"mean": 48.5, "std": 0.1, "per_seed": [48.6, 48.4, 48.3]},
+        "per_episode_position_error_mm_range_seed0": [0.46, 1.24],
+        "per_episode_position_error_mm_median_seed0": 0.64
+      },
+      "fdid_cell2_shuffled_video": {
+        "record": "eval/id_cell2_iter1000_shuffled/RECORD.md", "sampling_seeds": [0], "video_control": "shuffled (video of another window of the same episode)",
+        "position_error_mm_per_frame": 8.07, "rotation_error_deg_mean": 7.31, "rotation_error_deg_median": 5.78,
+        "gripper_sign_accuracy": 0.635, "transitions_recall": 0.30, "transitions_precision": 0.27,
+        "r2_x_y_z_gripper": [-1.06, -0.60, -0.76, -0.47],
+        "integrated_error_chunk_end_mm": 116.0, "integrated_error_episode_end_mm": 49.2
+      }
+    }
+  },
+  "cost_card_one_gb300": {
+    "cell1_fd": {
+      "time_per_iteration_s_median": {"value": 95.8, "record": "README_recipe_workspace.md status board; runs/main/RECORD.md (96.0 s median over iterations 1-70, 94-96 s over 260-480)"},
+      "gpu_memory_training": {"torch_peak_allocated_gb": 218.4, "torch_reserved_gb": 222.7, "nvidia_smi_steady_gb": [229, 235], "nvidia_smi_after_save_gb": 255, "record": "runs/main/RECORD.md"},
+      "gpu_hours_to_iteration": {"250": 6.79, "500": 13.42, "750": 20.28, "1000": 26.94, "consumed_incl_restart": 29.24, "recomputed_iterations": "501-566 (2.07 h)", "record": "runs/main/RECORD.md GPU-time accounting"},
+      "training_loss_fd": {"iter10": 1.169, "iter250": 0.595, "iter1000": 0.609, "record": "runs/main/RECORD.md progress table"}
+    },
+    "cell2_fdid": {
+      "time_per_iteration_s_range": {"value": [92, 99], "record": "runs/cell2/RECORD.md (segments 98.5 / 95.1 / 96.5 / 92.3 s; iterations 2-3 99.2 / 97.3 s)"},
+      "gpu_memory_training": {"torch_peak_allocated_gb": 218.6, "record": "runs/cell2/RECORD.md"},
+      "gpu_hours_to_iteration_1000": {"productive": 26.69, "consumed": 26.85, "record": "runs/cell2/RECORD.md"},
+      "training_loss": {"vision_iter10": 0.0853, "vision_iter1000": 0.0374, "action_iter10": 0.4266, "action_iter1000": 0.0024, "record": "runs/cell2/RECORD.md training curve"}
+    },
+    "smoke_run_10_iterations_74k_tokens_x_accum_8": {"s_per_iteration": 95.9, "torch_peak_allocated_gb": 241, "nvidia_smi_peak_gb": 254, "record": "runs/smoke/RECORD.md"},
+    "checkpoint_write": {"size_gb": 166, "write_time_s": 230, "record": "runs/smoke/RECORD.md (230.4 s); runs/main/RECORD.md saves 241.8-249.4 s"},
+    "export_cpu_only": {"size_gb": 30, "shards": 7, "dtype": "bf16", "weights": "EMA", "wall_s_range": [69, 79], "host_ram_gb": 32.4, "record": "runs/export_iter1000/RECORD.md (69 s); README_recipe_workspace.md status board (checkpoint-500 export 79 s)"},
+    "fd_evaluation": {"s_per_16_frame_chunk": 2.09, "s_per_chunk_range_over_runs": [2.07, 2.16], "minutes_per_seed": [16, 17], "peak_gpu_gb": 35.58, "record": "eval/iter0250/RECORD.md, eval/iter1000/RECORD.md, eval/cell2_iter1000/RECORD.md"},
+    "id_evaluation": {"s_per_window_range": [1.9, 2.1], "minutes_per_run": [11, 12], "peak_gpu_gb": 33.61, "record": "runs/id_eval/RECORD.md; eval/id_*/RECORD.md"}
+  },
+  "splits_and_leakage": {
+    "record": "runs/main/RECORD.md cell card; runs/setup/RECORD.md",
+    "train": {"episodes": 360, "frames": 96479, "windows_17_frame": 90719},
+    "held_out": {"episodes": 19, "frames": 4990, "windows_17_frame": 4686, "per_task": "2 per task, 1 for task 8", "seed": 0},
+    "overlapping_episode_ids": 0, "duplicate_action_sequences_across_splits": 0,
+    "first_frame_nn_rmse": {"heldout_to_train_min": 0.0432, "heldout_to_train_median": 0.0594, "train_to_train_min": 0.0321, "train_to_train_median": 0.0591},
+    "normalisation_stats_deviation_of_range": {"q01": 0.096, "q99": 0.102, "heldout_shift_max": 0.0043}
+  },
+  "figures": {
+    "record": "strip_meta.json, captions.md (this folder)",
+    "hero_ep026_chunk00": {"psnr_chunk_fd_db": 31.58, "psnr_chunk_control_db": 22.09, "readme_rounding": [31.6, 22.1]},
+    "hero_ep026_chunk14": {"psnr_chunk_fd_db": 20.35, "psnr_chunk_control_db": 13.47, "readme_rounding": [20.4, 13.5]},
+    "hero_episode_26_seed0_means": {"fd_db": 21.01, "control_db": 15.90},
+    "compare_ep309_chunk14": {"fd_db": 21.28, "fdid_db": 18.84, "three_seed_episode_means_db": {"fd": 22.43, "fdid": 21.45}, "readme_rounding": [21.3, 18.8, 22.4, 21.5]},
+    "compare_ep062_chunk12": {"fd_db": 18.86, "fdid_db": 19.71, "three_seed_episode_means_db": {"fd": 21.30, "fdid": 21.57}, "readme_rounding": [18.9, 19.7, 21.3, 21.6]}
+  }
+}

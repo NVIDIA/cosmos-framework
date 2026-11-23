@@ -1,0 +1,184 @@
+{
+  "_about": "The 20 held-out AgiBotWorld-Beta episodes of the Cosmos3-Nano-Sim-Bimanual recipe (matched-action rollouts, frozen-first-frame control and cross-task action-swap control all use exactly these 20).",
+  "_record": "Episode selection of the earlier study of this recipe on the early-access checkpoint (its run records are not published). The 2026-11-09 measurement on the released checkpoint used exactly these episodes; its record is manifests/RECORD.md.",
+  "dataset": {
+    "repo_id": "agibot-world/AgiBotWorld-Beta",
+    "repo_type": "dataset",
+    "revision": "2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278",
+    "licence": "CC BY-NC-SA 4.0 (AgiBot World COMMUNITY LICENSE AGREEMENT on the dataset card); gated, accept the terms on Hugging Face; not bundled here"
+  },
+  "window": {
+    "start_frame": 0,
+    "num_actions": 900,
+    "num_video_frames": 901,
+    "camera": "head_color.mp4 (640x480 at 30 fps), resized to 640x360 as in training (agibot_video.resize_to_640x360)",
+    "proprio": "proprio_stats.h5"
+  },
+  "selection": {
+    "tool": "tools/select_episodes.py --task-info-dir heldout/task_info --n 20 --min-frames 901 --exclude-text exclude_text_heldout.json --fetch-index --max-obs-tars 2 --min-tasks 2 --out heldout/selection.json",
+    "seed": "the script's --seed default is 0 (per-(task, scene) shuffle); the record does not state a different value. The final 10 + 10 were not taken from that shuffle: the planner returned 20 episodes of task 600 only, task 596 was added by hand, and the 10 per task were chosen deterministically by even spread over the sorted eligible episode ids (runs/heldout/RECORD.md, 'selection' and 'selection on disk').",
+    "exclusion_file": "exclude_text_heldout.json: 31 strings (the captions and task names of the four bundled examples shipped with the checkpoint). The file itself is not in the published records and the bundled captions are private; see CHECKLIST.md.",
+    "eligibility": ">= 901 frames in both video and proprioception (task_info, then verified by ffprobe and h5); not matching any bundled caption or task name; present in both the observations and the proprio tar",
+    "leakage_check": "first-frame PSNR against every bundled 640x360 video at most 13.0 dB (task 600) and 13.2 dB (task 596); the same episode would exceed 30 dB (runs/heldout/RECORD.md, 'bundled identity check')",
+    "eligible_counts": {
+      "600": "355 eligible on disk -> 10",
+      "596": "14 eligible (of the 14 extracted) -> 10"
+    }
+  },
+  "tars": [
+    {
+      "path": "proprio_stats/804068-856282.tar",
+      "bytes": 48359116800,
+      "holds": "proprio_stats.h5 for both tasks"
+    },
+    {
+      "path": "observations/600/815362-842380.tar",
+      "bytes": 48644597760,
+      "holds": "task 600 videos"
+    },
+    {
+      "path": "observations/596/810449-822244.tar",
+      "bytes": 48856145920,
+      "holds": "task 596 videos"
+    }
+  ],
+  "tasks": {
+    "600": {
+      "task_name": "Hang the key on the hook and place the bag in the storage box",
+      "first_action_text": "Pick up the key on the cabinet with left arm.",
+      "video_frames_range_of_selected": "1002-1705",
+      "episodes": [
+        815362,
+        817265,
+        819929,
+        821169,
+        822703,
+        824031,
+        825215,
+        826290,
+        827325,
+        836956
+      ]
+    },
+    "596": {
+      "task_name": "Place the inner pot with rice into the rice cooker to cook",
+      "first_action_text": "Press the lid-opening button with the left arm to open the rice cooker lid.",
+      "video_frames_range_of_selected": "1748-2457",
+      "episodes": [
+        810449,
+        811187,
+        812711,
+        813228,
+        813610,
+        813907,
+        814265,
+        815134,
+        815473,
+        815752
+      ]
+    }
+  },
+  "episodes": [
+    {
+      "name": "task600_ep815362",
+      "task_id": 600,
+      "episode_id": 815362
+    },
+    {
+      "name": "task600_ep817265",
+      "task_id": 600,
+      "episode_id": 817265
+    },
+    {
+      "name": "task600_ep819929",
+      "task_id": 600,
+      "episode_id": 819929
+    },
+    {
+      "name": "task600_ep821169",
+      "task_id": 600,
+      "episode_id": 821169
+    },
+    {
+      "name": "task600_ep822703",
+      "task_id": 600,
+      "episode_id": 822703
+    },
+    {
+      "name": "task600_ep824031",
+      "task_id": 600,
+      "episode_id": 824031
+    },
+    {
+      "name": "task600_ep825215",
+      "task_id": 600,
+      "episode_id": 825215
+    },
+    {
+      "name": "task600_ep826290",
+      "task_id": 600,
+      "episode_id": 826290
+    },
+    {
+      "name": "task600_ep827325",
+      "task_id": 600,
+      "episode_id": 827325
+    },
+    {
+      "name": "task600_ep836956",
+      "task_id": 600,
+      "episode_id": 836956
+    },
+    {
+      "name": "task596_ep810449",
+      "task_id": 596,
+      "episode_id": 810449
+    },
+    {
+      "name": "task596_ep811187",
+      "task_id": 596,
+      "episode_id": 811187
+    },
+    {
+      "name": "task596_ep812711",
+      "task_id": 596,
+      "episode_id": 812711
+    },
+    {
+      "name": "task596_ep813228",
+      "task_id": 596,
+      "episode_id": 813228
+    },
+    {
+      "name": "task596_ep813610",
+      "task_id": 596,
+      "episode_id": 813610
+    },
+    {
+      "name": "task596_ep813907",
+      "task_id": 596,
+      "episode_id": 813907
+    },
+    {
+      "name": "task596_ep814265",
+      "task_id": 596,
+      "episode_id": 814265
+    },
+    {
+      "name": "task596_ep815134",
+      "task_id": 596,
+      "episode_id": 815134
+    },
+    {
+      "name": "task596_ep815473",
+      "task_id": 596,
+      "episode_id": 815473
+    },
+    {
+      "name": "task596_ep815752",
+      "task_id": 596,
+      "episode_id": 815752
+    }
+  ],
+  "_note_prompt": "The rollouts use the fixed per-episode prompts in prompts_heldout_20.json (starting scene, both arms, task text; nothing that happens later). The task texts above are the dataset's."
+}
