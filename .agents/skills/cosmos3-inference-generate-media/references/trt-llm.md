@@ -82,7 +82,31 @@ trtllm-serve nvidia/Cosmos3-Edge-FP8 \
   --port 8000
 ```
 
-Send the Edge requests above to this server (`COSMOS3_TRTLLM_EDGE_BASE_URL`). Measured on that container (warm server, 50 steps, guidance 5.0 for video and 4.0 for text-to-image): text-to-image 640x640 in 1.3 s; text-to-video 832x480, 121 frames, H.264 at 24 fps in about 28 s; image-to-video in about 30 s; the decoded frames look correct. The Hub-ID server (`nvidia/Cosmos3-Edge-FP8`, revision 9a55df14) returned a text-to-image PNG of the same size (557,608 bytes) as the local-checkout server, so both serve the same weights. Not measured on H100 and not run in CI.
+Docker form (skill note; the same flags in the `release:1.4.0rc4` container, for a host without TensorRT-LLM; `--host 0.0.0.0` is needed for the published port, and `TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` is the smoke-path setting explained under Guardrails below). Wait for `curl -fsS http://localhost:8000/health`, which returned 200 about 1–2 minutes after the start with the weights cached:
+
+```bash
+cat > "$PWD/cosmos3-edge-fp8-1gpu.yaml" <<'EOF'
+torch_compile_config:
+  enable: false
+EOF
+
+docker run -d --name cosmos3-edge-fp8 \
+  --runtime nvidia --gpus '"device=0"' --ipc=host \
+  --ulimit memlock=-1 --ulimit stack=67108864 \
+  -e HF_HOME=/root/.cache/huggingface -e HF_TOKEN \
+  -e TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1 \
+  -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+  -v "$PWD/cosmos3-edge-fp8-1gpu.yaml:/cfg/cosmos3-edge-fp8-1gpu.yaml:ro" \
+  -p 8000:8000 \
+  nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc4 \
+  bash -lc 'exec trtllm-serve nvidia/Cosmos3-Edge-FP8 --host 0.0.0.0 --port 8000 --visual_gen_args /cfg/cosmos3-edge-fp8-1gpu.yaml'
+```
+
+Stop it with `docker rm -f cosmos3-edge-fp8`.
+
+Send the Edge requests above to this server (`COSMOS3_TRTLLM_EDGE_BASE_URL`). Measured on that container (warm server, 50 steps, guidance 5.0 for video and 4.0 for text-to-image): text-to-image 640x640 in 1.3 s; text-to-video 832x480, 121 frames, H.264 at 24 fps in about 28 s; image-to-video in about 30 s, both with guardrails off. The outputs decode as expected (checked with `ffprobe -count_frames`): the PNG is 640x640 RGB, and both video modes are H.264, 832x480, 24 fps, 121 frames. The Hub-ID server (`nvidia/Cosmos3-Edge-FP8`, revision 9a55df14) returned a text-to-image PNG of the same size (557,608 bytes) as the local-checkout server, so both serve the same weights. Not measured on H100.
+
+Guardrails (skill note; same container, `release:1.4.0rc4` does not ship `cosmos_guardrail`): with the command above and no further setup the server exits at startup with `Cosmos Guardrail is not installed`. Pick one of the two mechanisms the message names. To keep guardrails on, install the package first, as the message says (`pip install cosmos_guardrail==0.3.2 && pip uninstall opencv-python && pip install opencv-python-headless`; it needs access to the gated `nvidia/Cosmos-1.0-Guardrail` repository, see payloads.md § 2.3). Verified that way with `use_guardrails: true`: text-to-image 10.2 s (the first request, which loads the guardrail models), text-to-video 35.2 s and image-to-video 39.2 s. To run without them, start the server with `TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1`; you are then responsible for deploying the model without guardrails. Verified: the server then answered text-to-image requests with `use_guardrails` set to `true` and to `false`.
 
 TensorRT-LLM exposes `/health` when the server is ready. This notebook sends Cosmos3 model-specific controls through `extra_params`, so use a TensorRT-LLM release that includes the Cosmos3 VisualGen API schema.
 

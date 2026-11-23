@@ -206,6 +206,51 @@ docker run -d --name "$CONTAINER" \
 echo "Cosmos3-Edge starting in container '$CONTAINER' — run the readiness cell next."
 ```
 
+### Cosmos3-Edge-FP8 inference with TensorRT-LLM
+
+> **Skill note (not in the source; verified on `nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc4`, one RTX PRO 6000 Blackwell, November 2026):**
+> `nvidia/Cosmos3-Edge-FP8` is a separate Hugging Face repository (static FP8; its root `hf_quant_config.json` is read by the loader, so no
+> quantization flag and no `--revision`). Use `release:1.4.0rc4`, which contains the Cosmos3 static-FP8 path; `release:1.4.0rc2` (the Edge BF16 image above) is not tested
+> with this checkpoint. Two flags differ from the Edge BF16 cell: `TRTLLM_MEDIA_ALLOWED_LOCAL_PATH` and `--max_num_tokens 131072`.
+>
+> - Without `TRTLLM_MEDIA_ALLOWED_LOCAL_PATH` the server refuses every `file://` request in § 3 with HTTP 400
+>   `Local media paths are not accepted by this server`. The variable names the directory whose files may be read; the cell below uses `COSMOS3_MEDIA_ROOT` (the directory the vLLM and
+>   SGLang cells pass as their allowed local media path) and falls back to `COSMOS_ROOT`, which is mounted into the container at the same path, so the
+>   `file://` URLs from `asset_url()` resolve.
+> - With `--max_num_tokens 32768` the effective startup limit was 65,536 encoder tokens, and the long Temporal Localization videos in § 3
+>   (88,000–93,600 encoder tokens) failed with HTTP 400 `Multimodal item requires ... encoder tokens, exceeding the effective startup maximum 65536`.
+>   With `131072` all 19 request cells of § 3 ran without an error on this checkpoint and on `nvidia/Cosmos3-Edge`.
+> - FP8 is not bit-identical to BF16. With `temperature=0`, the 2D-grounding box, the timestamp query and the multiple-choice answer matched BF16;
+>   most free-text answers differ in wording, and one trajectory point and the "Interval Question" differed in content. Accuracy was not benchmarked.
+
+```bash
+set -euo pipefail
+: "${COSMOS_ROOT:?run the setup cell first}"
+
+CONTAINER=cosmos3-reasoner-trtllm
+COSMOS3_EDGE_FP8_TRTLLM_IMAGE=nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc4
+
+docker pull "$COSMOS3_EDGE_FP8_TRTLLM_IMAGE"
+docker rm -f "$CONTAINER" 2>/dev/null || true
+
+docker run -d --name "$CONTAINER" \
+  --runtime nvidia --gpus '"device=0"' \
+  --ulimit memlock=-1 --ulimit stack=67108864 \
+  -e HF_HOME=/root/.cache/huggingface \
+  -e HF_TOKEN \
+  -e TRTLLM_MEDIA_ALLOWED_LOCAL_PATH="${COSMOS3_MEDIA_ROOT:-$COSMOS_ROOT}" \
+  -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+  -v "$COSMOS_ROOT:$COSMOS_ROOT" \
+  -p 8001:8000 --ipc=host \
+  "$COSMOS3_EDGE_FP8_TRTLLM_IMAGE" \
+  bash -lc 'python -m pip install --no-cache-dir opencv-python-headless && \
+    exec trtllm-serve nvidia/Cosmos3-Edge-FP8 \
+      --host 0.0.0.0 --port 8000 \
+      --max_num_tokens 131072'
+
+echo "Cosmos3-Edge-FP8 starting in container '$CONTAINER' — run the readiness cell next."
+```
+
 ### Wait for the server to be ready
 
 Run this after launching one tier. It streams the server log and polls `/health`

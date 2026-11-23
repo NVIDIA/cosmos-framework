@@ -307,9 +307,7 @@ compose an install command from the prose. § 7.3: why the pin is fetched as a S
 
 **Route B (source build in the devel container)** — the setup guide's path: run § 7.4 of `references/trt-llm.md` as ONE shell
 call inside the devel container, verbatim. § 7.5: why the `TRTLLM_USE_PRECOMPILED=1` shortcut must not be used on this
-checkout. § 7.6: only if you keep guardrails on (not the smoke path).
-
-Edge-FP8 (`nvidia/Cosmos3-Edge-FP8`): not a § 7.7 line. Use the `Cosmos3-Edge-FP8` subsection of § 2 in `references/trt-llm.md` — a `--visual_gen_args` YAML with `torch_compile_config.enable: false`, on `release:1.4.0rc4` (the Route A wheel pin is not verified for it).
+checkout. § 7.6: only if you keep guardrails on (not the smoke path). Edge-FP8 (`nvidia/Cosmos3-Edge-FP8`) is not a § 7.7 line and not a Route A/B install: use the Docker form in the `Cosmos3-Edge-FP8` subsection of § 2 in `references/trt-llm.md` (`release:1.4.0rc4`, a `--visual_gen_args` YAML with `torch_compile_config.enable: false`, `TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` for the smoke path), then the Edge request below.
 
 Serve: run the Edge or Nano line of § 7.7 of `references/trt-llm.md`, verbatim, from the Route A venv — in the same shell call, first repeat the
 `TRTLLM_VENV` export, the `source "$TRTLLM_VENV/bin/activate"` and the `CUDA_HOME` export of § 7.2 (a new shell call has none of them; Route B's
