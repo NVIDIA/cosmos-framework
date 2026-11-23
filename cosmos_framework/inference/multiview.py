@@ -51,12 +51,12 @@ from cosmos_framework.utils.generator.multiview import (
     build_camera_major_video,
     decode_multiview_latent_per_view,
     generated_multiview_condition_frames,
+    iter_multiview_video_by_view,
     load_multiview_media_pixels,
     load_multiview_media_units,
     normalize_multiview_control_weights,
     pad_multiview_view_video,
     slice_multiview_view_frames,
-    split_multiview_video_by_view,
 )
 
 
@@ -667,27 +667,21 @@ def generate_multiview_caption_chunks(
         # lands at or under zero and is crushed to black, which measured as 70.7% of all pixels on
         # an 11-camera run. The rest of this repo already normalises the same way at
         # inference.py:1863, :1870, :2429 and :2442; this path was the one that did not.
-        vision_cthw = (
-            (
-                (
-                    1.0
-                    + decode_multiview_latent_per_view(
-                        model.decode,
-                        outputs["vision"][-1],
-                        sample_n_views,
-                        chunk_frame_count,
-                        assemble_on_cpu=True,
-                    )
-                )
-                / 2
+        vision_cthw = decode_multiview_latent_per_view(
+            model.decode,
+            outputs["vision"][-1],
+            sample_n_views,
+            chunk_frame_count,
+            assemble_on_cpu=True,
+        )[0]  # [C,V*F,H,W]
+        # The collector owns this CPU buffer; normalize it without full-video temporaries.
+        vision_cthw.add_(1.0).div_(2.0).clamp_(0, 1)
+        view_videos = list(
+            iter_multiview_video_by_view(
+                vision_cthw,
+                sample_n_views=sample_n_views,
+                num_video_frames_per_view=chunk_frame_count,
             )
-            .clamp(0, 1)
-            .cpu()[0]
-        )  # [C,V*F,H,W]
-        view_videos = split_multiview_video_by_view(
-            vision_cthw,
-            sample_n_views=sample_n_views,
-            num_video_frames_per_view=chunk_frame_count,
         )
 
         keep_start = 0 if previous_view_videos is None else current_condition_frame_count
@@ -708,14 +702,19 @@ def generate_multiview_caption_chunks(
             }
         )
 
-    full_view_videos = [torch.cat(view_chunks, dim=1) for view_chunks in output_chunks_by_view]
-    total_frames = int(full_view_videos[0].shape[1])
-    full_vision = torch.cat(full_view_videos, dim=1)  # [C,V*F_total,H,W]
+    total_frames = sum(int(chunk.shape[1]) for chunk in output_chunks_by_view[0])
+    # Flatten in camera-major order, without intermediate per-camera concatenations.
+    full_vision = (
+        vision_cthw
+        if len(caption_chunks) == 1
+        else torch.cat([chunk for view_chunks in output_chunks_by_view for chunk in view_chunks], dim=1)
+    )  # [C,V*F_total,H,W]
 
     control_video: torch.Tensor | None = None
     if control_chunks_by_view and control_chunks_by_view[0]:
-        full_control_views = [torch.cat(view_chunks, dim=1) for view_chunks in control_chunks_by_view]
-        control_video = build_camera_major_video(full_control_views, device=full_vision.device)
+        control_video = build_camera_major_video(
+            [chunk for view_chunks in control_chunks_by_view for chunk in view_chunks], device=full_vision.device
+        )
 
     return MultiviewCaptionChunksOutput(
         vision_cthw=full_vision,
