@@ -313,6 +313,29 @@ class Inference(ABC):
         return processed_video_cthw
 
 
+@contextmanager
+def _cudnn_autotune_disabled() -> Iterator[None]:
+    """Run the enclosed guardrail post-processing with ``torch.backends.cudnn.benchmark`` off.
+
+    Inference turns cuDNN autotuning on process-wide for the generator. The face-blur detector
+    would then benchmark every convolution the first time it sees a frame size in the process,
+    which costs seconds once per process and frame size, and the algorithm it picks can differ
+    between runs, so the detected face boxes, and the blurred areas, vary from run to run. With
+    autotuning off, cuDNN uses its heuristic algorithm choice. The generator keeps the
+    algorithms it already tuned.
+
+    The flag is process-wide: two overlapping uses of this context could leave it off, and any
+    other thread running cuDNN convolutions inside it runs untuned. The guardrail is not run
+    from two threads at once.
+    """
+    previous = torch.backends.cudnn.benchmark
+    torch.backends.cudnn.benchmark = False
+    try:
+        yield
+    finally:
+        torch.backends.cudnn.benchmark = previous
+
+
 def _run_video_guardrail(
     video_guardrail_runner: "GuardrailRunner", video_cthw: torch.Tensor
 ) -> tuple[torch.Tensor | None, str]:
@@ -335,7 +358,8 @@ def _run_video_guardrail(
         log.critical(f"GUARDRAIL BLOCKED: {message}")
         return None, message
 
-    frames_thwc = video_guardrail_runner.postprocess(frames_thwc)
+    with _cudnn_autotune_disabled():
+        frames_thwc = video_guardrail_runner.postprocess(frames_thwc)
     video_cthw = (torch.from_numpy(frames_thwc).float().permute(3, 0, 1, 2) / 255.0).to(  # [C,T,H,W]
         video_cthw.device, dtype=video_cthw.dtype
     )
