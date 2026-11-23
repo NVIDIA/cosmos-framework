@@ -49,12 +49,8 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
-  actions: read
 
 env:
-  GH_TOKEN: ${{ github.token }}
   # Deployment values (evaluator image, dashboard URL) live in repository variables, not in the mirrored tree.
   COSMOS_SKILL_EVAL_IMAGE: ${{ vars.COSMOS_SKILL_EVAL_IMAGE }}
   COSMOS_SKILL_EVAL_DASHBOARD: ${{ vars.COSMOS_SKILL_EVAL_DASHBOARD }}
@@ -86,9 +82,12 @@ jobs:
       || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest  # GitHub-hosted and no checkout: nothing from the PR runs before the check has passed
     timeout-minutes: 5
+    permissions:
+      issues: write # React to the triggering issue comment on a PR.
     steps:
       - name: Require the write, maintain or admin role of the person who triggered the run
         env:
+          GH_TOKEN: ${{ github.token }}
           # the commenter, the person who applied the label, or the dispatcher — read from the event, never from the PR
           ACTOR: ${{ github.event.sender.login || github.actor }}
           PR_FROM_EVENT: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
@@ -125,6 +124,10 @@ jobs:
     needs: gate
     runs-on: [self-hosted, cosmos-skill-eval]
     timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write # React to the trigger and publish the plan comment.
     # one plan at a time per PR; later triggers queue (an unrelated label/comment event never reaches this job,
     # so it cannot cancel a pending run the way a workflow-level group would)
     concurrency:
@@ -142,6 +145,7 @@ jobs:
       - name: Resolve the PR head
         id: pr
         env:
+          GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           PR_FROM_EVENT: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
           COMMENT_ID: ${{ github.event.comment.id }}
@@ -182,6 +186,7 @@ jobs:
       - name: Plan the matrix and post the comment
         id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           HEAD_SHA: ${{ steps.pr.outputs.sha }}
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
@@ -231,6 +236,10 @@ jobs:
     # (.github/skill-eval.yml; no backend is pinned at the moment — `serial_backends: []`)
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     timeout-minutes: 200  # above the orchestrator's 3 h cell timeout, so the launcher's graceful stop fires first
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -238,6 +247,7 @@ jobs:
           persist-credentials: false  # this checkout is bind-mounted into the agent task container: no job token in .git/config
       - name: Run the cell
         env:
+          GH_TOKEN: ${{ github.token }}
           PLAN_JSON: ${{ needs.plan.outputs.plan }}
           CELL_SKILL: ${{ matrix.skill }}
           CELL_BACKEND: ${{ matrix.backend }}
@@ -286,6 +296,10 @@ jobs:
     # (.github/skill-eval.yml; no backend is pinned at the moment — `serial_backends: []`)
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     timeout-minutes: 200  # above the orchestrator's 3 h cell timeout, so the launcher's graceful stop fires first
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -293,6 +307,7 @@ jobs:
           persist-credentials: false  # this checkout is bind-mounted into the agent task container: no job token in .git/config
       - name: Run the cell
         env:
+          GH_TOKEN: ${{ github.token }}
           PLAN_JSON: ${{ needs.plan.outputs.plan }}
           CELL_SKILL: ${{ matrix.skill }}
           CELL_BACKEND: ${{ matrix.backend }}
@@ -333,6 +348,10 @@ jobs:
     if: always() && needs.plan.result == 'success'
     runs-on: [self-hosted, cosmos-skill-eval]
     timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -346,6 +365,7 @@ jobs:
           merge-multiple: true
       - name: Write the final comment
         env:
+          GH_TOKEN: ${{ github.token }}
           PLAN_JSON: ${{ needs.plan.outputs.plan }}
         run: >-
           python3 .github/scripts/skill_eval/run_matrix.py report --config .github/skill-eval.yml
@@ -357,9 +377,12 @@ jobs:
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      pull-requests: write
     steps:
       - name: Remove the trigger labels so they can be re-applied
         env:
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           for label in run-skill-eval run-skill-eval-smoke run-skill-eval-failed run-skill-eval-force; do

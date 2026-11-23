@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+name: Protect CI files
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, edited]
+
+permissions: {}
+
+concurrency:
+  group: protect-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  protect-ci:
+    if: github.event.pull_request.head.repo.id != github.event.repository.id
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      # Keep this metadata-only. Never check out, build, or run files from the PR.
+      - name: Close fork pull requests that change CI
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = { ...context.repo, pull_number: context.payload.pull_request.number };
+            const { data: initial } = await github.rest.pulls.get(pr);
+            if (initial.state !== 'open' || initial.base.ref !== 'main' ||
+                initial.head.repo?.id === initial.base.repo.id) return;
+
+            // Keep these paths aligned with .github/CODEOWNERS. Check both sides of renames.
+            const protectedDirectories = ['.github/workflows/', '.github/actions/', '.github/scripts/', 'ci/'];
+            const protectedFiles = new Set([
+              '.github/skill-eval.yml', '.pre-commit-config.yaml',
+              '.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS',
+            ]);
+            const isProtected = (path) => protectedFiles.has(path) ||
+              protectedDirectories.some((directory) => path?.startsWith(directory));
+            const files = await github.paginate(github.rest.pulls.listFiles, { ...pr, per_page: 100 });
+            const changesCi = files.some(({ filename, previous_filename }) =>
+              isProtected(filename) || isProtected(previous_filename));
+
+            if (!changesCi) {
+              if (files.length !== initial.changed_files) {
+                throw new Error('Could not inspect all changed files. Leave fork workflows unapproved.');
+              }
+              return;
+            }
+
+            const { data: current } = await github.rest.pulls.get(pr);
+            if (current.state !== 'open' || current.head.sha !== initial.head.sha ||
+                current.base.ref !== initial.base.ref || current.base.sha !== initial.base.sha) return;
+
+            await github.rest.pulls.update({ ...pr, state: 'closed' });
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: pr.pull_number,
+              body: 'This fork pull request was closed because it changes protected CI files. ' +
+                'Please submit the contribution without the CI changes, or ask a repository maintainer ' +
+                'to bring the CI changes into a branch in this repository for review.',
+            });

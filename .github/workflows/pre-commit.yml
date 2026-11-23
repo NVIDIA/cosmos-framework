@@ -9,6 +9,8 @@ on:
   # Allow the GPU workflows to gate on this as a reusable workflow so their
   # (single, expensive) self-hosted runner only runs after lint passes.
   workflow_call:
+permissions:
+  contents: read
 jobs:
   pre-commit:
     runs-on: ubuntu-latest

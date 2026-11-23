@@ -1,0 +1,10 @@
+# CI maintainers for workflow definitions and the files that configure or run them.
+/.github/workflows/ @lfengad @christinayyw @Xuanmeng-Zhang
+/.github/actions/ @lfengad @christinayyw @Xuanmeng-Zhang
+/.github/scripts/ @lfengad @christinayyw @Xuanmeng-Zhang
+/.github/skill-eval.yml @lfengad @christinayyw @Xuanmeng-Zhang
+/ci/ @lfengad @christinayyw @Xuanmeng-Zhang
+/.pre-commit-config.yaml @lfengad @christinayyw @Xuanmeng-Zhang
+/.github/CODEOWNERS @lfengad @christinayyw @Xuanmeng-Zhang
+/CODEOWNERS @lfengad @christinayyw @Xuanmeng-Zhang
+/docs/CODEOWNERS @lfengad @christinayyw @Xuanmeng-Zhang
