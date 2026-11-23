@@ -20,8 +20,37 @@ PINNED_SERVING_COMPATIBILITY = {
 }
 
 
-def _identity(value):
-    return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_./+:-]{1,240}', value) and '://' not in value else None
+# Model names are recorded only when publicly approved; anything else (local
+# checkpoint paths, internal names) becomes REDACTED. Approve more public names
+# with COSMOS_EVIDENCE_PUBLIC_MODELS (comma-separated, exact match).
+PUBLIC_MODELS = frozenset({'nvidia/Cosmos3-Nano'})
+REDACTED = 'redacted'
+
+
+def public_models():
+    extra = os.environ.get('COSMOS_EVIDENCE_PUBLIC_MODELS', '')
+    return PUBLIC_MODELS | {name.strip() for name in extra.split(',') if name.strip()}
+
+
+def _model_identity(value):
+    if not isinstance(value, str) or not value:
+        return None
+    return value if value in public_models() else REDACTED
+
+
+def _revision_identity(value):
+    """Commit hashes and 'unknown' only; branch names, tags and paths are redacted."""
+    if not isinstance(value, str) or not value:
+        return None
+    return value if value == 'unknown' or re.fullmatch(r'[0-9a-f]{7,64}', value) else REDACTED
+
+
+def private_identity_record(payload: dict, response_json: dict, requested_model_revision=None) -> dict:
+    """Unredacted model identities for local debugging. NOT sanitized; never share it."""
+    raw = response_json if isinstance(response_json, dict) else {}
+    return {'format_version': 1, 'sanitized': False,
+            'requested_model': payload.get('model'), 'requested_model_revision': requested_model_revision,
+            'observed_model': raw.get('model')}
 
 
 def _number(value):
@@ -89,9 +118,10 @@ def _profile(value):
                       sources=[f'https://huggingface.co/nvidia/Cosmos3-Nano/resolve/{NANO_REVISION}/{name}'
                                for name in ('config.json', 'preprocessor_config.json')])
     else:
-        for key in ('profile_model', 'profile_revision'):
-            if _identity(value.get(key)):
-                result[key] = value[key]
+        if value.get('profile_model') is not None:
+            result['profile_model'] = _model_identity(value['profile_model'])
+        if value.get('profile_revision') is not None:
+            result['profile_revision'] = _revision_identity(value['profile_revision'])
     return result
 
 
@@ -151,7 +181,7 @@ def build_execution_record(payload: dict, response_json: dict, *, media=None, pr
                  isinstance(choice.get('message'), dict) and 'content' in choice['message'] and
                  (choice['message']['content'] is None or isinstance(choice['message']['content'], str))
                  for choice in choices))
-    observed = {'response_valid': bool(valid), 'model': _identity(raw.get('model')),
+    observed = {'response_valid': bool(valid), 'model': _model_identity(raw.get('model')),
                 'usage': _knobs(raw.get('usage'), ('prompt_tokens', 'completion_tokens', 'total_tokens')),
                 'finish_reasons': [choice.get('finish_reason') if isinstance(choice, dict) and
                                    choice.get('finish_reason') in ('stop', 'length', 'error', 'content_filter') else None
@@ -202,8 +232,8 @@ def build_execution_record(payload: dict, response_json: dict, *, media=None, pr
     status = ('failed_response' if not valid else 'mismatch' if 'mismatch' in checks.values() else
               'verified_under_explicit_profile' if all(checks[key] == 'match' for key in required) else 'unknown')
     return {'format_version': 1,
-            'requested': {'model': _identity(payload.get('model')), 'generation': generation,
-                          'model_revision': _identity(requested_model_revision),
+            'requested': {'model': _model_identity(payload.get('model')), 'generation': generation,
+                          'model_revision': _revision_identity(requested_model_revision),
                           'mm_processor_kwargs': processor, 'media_io_kwargs': io,
                           'chat_template_kwargs': _knobs(payload.get('chat_template_kwargs'), ('enable_thinking',)),
                           'image_inputs': images, 'video_inputs': videos, 'media': requested_media},

@@ -128,6 +128,16 @@ or return API. Evidence requests raw token IDs but retains only visual groups,
 actual response model, usage and finish reasons—not prompts, text token IDs,
 labels, media, endpoint URLs or credentials.
 
+Model identities are redacted by default. Model names (requested, returned, or in
+an operator processor profile) are recorded only if they are on the public
+allowlist (`nvidia/Cosmos3-Nano`), extended with exact names in the
+comma-separated `COSMOS_EVIDENCE_PUBLIC_MODELS`. Only approve names that are
+already public. Revisions are recorded only as commit hashes or `unknown`. Any
+other value, such as a local checkpoint path, internal model name, branch or tag,
+is recorded as `redacted`. To debug, set `execution_identity_dir` to a separate
+directory: it receives the unredacted identities per response. That output is
+not sanitized; never share it alongside the evidence.
+
 Nano's explicit processor profile comes from the pinned public
 [`config.json`](https://huggingface.co/nvidia/Cosmos3-Nano/resolve/e59a53c25979a090fa8706c9acc0c254a6e89b92/config.json)
 and [`preprocessor_config.json`](https://huggingface.co/nvidia/Cosmos3-Nano/resolve/e59a53c25979a090fa8706c9acc0c254a6e89b92/preprocessor_config.json):
