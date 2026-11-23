@@ -163,6 +163,12 @@ The defaults work as follows:
   unless the profile uses sequence parallelism. NVIDIA Blackwell GPUs and
   sequence-parallel profiles use automatic selection.
   `DIFFUSION_ATTENTION_BACKEND` overrides the default.
+- **Sparse attention:** Nano uses 60% sparse attention by default on Blackwell
+  (NVFP4/FP8) and Hopper (FP8), keeping six layers and the first 10 steps dense.
+  Dense attention uses FlashAttention, except on Hopper without Ulysses, which
+  uses SageAttention. CFG+Ulysses is supported.
+  Set `NIM_ENABLE_SPARSE_ATTENTION=0` to disable sparsity. Custom checkpoints
+  stay dense unless you provide a recipe through `NIM_ATTENTION_CONFIG`.
 - **Variational autoencoder (VAE) decode** defaults to
   `NIM_VAE_FAST_PATH=channels_last`, the fastest path. The `lossless` value
   keeps the reference decoder output, and `off` uses the reference decoder. On
