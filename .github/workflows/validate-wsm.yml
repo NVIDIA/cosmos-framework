@@ -10,22 +10,19 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  pull-requests: read
 jobs:
-  authorize-ci:
-    if: github.event_name == 'pull_request'
-    uses: ./.github/workflows/authorize-ci.yml
-    permissions:
-      pull-requests: read
-
   standalone:
-    needs: authorize-ci
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.authorize-ci.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       RUN_GPU_TESTS: "0"
       WSM_DIR: .agents/skills/cosmos3-inference-simulation-auto/scripts/wsm
     steps:
+      - name: Authorize PR CI
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 5
+        uses: NVIDIA/cosmos-framework/.github/actions/authorize-ci@ad054f0e71c57532610bccfc334d7977c204da76
       - uses: actions/checkout@v6
       - name: Fetch standalone WSM scene and documentation resources
         run: git lfs pull --include="$WSM_DIR/examples/rds_hq/**,$WSM_DIR/docs/images/wsm4/**" --exclude=''

@@ -11,25 +11,15 @@ on:
   workflow_call:
 permissions:
   contents: read
+  pull-requests: read
 jobs:
-  authorize-ci:
-    if: github.event_name == 'pull_request'
-    uses: ./.github/workflows/authorize-ci.yml
-    permissions:
-      pull-requests: read
-
   pre-commit:
-    needs: authorize-ci
-    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      # A skipped job satisfies required checks. Fail this check explicitly
-      # when authorization failed, before checking out the PR.
-      - name: Require approval before running pre-commit
-        if: github.event_name == 'pull_request' && needs.authorize-ci.result != 'success'
-        run: |
-          echo "::error::See Authorize PR CI for the approval requirement."
-          exit 1
+      - name: Authorize PR CI
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 5
+        uses: NVIDIA/cosmos-framework/.github/actions/authorize-ci@ad054f0e71c57532610bccfc334d7977c204da76
       - uses: actions/checkout@v6
         with:
           lfs: true
