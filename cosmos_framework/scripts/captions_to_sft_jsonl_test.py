@@ -96,6 +96,29 @@ def test_drops_long_and_short_clips(dirs, tmp_path, monkeypatch):
     assert summary["drops_by_reason"]["too_few_frames"] == 1
 
 
+def test_can_disable_duration_and_min_frame_filters_for_short_tasks(dirs, tmp_path, monkeypatch):
+    captions_dir, videos_dir = dirs
+    _make_clip(captions_dir, videos_dir, "short", caption_json={"x": 1})
+    monkeypatch.setattr(mod, "probe_video_metadata", lambda p: _meta(duration=0.5, total_frames=12))
+
+    out = tmp_path / "ds.jsonl"
+    mod.main(
+        captions_dir=captions_dir,
+        videos_dir=videos_dir,
+        output=out,
+        min_window_frames=None,
+        max_duration_s=None,
+        num_video_frames=-1,
+    )
+
+    rows = _read_jsonl(out)
+    assert [r["uuid"] for r in rows] == ["short"]
+    summary = json.loads((tmp_path / "ds.jsonl.summary.json").read_text())
+    assert summary["filters"]["max_duration_s"] is None
+    assert summary["filters"]["min_window_frames"] is None
+    assert summary["drops_by_reason"] == {}
+
+
 def test_num_video_frames_filter_drops_85_frame_clip(dirs, tmp_path, monkeypatch):
     captions_dir, videos_dir = dirs
     _make_clip(captions_dir, videos_dir, "ep0", caption_json={"x": 1})
