@@ -94,6 +94,31 @@ registered omnipicker-based AgiBotWorld action path, not as a complete renderabl
 asset package or a generic description for every AgiBotWorld gripper variant. The public
 framework does not currently include a separate CTEK URDF or the referenced mesh package.
 
+### Dataset state, action layout, and normalization
+
+The inverse-dynamics examples predict action trajectories from video inputs.
+They do not infer a full LeRobot episode by themselves: fields such as
+`observation.state`, timestamps, frame indexes, and camera streams must come
+from the source dataset or the robot logging pipeline used to create the
+episode. When building a LeRobot-format dataset, align the predicted `action`
+rows with the original per-timestep observations instead of treating inverse
+dynamics as a replacement for state estimation.
+
+For a concrete LeRobot-style robotics sample, inspect
+[`assets/droid_lerobot_example/`](../../cookbooks/cosmos3/generator/action/assets/droid_lerobot_example/).
+Its metadata declares the DROID state streams
+`observation.state.cartesian_position`,
+`observation.state.joint_positions`, and
+`observation.state.gripper_position`, while the parquet and video assets
+provide the corresponding timestep-aligned records.
+
+Use the action-definition table above as the current layout summary for the
+checked-in AV, DROID, UMI, and human hand-pose examples. The corresponding
+action JSON files and the block skills' references show how those layouts are
+normalized and passed to each backend. Other embodiment layouts and
+normalization statistics are model and data-release specific unless their
+example assets or framework configuration are published.
+
 ## Run with Cosmos Framework
 
 ### Quickstart
