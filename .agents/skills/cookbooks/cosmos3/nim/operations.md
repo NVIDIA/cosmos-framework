@@ -91,11 +91,22 @@ Generator `/v1/infer` requests are synchronous: the connection stays quiet
 until inference and serialization finish, which alone does not mean a hang.
 The backend queue-plus-execution ceiling is
 [`NIM_TRITON_REQUEST_TIMEOUT`](configuration.md#generator-configuration),
-default 30 minutes. A longer client timeout does not extend it. For the
-60-minute Transfer client, launch the Generator with
-`-e NIM_TRITON_REQUEST_TIMEOUT=3600000000`. Before retrying a quiet request,
-check the container logs and GPU activity rather than readiness, and avoid
-blind retries that duplicate expensive work.
+default 30 minutes, or 4 hours for the `multiview` variant. A longer client
+timeout does not extend it. For the 60-minute Transfer client, launch the
+Transfer Generator with `-e NIM_TRITON_REQUEST_TIMEOUT=3600000000`. The
+multiview default is applied inside the server, so `docker exec ... env` shows
+`NIM_TRITON_REQUEST_TIMEOUT` only when you set it at launch.
+
+A Generator with latency profile container runs one `/v1/infer` request at a time.
+Concurrent requests wait in a queue, and the wait counts toward each request's
+`NIM_TRITON_REQUEST_TIMEOUT` and the client's own timeout, so a request queued
+behind a long eleven-camera job can time out before it starts generating.
+While a request runs, health checks, `/v1/metadata`, and invalid requests,
+which are rejected with HTTP 422 before they reach the queue, still get an
+immediate response. For parallel generation, use throughput profile, which will run generation requests on each GPU in parallel.
+
+Before retrying a quiet request, check the container logs and GPU activity
+rather than readiness, and avoid blind retries that duplicate expensive work.
 
 ## Unified-Memory Diagnostics
 
@@ -233,12 +244,16 @@ Failures](transfer.md#validation-and-common-failures).
 | --- | --- | --- |
 | HTTP 422, missing or invalid `model_mode` | The request does not identify a valid Generator task | Set one of the documented top-level modes |
 | Selected variant rejects request mode or sampling fields | A specialist received another mode, or a four-step request supplied model-owned controls | Select a compatible `NIM_MODEL_VARIANT`; omit `num_inference_steps`, `guidance_scale`, and `flow_shift` for four-step variants |
+| HTTP 422, `multiview requests require a selected model variant of 'multiview'` | A multiview request reached another variant | Relaunch with `NIM_MODEL_VARIANT=multiview` |
+| HTTP 422, `Selected model variant 'multiview' requires a multiview field` | A single-view request reached the multiview variant | Send a [multiview request](multiview.md), or launch a general-purpose variant |
 | HTTP 422, media decode/fetch | Invalid base64/data URL, URL disabled/unreachable, or unsupported media | Prefer a MIME-aware data URL; check the selected image's codec and format support |
+| HTTP 500, `Cannot decode 'h264' video: it requires NVDEC, but libnvcuvid.so.1 is not available` (also for `hevc`/`mpeg4`); startup logs `NVDEC is unavailable` | The container runtime did not inject the host driver's video library; H.264, HEVC, and MPEG-4 inputs decode only through NVDEC | Run with the NVIDIA container runtime and a host driver that provides `libnvcuvid`, and do not narrow `NVIDIA_DRIVER_CAPABILITIES` below `compute,utility,video`; or send VP8, VP9, or AV1 video |
 | HTTP 422, frame or resolution | Request violates T2I/video cadence rules or supplies `num_frames` for Action | Recompute with the task tables; Action derives frames from its chunk size |
 | Content-policy 422 | Text or generated frames triggered guardrails | Rephrase and review content; disable only under approved diagnostic policy |
 | Backend 500/OOM | Profile fit or runtime workload exceeded available memory | Reduce workload/concurrency, choose Nano/offload, or use a larger supported GPU; retain logs |
 | Request/client timeout | Image or video generation exceeded client/backend timeout | Refer to [Long-Running Requests](#long-running-requests); inspect NIM logs and runtime metrics |
 | MP4 does not play | Player lacks VP9-in-MP4 support | Use `mpv`/`ffplay` or re-encode to H.264 |
+| Multiview response has no `b64_video` | Multiview returns one video per camera in `multiview.videos[]` | Decode each camera's `b64_video` in `camera_order`; refer to [Multiview Output](multiview.md#output) |
 
 ### Reasoner
 
@@ -249,7 +264,7 @@ Failures](transfer.md#validation-and-common-failures).
 | HTTP 422 media error | Media content/order/count/preprocessing failed | Put media before text, use data URLs, and check operator media limits |
 | Chat Completions route 404 | Client reached Generator or the selected image lacks the route | Confirm Reasoner through `/v1/metadata` and inspect live OpenAPI |
 | Responses route 404 | Route disabled, absent, or requested from Generator | Confirm Reasoner metadata, then use Chat Completions and inspect live OpenAPI/operator setting |
-| Host OOM or near-zero `MemAvailable` on unified memory | The Reasoner memory share is too large for the shared host/device pool and the host workload | Remove any explicit `NIM_GPU_MEMORY_UTILIZATION` above the `0.70` default, or lower it from host measurements, then restart |
+| Host OOM or near-zero `MemAvailable` on unified memory | The Reasoner memory share is too large for the shared host/device pool and the host workload | Use automatic memory sizing or lower an explicit `NIM_GPU_MEMORY_UTILIZATION` from host measurements, then restart |
 | Structured output is prose or invalid JSON | The request did not enforce a JSON schema | Send a JSON schema in `response_format` (Chat Completions) or `text.format` (Responses). With the catalog, add `--guided-output`. Refer to [Structured Output](reasoning.md#structured-output) |
 | KV-cache/context OOM | Context, media tokens, batching, or concurrency is too large | Reduce media FPS and concurrency; the default unchunked multimodal path enforces a 16,384 batched-token minimum (24,300 on Edge), so enable multimodal chunking with `NIM_DISABLE_CHUNKED_MM_INPUT=0` only after validation before lowering that budget |
 

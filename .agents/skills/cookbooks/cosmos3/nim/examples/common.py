@@ -19,6 +19,23 @@ _MIME_TYPES = {
 }
 
 
+def raise_for_http_error(response: requests.Response) -> None:
+    """Raise for an HTTP error status, keeping the NIM's error message."""
+    if response.ok:
+        return
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    error = body.get("error") if isinstance(body, dict) else None
+    message = error.get("message") if isinstance(error, dict) else error
+    detail = message or response.text[:2000] or "(empty body)"
+    raise requests.HTTPError(
+        f"{response.status_code} {response.reason} from {response.url}: {detail}",
+        response=response,
+    )
+
+
 def require_runtime(
     nim_url: str,
     *,
@@ -144,7 +161,7 @@ def compact_json_file(path: Path) -> str:
 
 def media_to_data_url(path: Path) -> str:
     """Read a supported local image or video as a base64 data URL."""
-    path = path.resolve()
+    path = path.absolute()
     if not path.is_file():
         raise FileNotFoundError(f"Media file does not exist: {path}")
     try:

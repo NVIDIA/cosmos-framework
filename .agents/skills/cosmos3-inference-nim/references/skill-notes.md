@@ -110,6 +110,6 @@ measured by this skill. SKILL.md keeps the single-GPU rows; this table holds the
 
 "The 31-GiB Nano layer-offload rows target 32-GB client GPUs such as the GeForce RTX 5090, which does not meet their 35-GiB
 Transfer minimum." "Leave offload and guardrail residency on automatic selection unless a configuration is validated for the
-deployment." Compute-capability floors ("GPU Architecture and Topology"): BF16 8.0, FP8 8.9, NVFP4 10.0. "On a discrete GPU,
-Reasoner measures free memory after a 4-GiB runtime reserve (`NIM_GPU_MEMORY_HEADROOM_GIB`)." The unified-memory thresholds, the
+deployment." Compute-capability floors ("GPU Architecture and Topology"): BF16 8.0, FP8 8.9, NVFP4 10.0. "Reasoner checks free
+memory after reserving space for video decoders, CUDA contexts, and `NIM_GPU_MEMORY_HEADROOM_GIB` (default 1 GiB)." The unified-memory thresholds, the
 tested GPU inventory and "Transfer Headroom" are on the page.

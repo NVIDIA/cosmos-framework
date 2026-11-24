@@ -4,7 +4,7 @@ SPDX-License-Identifier: OpenMDW-1.1 -->
 # Deployment
 
 Use this page to authenticate to NVIDIA NGC, choose a model, launch Generator or
-Reasoner, and verify the selected service. The commands pin the current 2.1.0
+Reasoner, and verify the selected service. The commands target the 2.2.0
 release image. Use the [Support Matrix](support-matrix.md) to choose a
 compatible configuration.
 
@@ -35,6 +35,7 @@ for the memory rules.
 | `nano` | General-purpose Nano Generator |
 | `edge-droid` | Edge-DROID policy with an action-only response; BF16 only; [experimental](support-matrix.md#choose-a-model) |
 | `nano-droid` | Nano-DROID policy with an action-only response; BF16 only |
+| `multiview` | Multi-camera driving video and LiDAR; BF16 or FP8; refer to [Multiview](multiview.md) |
 | `super` | General-purpose Super Generator |
 | `super-t2i` | Full-step T2I specialist |
 | `super-t2i-4step` | Four-step T2I specialist |
@@ -55,9 +56,9 @@ The default is `latency`.
 
 Set `NIM_MODEL_TYPE=reasoner` and choose `NIM_MODEL_VARIANT=edge`, `nano`, or
 `super`. Reasoner rejects `NIM_PERF_PROFILE` at startup. DFlash speculative
-decoding is on by default for Nano and Super. Set `NIM_USE_DFLASH=0` to
-disable it. Edge has no DFlash draft: its profiles disable DFlash and reject
-`NIM_USE_DFLASH=1` (refer to [Configuration](configuration.md#speculative-decoding)).
+decoding is on by default for Edge, Nano, and Super. Set
+`NIM_SPECULATIVE_METHOD=none` to disable it (refer to
+[Configuration](configuration.md#speculative-decoding)).
 
 ### Precision Selection
 
@@ -65,8 +66,8 @@ Omit `NIM_PRECISION` normally. Generator prefers FP8 when compatible. Reasoner
 prefers BF16 on compute capability 8.0 through 8.8, FP8 on 8.9 through 9.x, and
 NVFP4 on 10.0 or newer, falling back to another compatible precision.
 Set `NIM_PRECISION=bf16`, `fp8`, or another available value only when the
-workload requires it. Edge Reasoner is BF16 or FP8 (no NVFP4), and Edge-DROID
-and Nano-DROID are BF16 only.
+workload requires it. Edge Reasoner and multiview are BF16 or FP8 (no NVFP4),
+and Edge-DROID and Nano-DROID are BF16 only.
 
 For [streaming video sessions](streaming.md), precision affects quality:
 NVFP4 checkpoints are currently not recommended. Select either an FP8 checkpoint
@@ -115,7 +116,7 @@ saved credential. Without a helper, log out when you finish evaluating.
 Pin and pull the current release image:
 
 ```bash
-export NIM_IMAGE='nvcr.io/nim/nvidia/cosmos3:2.1.0'
+export NIM_IMAGE='nvcr.io/nim/nvidia/cosmos3:2.2.0'
 docker pull "$NIM_IMAGE"
 ```
 
@@ -123,21 +124,12 @@ Do not replace the versioned tag with `latest` or another unvalidated image.
 
 ### Set the Reasoner Memory Share on Unified-Memory Systems
 
-On NVIDIA DGX Spark/GB10 and Jetson AGX Thor, the NIM gives the model 70% of the
-unified host/device memory pool. It applies that share to profile floors and
-uses it as the Reasoner `NIM_GPU_MEMORY_UTILIZATION` default. No variable is
-required. Lower the share only when host measurements show that media
-processing or other host workloads need more memory, for example:
-
-```bash
-export NIM_GPU_MEMORY_UTILIZATION=0.60
-```
-
-If you set a value, pass `-e NIM_GPU_MEMORY_UTILIZATION` in every Reasoner
-launch command on that system. Profile selection and preflight always use the
-70% share, so the value does not change the preflight result. Do not set it
-for Generator. Refer to
-[Reasoner Context and Scheduling](configuration.md#context-and-scheduling).
+On NVIDIA DGX Spark/GB10 and Jetson AGX Thor, the NIM uses 70% of the
+shared pool for profile selection. Reasoner reserves memory for video decoders,
+CUDA contexts, and headroom before assigning the remaining pool to vLLM.
+Normally leave `NIM_GPU_MEMORY_UTILIZATION` unset. If measurements require an
+override, pass it in every Reasoner launch. It does not change profile preflight.
+Refer to [Context and Scheduling](configuration.md#context-and-scheduling).
 
 ## Run the Pre-Download Profile Preflight
 
@@ -251,9 +243,8 @@ docker rm -f cosmos3-generator
 
 ### DGX Spark and Jetson AGX Thor
 
-Use Nano. The NIM applies the unified-memory default. Add
-`-e NIM_GPU_MEMORY_UTILIZATION="$NIM_GPU_MEMORY_UTILIZATION"` only if you
-exported a lower measured value:
+Use Nano and leave the memory allocation automatic. If you need an explicit
+override, add `-e NIM_GPU_MEMORY_UTILIZATION` to the launch:
 
 ```bash
 docker run -d --name cosmos3-reasoner \
@@ -273,7 +264,7 @@ docker run -d --name cosmos3-reasoner \
 ### Discrete GPU Example
 
 This example launches Super FP8 Reasoner. It needs compute capability 8.9+,
-67 GiB of VRAM usable after the 4-GiB Reasoner reserve, and 43 GiB of system
+67 GiB of VRAM usable after the Reasoner runtime reserves, and 43 GiB of system
 memory (refer to
 [Reasoner Profiles](support-matrix.md#reasoner-profiles)):
 
@@ -313,12 +304,8 @@ For Edge Reasoner, replace the model selector lines in the command in
 
 The Responses API stays enabled by default (`NIM_DISABLE_RESPONSES_ROUTE=false`).
 
-> **Known issue:** With `NIM_ENABLE_STREAMING=true`, Edge Reasoner fails at
-> startup with the default `NIM_STREAMING_SPEC_METHOD=dflash`, because Edge
-> does not support DFlash. To stream with Edge, set both
-> `NIM_ENABLE_STREAMING=true` and `NIM_STREAMING_SPEC_METHOD=none`, which turns
-> off speculative decoding for streaming (refer to
-> [Advanced Streaming Controls](configuration.md#advanced-streaming-controls)).
+For Edge streaming, add `NIM_ENABLE_STREAMING=true`. Edge defaults to
+`NIM_SPECULATIVE_METHOD=none`.
 
 For Edge-DROID, which is
 [experimental](support-matrix.md#choose-a-model), replace the model selector

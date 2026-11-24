@@ -80,7 +80,7 @@ Skill note (not in the source): the numbered rules below are skill additions; ev
 
 ## When to use this skill
 
-- Use to deploy the Cosmos3 NIM (`nvcr.io/nim/nvidia/cosmos3:2.1.0`) as Generator or Reasoner on a GPU host, to verify an
+- Use to deploy the Cosmos3 NIM (`nvcr.io/nim/nvidia/cosmos3:2.2.0`) as Generator or Reasoner on a GPU host, to verify an
   endpoint someone else deployed (`/v1/health/ready`, `/v1/metadata`), or to troubleshoot one: container live but never ready,
   no compatible profile, wrong-runtime HTTP 404, HTTP 422 validation or guardrail blocks, long synchronous requests
 - Use to choose the model (`NIM_MODEL_VARIANT`), precision and latency/throughput objective for the hardware, and to run the
@@ -177,7 +177,7 @@ echo "$NGC_API_KEY" \
 "Pin and pull the current release image:" — "Do not replace the versioned tag with `latest` or another unvalidated image."
 
 ```bash
-export NIM_IMAGE='nvcr.io/nim/nvidia/cosmos3:2.1.0'
+export NIM_IMAGE='nvcr.io/nim/nvidia/cosmos3:2.2.0'
 docker pull "$NIM_IMAGE"
 ```
 
@@ -243,7 +243,7 @@ Preflight, Launch Reasoner; request: the Quickstart's `uv run python examples/re
 ([`reasoning.md`](../cookbooks/cosmos3/nim/reasoning.md) "Prepare the Client and Verify Readiness", "Run the Task Catalog").
 
 "Set `NIM_MODEL_TYPE=reasoner` and choose `NIM_MODEL_VARIANT=edge`, `nano`, or `super`. Reasoner rejects `NIM_PERF_PROFILE` at
-startup. DFlash speculative decoding is on by default for Nano and Super." Preflight — "This example checks Nano Reasoner:"
+startup. DFlash speculative decoding is on by default for Edge, Nano, and Super." Preflight — "This example checks Nano Reasoner:"
 
 ```bash
 docker run --rm \
@@ -263,9 +263,9 @@ docker run --rm \
 Launch Reasoner — "Reasoner uses the same host port. Remove a running Generator first:" `docker rm -f cosmos3-generator`.
 
 Skill note (not in the source): that `rm -f` discards the Generator's logs — save them first (`references/skill-notes.md` § 2); the § 2 `cache_ok` test and repair apply before this launch too.
-The block below is the page's only Nano Reasoner launch; it stands under the heading "DGX Spark and Jetson AGX Thor" but carries
-no memory-share line ("Add `-e NIM_GPU_MEMORY_UTILIZATION="$NIM_GPU_MEMORY_UTILIZATION"` only if you exported a lower measured
-value"), so it is the discrete-GPU form as written; the page's "Discrete GPU Example" launches Super FP8 instead.
+The block below is the page's only Nano Reasoner launch; it stands under the heading "DGX Spark and Jetson AGX Thor" ("Use
+Nano and leave the memory allocation automatic."), carries no memory-share line, and runs unchanged on a discrete GPU; the
+page's "Discrete GPU Example" launches Super FP8 instead.
 
 ```bash
 docker run -d --name cosmos3-reasoner \
@@ -350,10 +350,9 @@ rules while doing so:
   DGX Spark.
 - **Reasoner on DGX Spark or Jetson AGX Thor**
   ([memory share](../cookbooks/cosmos3/nim/deployment.md#set-the-reasoner-memory-share-on-unified-memory-systems)):
-  the NIM counts 70% of the shared pool toward profile floors and defaults
-  `NIM_GPU_MEMORY_UTILIZATION` to `0.70`. Suggest a lower value only from host
-  measurements, then include it in every Reasoner launch command. Preflight
-  ignores it and always uses the 70% share.
+  the NIM counts 70% of the shared pool toward profile floors and subtracts
+  runtime reserves before sizing vLLM. Leave `NIM_GPU_MEMORY_UTILIZATION` unset
+  unless measurements require an override. Preflight ignores this override.
 - **NGC login** ([authenticate](../cookbooks/cosmos3/nim/deployment.md#authenticate-to-ngc)):
   mention that Docker stores the login unless a credential helper is configured
   (the helper is optional) and that `--password-stdin` protects only shell
@@ -394,11 +393,15 @@ tested-GPU inventory is the validation scope, not an allowlist.
    fits but preflight rejects current free memory, report **fits hardware but
    not the current memory state** and ask the operator to stop only the
    identified workloads before rerunning preflight.
-4. Recommend model selectors, not image-specific profile IDs.
+4. Recommend model selectors, not image-specific profile IDs. The multiview
+   Generator is not supported on unified-memory systems.
 
 Never clear page cache, delete model cache, stop unidentified processes, or
 reboot automatically. Page-cache reclamation is an approved host-wide
 diagnostic only, with explicit operator confirmation and before/after evidence.
+
+For Reasoner tuning, follow [Speculative Decoding](../cookbooks/cosmos3/nim/configuration.md#speculative-decoding)
+and [Video Decode Concurrency](../cookbooks/cosmos3/nim/configuration.md#video-decode-concurrency).
 
 ## 4. Route the task
 
@@ -408,6 +411,7 @@ diagnostic only, with explicit operator confirmation and before/after evidence.
 | Forward, policy, or inverse dynamics                         | Generator                                | [`action.md`](../cookbooks/cosmos3/nim/action.md)                                       | [examples/action.py](../cookbooks/cosmos3/nim/examples/action.py)                                                                                                                                                             |
 | Edge-/Nano-DROID action-only policy                          | Generator (`edge-droid` or `nano-droid`) | [`action.md`](../cookbooks/cosmos3/nim/action.md)                                       | [examples/policy_droid.py](../cookbooks/cosmos3/nim/examples/policy_droid.py)                                                                                                                                                 |
 | Controlled video generation                                  | Generator                                | [`transfer.md`](../cookbooks/cosmos3/nim/transfer.md)                                   | [examples/transfer.py](../cookbooks/cosmos3/nim/examples/transfer.py)                                                                                                                                                         |
+| Multi-camera driving video, optionally with LiDAR            | Generator, `NIM_MODEL_VARIANT=multiview` | [`multiview.md`](../cookbooks/cosmos3/nim/multiview.md)                                 | [examples/mv_rgb.py](../cookbooks/cosmos3/nim/examples/mv_rgb.py), [`mv_joint.py`](../cookbooks/cosmos3/nim/examples/mv_joint.py)                                                                                             |
 | Image or video understanding                                 | Reasoner                                 | [`reasoning.md`](../cookbooks/cosmos3/nim/reasoning.md)                                 | [examples/reasoner.py](../cookbooks/cosmos3/nim/examples/reasoner.py)                                                                                                                                                         |
 | Responses API                                                | Reasoner                                 | [`reasoning.md`](../cookbooks/cosmos3/nim/reasoning.md)                                 | [examples/reasoner_responses.py](../cookbooks/cosmos3/nim/examples/reasoner_responses.py)                                                                                                                                     |
 | Streaming video reasoning                                    | Reasoner                                 | [`streaming.md`](../cookbooks/cosmos3/nim/streaming.md)                                 | [examples/streaming.py](../cookbooks/cosmos3/nim/examples/streaming.py)                                                                                                                                                       |
@@ -434,12 +438,14 @@ per-device memory, HTTP status and error body, and a redacted log excerpt.
 
 Generator requests are synchronous
 ([long-running requests](../cookbooks/cosmos3/nim/operations.md#long-running-requests)): the
-examples use 30-minute (Generator) and 60-minute (Transfer) client timeouts as
-ceilings, not expected latency, and the backend still stops at 30 minutes unless
-the container sets `NIM_TRITON_REQUEST_TIMEOUT`. Check whether a request is
-still running before retrying. Do not recommend an unsafe override as a fix. If
-the customer chooses one for a diagnostic, state the risk, limit it to that
-diagnostic, and restore the default.
+examples use 30-minute (Generator), 60-minute (Transfer), and two-hour
+(multiview) client timeouts as ceilings, not expected latency. The backend stops
+at 30 minutes, or 4 hours for the `multiview` variant, unless the container sets
+`NIM_TRITON_REQUEST_TIMEOUT`. Queue time counts toward each request's
+timeout. Check whether a request is still running before retrying. Do not
+recommend an unsafe override as a fix. If the customer chooses one for a
+diagnostic, state the risk, limit it to that diagnostic, and restore the
+default.
 
 ## 6. State the result
 

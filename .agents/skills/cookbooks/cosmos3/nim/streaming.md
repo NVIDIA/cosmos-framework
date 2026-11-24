@@ -23,7 +23,7 @@ for enablement, capacity, and idle timeouts.
 > are currently not recommended for streaming. Use either an FP8 checkpoint
 > with BF16 KV-cache precision or a BF16 checkpoint for streaming workloads.
 >
-> When DFlash is enabled, set `NIM_DFLASH_BF16_KV_CACHE=true` for BF16 KV cache.
+> Streaming uses BF16 KV cache automatically. `NIM_KV_CACHE_DTYPE` overrides it.
 > Refer to [Streaming Video Sessions](configuration.md#streaming-video-sessions).
 
 For a shared NVIDIA Dynamo frontend, use the [Dynamo streaming deployment](dynamo/dynamo_with_streaming.md)
@@ -34,13 +34,10 @@ checks only the shared frontend's `/health`, `/v1/models`, and
 Standalone NIM mode retains its readiness, runtime metadata, and selected-profile
 checks.
 
-Streaming defaults to DFlash speculation (`NIM_STREAMING_SPEC_METHOD=dflash`)
-and ignores `NIM_USE_DFLASH`. Set `NIM_STREAMING_SPEC_METHOD=ngram` for GPU
-n-gram speculation or `none` to disable it. Edge works with the same clients,
-which discover its model ID. Launch Edge with `NIM_STREAMING_SPEC_METHOD=none`, in
-standalone ([Deploy Edge Models](deployment.md#deploy-edge-models)) or
-[Dynamo](dynamo/dynamo_with_streaming.md#use-edge-reasoner) mode. Refer to
-[Advanced Streaming Controls](configuration.md#advanced-streaming-controls).
+Streaming uses the shared `NIM_SPECULATIVE_METHOD` and
+`NIM_SPECULATIVE_CONFIG` controls. Edge, Nano, and Super default to DFlash.
+Refer to
+[Speculative Decoding](configuration.md#speculative-decoding).
 
 ## Example Client
 
@@ -270,6 +267,16 @@ and returns a JSON `frame` reply.
 ```json
 {"op": "frame", "image_b64": "<raw base64 JPEG or PNG>"}
 ```
+
+REST JSON frames and WebSocket base64 frames also accept an optional string
+`text`, for example:
+
+```json
+{"op":"frame","image_b64":"<raw base64 JPEG or PNG>","text":"What changed?"}
+```
+
+Omit `op` for REST. The first frame combines its text with the session question;
+later frames carry their own text. Raw binary frames carry only the image.
 
 Use raw base64, without a `data:image/...;base64,` prefix. Do not switch between
 binary and base64 messages within a session. A format mismatch, unknown `op`,

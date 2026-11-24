@@ -19,7 +19,7 @@ Both use [model-cache.yaml](model-cache.yaml), the
 `nvidia.com/v1alpha1` `spec.services` schema. Both use the same NIM image for
 the download Job and workers. The regular frontend uses the pinned Dynamo
 image. The streaming frontend uses the NIM image. The manifests use
-`nvcr.io/nim/nvidia/cosmos3:2.1.0`. Keep the same image in your chosen variant and the
+`nvcr.io/nim/nvidia/cosmos3:2.2.0`. Keep the same image in your chosen variant and the
 download Job. Validate streaming sessions separately. Replace `<angle-bracket>` placeholders before applying. These are alternative
 manifests for the same `cosmos3-reasoner` deployment, so apply only one.
 Switching variants replaces pods and loses active streaming sessions.

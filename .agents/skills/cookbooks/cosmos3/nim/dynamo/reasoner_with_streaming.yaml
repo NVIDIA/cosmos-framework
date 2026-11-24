@@ -33,7 +33,7 @@ spec:
           fsGroup: 1000
           fsGroupChangePolicy: OnRootMismatch
         mainContainer:
-          image: nvcr.io/nim/nvidia/cosmos3:2.1.0
+          image: nvcr.io/nim/nvidia/cosmos3:2.2.0
           imagePullPolicy: IfNotPresent
           workingDir: /opt/nim
           command:
@@ -104,7 +104,7 @@ spec:
           fsGroup: 1000
           fsGroupChangePolicy: OnRootMismatch
         mainContainer:
-          image: nvcr.io/nim/nvidia/cosmos3:2.1.0
+          image: nvcr.io/nim/nvidia/cosmos3:2.2.0
           imagePullPolicy: IfNotPresent
           workingDir: /opt/nim
           command:
@@ -124,21 +124,13 @@ spec:
             - name: NIM_PRECISION
               value: fp8
             - name: NIM_DISCOVERY_BACKEND
-              value: '{"discovery_backend":"kubernetes","async_scheduling":false,"enable_multimodal":true}'
+              value: kubernetes
             - name: DYN_REQUEST_PLANE
               value: tcp
             - name: DYN_SELF_HOST_METADATA
               value: 'true'
             - name: TQDM_DISABLE
               value: '1'
-            - name: NIM_ENABLE_WARMUP
-              value: '0'
-            - name: NIM_ENABLE_TEXT_GUARDRAILS
-              value: '0'
-            - name: NIM_ENABLE_VIDEO_GUARDRAILS
-              value: '0'
-            - name: NIM_ENABLE_SIGLIP_GUARDRAILS
-              value: '0'
             - name: NIM_CACHE_PATH
               value: /opt/nim/.cache
             - name: NIM_ENABLE_STREAMING

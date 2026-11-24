@@ -18,6 +18,7 @@ Choose the model. The NIM selects a compatible profile and precision. Refer to
 | Generator | `nano` | General-purpose Generator tasks |
 | Generator | `edge-droid` | DROID policy with action-only output; BF16 only; **experimental** |
 | Generator | `nano-droid` | DROID policy with action-only output; BF16 only |
+| Generator | `multiview` | Multi-camera driving video with optional LiDAR; BF16 or FP8; refer to [Multiview](multiview.md) |
 | Generator | `super` | General-purpose Generator tasks |
 | Generator | `super-t2i` | Full-step T2I only |
 | Generator | `super-t2i-4step` | Four-step T2I only |
@@ -67,16 +68,16 @@ GPU SKU allowlist:
 Use homogeneous GPUs. Mixed-GPU configurations are not supported, and
 Reasoner requires the same compute capability on every GPU. Do not add VRAM
 across devices. Each GPU in the selected layout must meet the floor in total
-and in free memory at startup. On a discrete GPU, Reasoner measures free
-memory after a 4-GiB runtime reserve (`NIM_GPU_MEMORY_HEADROOM_GIB`).
+and in free memory at startup. Reasoner checks free memory after reserving
+space for video decoders, CUDA contexts, and `NIM_GPU_MEMORY_HEADROOM_GIB` (default 1 GiB).
 On unified-memory systems, Generator uses only rows with
 **Model offload = None** and **Guardrails = Resident**.
 
 ### Unified-Memory Thresholds
 
 On unified-memory systems, **effective shared memory** is 70% of the
-device-reported total. The rest stays with the host. The same share is the
-default Reasoner `NIM_GPU_MEMORY_UTILIZATION`.
+device-reported total. The rest stays with the host. Reasoner subtracts
+runtime reserves from this pool before sizing vLLM.
 
 | Runtime/Profile | Effective Shared-Memory Floor | Unified-Memory Policy |
 | --- | ---: | --- |
@@ -85,11 +86,14 @@ default Reasoner `NIM_GPU_MEMORY_UTILIZATION`.
 | Generator `nano` FP8 | 44 GiB | Resident model and guardrails |
 | Generator `super` BF16 | 150 GiB | Resident model and guardrails |
 | Generator `super` FP8 | 93 GiB | Resident model and guardrails |
-| Reasoner `edge` BF16 or FP8 | 12 GiB/device | No CPU/model offload |
+| Reasoner `edge` BF16 | 16 GiB/device | No CPU/model offload |
+| Reasoner `edge` FP8 | 14.5 GiB/device | No CPU/model offload |
 | Reasoner `nano` BF16, FP8, or NVFP4 | 23.1 GiB/device | No CPU/model offload |
-| Reasoner `super` BF16, TP1 | 135 GiB/device | No CPU/model offload |
+| Reasoner `super` BF16, TP1 | 120 GiB/device | No CPU/model offload |
 | Reasoner `super` FP8, TP1 | 67 GiB/device | No CPU/model offload |
 | Reasoner `super` NVFP4, TP1 | 73 GiB/device | No CPU/model offload |
+
+The multiview Generator is not supported on unified-memory systems.
 
 Floors are compared with 70% of the binary-GiB total reported by the running
 system. Current free shared memory is checked separately at startup.
@@ -112,8 +116,8 @@ Capacity is a shared host/device pool, not separate VRAM:
 
 The effective share is roughly 83 to 86 GiB. It fits the resident Generator
 Edge-DROID and Nano rows but no Super Generator row, and the Reasoner Edge,
-Nano, and Super FP8/NVFP4 TP1 rows. Reasoner Super BF16 TP1 (135 GiB) exceeds
-both systems' total capacity, so freeing cache cannot make it fit.
+Nano, and Super FP8/NVFP4 TP1 rows. Reasoner Super BF16 TP1 (120 GiB) exceeds
+both systems' effective shared-memory capacity, so freeing cache cannot make it fit.
 
 ### NVIDIA Blackwell Ultra
 
@@ -208,18 +212,71 @@ GeForce RTX 5090, which does not meet their 35-GiB Transfer minimum.
 Leave offload and guardrail residency on automatic selection unless a
 configuration is validated for the deployment.
 
+## Multiview Profiles
+
+The `multiview` Generator has its own profiles and is not covered by the
+[Generator Profiles](#generator-profiles) table. BF16 and FP8 profiles share
+the same layouts except where a row names one precision. Every profile keeps
+the guardrails resident, and none supports unified-memory systems or Transfer.
+
+**Model VRAM Optimized** is `True` for profiles tagged `offload: layer`. These
+profiles offload transformer layers to host memory and enable the other VRAM
+reductions described in
+[GPU Memory and `layer` Profiles](multiview.md#gpu-memory-and-layer-profiles).
+They run slower but fit GPUs with less memory.
+
+| Precision | Performance Profile | GPUs | Parallelism | Model VRAM Optimized | Minimum VRAM/Device | System-Memory Floor |
+| --- | --- | ---: | --- | --- | ---: | ---: |
+| BF16, FP8 | `latency` | 1 | None | False | 149 / 145 GiB | 45 / 40 GiB |
+| BF16, FP8 | `latency` | 1 | None | True | 74 / 78 GiB | 91 / 75 GiB |
+| BF16, FP8 | `latency` | 2 | CFG 2 | False | 150 / 145 GiB | 68 / 64 GiB |
+| BF16, FP8 | `latency` | 2 | Ulysses 2 | False | 107 / 90 GiB | 51 / 44 GiB |
+| BF16, FP8 | `latency` | 2 | CFG 2 | True | 72 / 77 GiB | 165 / 138 GiB |
+| BF16, FP8 | `latency` | 4 | CFG 2 × Ulysses 2 | False | 101 / 87 GiB | 67 / 74 GiB |
+| BF16, FP8 | `latency` | 4 | CFG 2 × Ulysses 2 | True | 70 GiB | 211 / 159 GiB |
+| BF16, FP8 | `latency` | 8 | CFG 2 × Ulysses 4 | False | 90 / 66 GiB | 99 / 134 GiB |
+| BF16 | `latency` | 8 | CFG 2 × Ulysses 2 × TP 2 | True | 58 GiB | 291 GiB |
+| FP8 | `latency` | 8 | CFG 2 × Ulysses 4 | True | 58 GiB | 263 GiB |
+| BF16, FP8 | `throughput` | 2 | One replica per GPU | False | 150 / 142 GiB | 68 / 64 GiB |
+| BF16, FP8 | `throughput` | 2 | One replica per GPU | True | 75 / 78 GiB | 165 / 138 GiB |
+| BF16, FP8 | `throughput` | 4 | One replica per GPU | False | 150 / 142 GiB | 114 / 116 GiB |
+| BF16, FP8 | `throughput` | 4 | One replica per GPU | True | 75 / 78 GiB | 313 / 264 GiB |
+| BF16, FP8 | `throughput` | 8 | One replica per GPU | False | 150 / 142 GiB | 206 / 220 GiB |
+| BF16, FP8 | `throughput` | 8 | One replica per GPU | True | 74 / 78 GiB | 609 / 516 GiB |
+
+Where BF16 and FP8 floors differ, the table lists BF16 / FP8. The floors come
+from per-GPU peaks measured on B200 for a 720p, 200-frame, eleven-camera joint
+LiDAR request, plus the resident guardrails and headroom, and
+were checked on every listed GPU class. Profile selection checks both floors,
+so the host or container memory limit must meet the system-memory floor as well
+as the GPUs meeting the VRAM floor.
+
+The system-memory floor grows with the GPU count because every GPU runs its own
+engine process with its own host buffers. `layer` profiles keep a pinned copy of
+the transformer weights and the SeaCache history in host memory on every GPU,
+so they need far more than resident profiles. This memory is pinned: it counts
+toward the container memory limit, not toward `--shm-size`, and stays allocated
+between requests.
+
+Layouts without Ulysses or tensor parallelism (one GPU, CFG 2 on two GPUs, and
+`throughput` replicas) run the whole sequence on every GPU, so their resident
+profiles need B200-class GPUs. Two-GPU `latency` deployments have both a CFG 2
+and a Ulysses 2 profile. To require Ulysses, set
+`NIM_TAGS_SELECTOR='n_gpus=2,nim_up=2'`. Each `throughput` replica runs a full
+one-GPU engine and serves its own requests.
+
 ## Reasoner Profiles
 
 Reasoner does not use Generator latency/throughput or model-offload selectors:
 
 | Model | Precision | GPUs | Tensor Parallelism | Minimum VRAM/Device | System-Memory Floor | Minimum Compute Capability |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `edge` | BF16 | 1 | 1 | 12 GiB | 8 GiB | 8.0 |
-| `edge` | FP8 | 1 | 1 | 12 GiB | 8 GiB | 8.9 |
+| `edge` | BF16 | 1 | 1 | 16 GiB | 5 GiB | 8.0 |
+| `edge` | FP8 | 1 | 1 | 14.5 GiB | 5 GiB | 8.9 |
 | `nano` | BF16 | 1 | 1 | 23.1 GiB | 24 GiB | 8.0 |
 | `nano` | FP8 | 1 | 1 | 23.1 GiB | 17 GiB | 8.9 |
 | `nano` | NVFP4 | 1 | 1 | 23.1 GiB | 17 GiB | 10.0 |
-| `super` | BF16 | 1 | 1 | 135 GiB | 72 GiB | 8.0 |
+| `super` | BF16 | 1 | 1 | 120 GiB | 72 GiB | 8.0 |
 | `super` | BF16 | 2 | 2 | 73 GiB | 72 GiB | 8.0 |
 | `super` | FP8 | 1 | 1 | 67 GiB | 43 GiB | 8.9 |
 | `super` | NVFP4 | 1 | 1 | 73 GiB | 33 GiB | 10.0 |

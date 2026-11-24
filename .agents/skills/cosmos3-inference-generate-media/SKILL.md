@@ -389,7 +389,7 @@ and its skill [`cosmos3-inference-nim`](../cosmos3-inference-nim/SKILL.md); read
 generation.md before the first command. Upstream replaced `run_with_nim.ipynb` with this cookbook and its example scripts (`../cookbooks/cosmos3/nim/examples/`)
 (cosmos-framework #296), so this skill keeps only the README quickstart, the request it sends from the bundled assets, and its own additions (marked). The
 checkout's copy is the 2.0.0 edition (it pins `cosmos3:2.0.0`; quotes below are the pinned 2.1.0 wording) — flags, selectors, switches
-and the `/v1/infer` contract are identical in both; keep `NIM_IMAGE` at `cosmos3:2.1.0`.
+and the `/v1/infer` contract are identical in both; keep `NIM_IMAGE` at `cosmos3:2.2.0`.
 
 NIMs use NGC auth, not Hugging Face. One runtime per container (`NIM_MODEL_TYPE=generator`); explicit selection, as the cookbook
 documents it, is the selector triple `NIM_MODEL_VARIANT` (`nano` — the support matrix's recommendation on H100) / `NIM_PRECISION`
@@ -402,7 +402,7 @@ pass-through, the `CONTAINER_NAME` / `NIM_PORT` / `NIM_IMAGE` parameters, and th
 ```bash
 echo "$NGC_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin   # NGC_API_KEY must be exported: the launch passes it by name
 export CONTAINER_NAME="${CONTAINER_NAME:-cosmos3-generator}"; export NIM_PORT="${NIM_PORT:-8000}"   # name or port "already in use" = a previous container: docker logs it, then docker rm -f it or change these
-export NIM_IMAGE="${NIM_IMAGE:-nvcr.io/nim/nvidia/cosmos3:2.1.0}"; docker pull "$NIM_IMAGE"
+export NIM_IMAGE="${NIM_IMAGE:-nvcr.io/nim/nvidia/cosmos3:2.2.0}"; docker pull "$NIM_IMAGE"
 export NIM_MODEL_VARIANT="${NIM_MODEL_VARIANT:-nano}"; export NIM_PERF_PROFILE="${NIM_PERF_PROFILE:-latency}"
 export LOCAL_NIM_CACHE="${LOCAL_NIM_CACHE:-$HOME/.cache/nim}"
 mkdir -p "$LOCAL_NIM_CACHE"   # deployment.md "Prepare the Model Cache"; its chmod 777 step is replaced by the writability check below — a shared cache is not modified

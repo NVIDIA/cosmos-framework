@@ -173,7 +173,7 @@ docker run -d --name cosmos3-reasoner \
   -e NIM_MODEL_TYPE=reasoner \
   -e NIM_MODEL_VARIANT=nano \
   -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" \
-  nvcr.io/nim/nvidia/cosmos3:2.1.0
+  nvcr.io/nim/nvidia/cosmos3:2.2.0
 ```
 
 For Super, Edge, and unified-memory systems such as DGX Spark, refer to
