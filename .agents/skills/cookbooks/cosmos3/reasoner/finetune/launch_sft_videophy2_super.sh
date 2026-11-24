@@ -18,7 +18,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
 
 VIDEOPHYSICS_ROOT="$PWD/data/videophysics"
-REASONER_CHECKPOINT="$PWD/checkpoints/Cosmos3-Super-Reasoner"
+REASONER_CHECKPOINT="$PWD/checkpoints/Cosmos3-Super"
 
 # 1. Materialize the VideoPhy-2 dataset (skipped if present).
 if [[ ! -d "$VIDEOPHYSICS_ROOT/videophy2_train" ]]; then

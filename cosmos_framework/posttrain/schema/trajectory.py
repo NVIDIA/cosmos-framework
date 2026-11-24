@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Unified Sample / Trajectory data model (DESIGN §1.4).
+"""Unified Sample / Trajectory data model.
 
 This is the foundation everything operates on. The schema here is the *general*
 one (shaped to the final form); v0 only fills the text+image subset.
 
-Discipline (DESIGN §1.4):
+Discipline:
 - a Transition may carry BOTH `reward` (RL signal) and `targets` (supervised
   signal); at least one. v0 uses only `reward`.
 - reward and targets channels stay isolated (combiner only touches reward;
@@ -88,9 +88,9 @@ class Status(str, Enum):
 
 @dataclass
 class ObsBundle:
-    """Multi-representation observation (DESIGN §1.4).
+    """Multi-representation observation.
 
-    v0: store everything inline in `representations` (e.g. {"prompt": ..., "image": ...}).
+    v0: store everything inline in `representations` (e.g. {"prompt":..., "image":...}).
     TODO(v1+, §3.4): large fields (video/image) become lazy *handles* (metadata +
     remote addressing) pulled on demand; small fields stay inline.
 
@@ -239,7 +239,7 @@ class Transition:
     next_obs: Optional[ObsBundle] = None  # actual next condition, captured before environment reset
     policy_info: dict[str, Any] = field(default_factory=dict)  # logprob, dist_params?, weight_version
     # PPO also carries per-action process rewards in this mapping.
-    reward: Optional[dict[str, Any]] = None  # named components (§1.5); filled by RewardProvider/Combiner
+    reward: Optional[dict[str, Any]] = None  # named components; filled by RewardProvider/Combiner
     targets: Any = None  # supervised signal: SFTTarget, Preference, TeacherSignal, ...
     # Filled by the algorithm (#2 hook) at REWARD time — see `algorithm/annotators/advantage.py`.
     # Scalar or per-token `[n_completion_tokens]`; see the class docstring.
@@ -247,7 +247,7 @@ class Transition:
     step_idx: int = 0
     done: bool = True
     mask: Any = None
-    algo_extra: dict[str, Any] = field(default_factory=dict)  # reserved for algorithm (#2)
+    algo_extra: dict[str, Any] = field(default_factory=dict)  # reserved for algorithm
     # APPENDED, not inserted, and the grouping this costs is deliberate. `truncated` reads
     # next to `done` and `info` next to `algo_extra`; both were written there first. But a
     # dataclass field's POSITION is its positional constructor ABI, and `schema/` is an
@@ -260,11 +260,11 @@ class Transition:
     # terminal state, so bootstrapping V(s') through it is correct while bootstrapping
     # through a real terminal is not -- conflating the two is a value-function bug that
     # trains quietly. Gym split its own `done` for this reason. Multi-step embodied Envs
-    # (DESIGN 1.3) were the first consumer, and single-turn text RL sets it too: a PPO rollout that
+    #  were the first consumer, and single-turn text RL sets it too: a PPO rollout that
     # hits the token cap is `done` (the episode ended) with `truncated` True. Fixed-duration
     # sessions additionally use feedback.episode_complete for their physical reset boundary.
     truncated: bool = False
-    # The `info` of DESIGN 1.3's own Env contract, `step(action) -> (obs, reward, done,
+    # The `info` of the Env contract, `step(action) -> (obs, reward, done,
     # info)`. Env-owned per-step facts that are neither observation nor reward (BDDL goal
     # counts, collision flags, sim diagnostics). Distinct from `algo_extra`, which is
     # reserved for the algorithm: an Env writing there would collide with it.
@@ -279,7 +279,7 @@ class Transition:
 class Trajectory:
     transitions: list[Transition] = field(default_factory=list)
     id: str = ""
-    lineage: tuple[str, ...] = ()  # correlation / provenance (observability §11.2)
+    lineage: tuple[str, ...] = ()  # correlation / provenance (observability)
     session: Optional[str] = None
     status: Status = Status.PENDING
     group_id: Optional[str] = None  # GRPO grouping
@@ -287,7 +287,7 @@ class Trajectory:
     # downstream role transforms the corresponding field, so the driver can release every source
     # lease together at the synchronous step boundary. ``Any`` keeps this public schema Ray-free.
     pool_leases: tuple[Any, ...] = ()
-    # TODO(v2, §2.8): parent / sub_trajectories for hierarchical (macro→micro) ops
+    # TODO(v2): parent / sub_trajectories for hierarchical (macro→micro) ops
 
     @property
     def final_reward(self) -> Optional[float]:
@@ -300,7 +300,7 @@ class Trajectory:
 
 @dataclass
 class Preference:
-    """Typed supervised signal for offline DPO (DESIGN §1.4): the winner/loser pair a
+    """Typed supervised signal for offline DPO: the winner/loser pair a
     `Transition` carries in `targets`. Each side is the per-sample batch dict the DPO
     objective consumes (`data.packer.preference.unpack_preferences` → `dpo_objective`).
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Env / Source abstraction (DESIGN §1.3).
+"""Env / Source abstraction.
 
 The dataflow source is a pluggable Env; rollout is always downstream. A unified
 Gym-style interface covers everything:
@@ -10,8 +10,7 @@ Gym-style interface covers everything:
 
 - simulator        = full multi-step Env  (step-wise reset/step: future). The
                      sim-eval `robolab.SimBody` is the first sim Env variant, but
-                     batch/outcome-only (`run_tasks`, no per-step Trajectory) — see
-                     `docs/eval/sim-eval.md` §8.
+                     batch/outcome-only (`run_tasks`, no per-step Trajectory).
 - world model      = a *learned* Env       (TODO: future)
 - single-turn text/VLM RL = a degenerate **1-step Env** (reset→prompt, step→reward+done)
 

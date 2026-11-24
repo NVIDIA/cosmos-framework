@@ -43,8 +43,8 @@ def _select_packer_cls(hf_config: Any, *, model_backend: str | None = None) -> t
         MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING_NAMES,
     )
 
-    if model_backend not in (None, "i4", "hf"):
-        raise ValueError(f"unknown model_backend {model_backend!r}; expected 'i4' or 'hf'")
+    if model_backend not in (None, "native", "hf"):
+        raise ValueError(f"unknown model_backend {model_backend!r}; expected 'native' or 'hf'")
     model_type = getattr(hf_config, "model_type", None)
     if model_backend == "hf" and getattr(hf_config, "vision_config", None) is not None:
         from cosmos_framework.posttrain.data.packer.hf_vlm import HFVLMDataPacker
@@ -89,7 +89,7 @@ def init_data_packer(
 
     An explicit ``packer`` wins. Otherwise the HF config is resolved once: ``model_backend="hf"``
     selects ``HFVLMDataPacker`` for configs with ``vision_config`` and the decoder-only packer for
-    recognized causal LMs; ``model_backend="i4"`` or the compatibility default selects the native
+    recognized causal LMs; ``model_backend="native"`` or the compatibility default selects the native
     registry. The native path never guesses a text packer for an unregistered VLM.
 
     Args:
@@ -101,7 +101,7 @@ def init_data_packer(
         packer: an explicit `DataPacker` to use instead of registry selection. It must be a
             `DataPacker` (not merely a `BaseDataPacker`): every selected packer is `setup(...)`
             here, and `setup` is declared on `DataPacker`.
-        model_backend: ``"hf"`` for the generic HF model/processor path, or ``"i4"``/``None`` for
+        model_backend: ``"hf"`` for the generic HF model/processor path, or ``"native"``/``None`` for
             registered native packers.
 
     Returns:

@@ -837,7 +837,7 @@ def test_build_trainer_redirects_only_the_populated_identity_fields_of_a_generic
     built: list[Any] = []
     seen: list[tuple[str, str, str]] = []
     config = _mock_build_trainer(monkeypatch, tmp_path, built)
-    config.model_backend = "i4"
+    config.model_backend = "native"
     config.model = NativePolicyBuildSpec(
         builder="tests.fake.build_policy", model_id="policy/model", model_config=Qwen3VLModelConfig()
     )

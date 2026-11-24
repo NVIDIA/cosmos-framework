@@ -66,15 +66,61 @@ def _load_transfer_prompt_path(path: str | Path) -> str:
 
 
 def _load_transfer_negative_prompt_file(path: str | Path) -> str:
-    """Load a JSON negative caption file for transfer inference."""
-    candidate = Path(path)
-    if not candidate.is_file():
-        defaults_path = PACKAGE_DIR / "defaults" / candidate.name
-        if defaults_path.is_file():
-            candidate = defaults_path
-        else:
-            raise FileNotFoundError(f"Missing negative prompt file: {path} (also checked {defaults_path})")
-    return json.dumps(json.loads(candidate.read_text()))
+    """Load a JSON negative caption file for transfer inference.
+
+    The file is looked up with the same candidates (``_negative_prompt_file_candidates``) as the not-found
+    check that runs just before this is called, so ``defaults/`` is only tried for a bare filename. A longer
+    path whose last component happens to match a ``defaults/`` file is not loaded from there.
+    """
+    candidates = _negative_prompt_file_candidates(str(path))
+    for candidate in candidates:
+        if candidate.is_file():
+            return json.dumps(json.loads(candidate.read_text()))
+    raise FileNotFoundError(f"Missing negative prompt file: {path} (tried {', '.join(str(c) for c in candidates)})")
+
+
+def _negative_prompt_file_candidates(v: str) -> list[Path]:
+    """Where a ``negative_prompt_file`` is looked for, in order.
+
+    The launch folder (where the file used to be read from, so existing setups keep working), the current
+    folder (the spec's folder while a spec file is validated) and, for a bare filename only, ``defaults/``.
+
+    The launch folder deliberately comes before the spec's folder: before the spec-relative lookup was
+    added, a relative ``negative_prompt_file`` was read from the launch folder, so a file there must keep
+    winning over a same-named file next to the spec. A spec that wants its own copy can use a path that
+    does not exist in the launch folder, or an absolute path.
+
+    The launch folder is read when the sample is parsed, not when this module is imported, so a process that
+    changes folder after import still resolves against the folder it ran the spec from.
+    """
+    from cosmos_framework.inference.common.args import current_launch_dir
+
+    path = Path(v).expanduser()
+    candidates = [path] if path.is_absolute() else [current_launch_dir() / path, Path.cwd() / path]
+    if path.name == v:
+        candidates.append(PACKAGE_DIR / "defaults" / v)
+    return list(dict.fromkeys(candidates))
+
+
+def _resolve_negative_prompt_file(v: str | None) -> str | None:
+    """Pin a found ``negative_prompt_file`` to an absolute path while the spec's folder is known.
+
+    A file that is not found is kept as written and is not an error here: whether it matters depends on
+    whether the sample ends up reading it, which is decided when the sample is built
+    (``_build_transfer_data``). There it fails only that sample, so ``--skip-invalid-samples``
+    can skip it, or it is reported as a warning when another negative caption wins.
+    """
+    if v is None:
+        return None
+    defaults_path = PACKAGE_DIR / "defaults" / v
+    for candidate in _negative_prompt_file_candidates(v):
+        if candidate.is_file():
+            # A defaults/ name stays a bare name, as the defaults loader and shipped specs expect.
+            return v if candidate == defaults_path else str(candidate.absolute())
+    return v
+
+
+NegativePromptFile = Annotated[str, pydantic.AfterValidator(_resolve_negative_prompt_file)]
 
 
 @cache
@@ -415,6 +461,8 @@ class TextDataArgs(ArgsBase):
 
 
 class TextDataOverrides(OverridesBase):
+    _negative_metadata_mode_promoted: bool = pydantic.PrivateAttr(default=False)
+
     prompt_path: ResolvedFilePath | None = None
     """Path to a .txt file containing the prompt. Only one of 'prompt' or 'prompt_path' should be provided."""
     prompt: str | None = None
@@ -464,6 +512,8 @@ class TextDataOverrides(OverridesBase):
             return
 
         if self.negative_prompt_keep_metadata and self.negative_metadata_mode == NegativeMetadataMode.NONE:
+            # Remember that this was promoted, so a requested 'none' is not reported as an ignored 'same'.
+            self._negative_metadata_mode_promoted = True
             self.negative_metadata_mode = NegativeMetadataMode.SAME
 
 
@@ -612,6 +662,15 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
     preview_preset: Training[str | None] = None
     """x264 speed/efficiency preset for ``vision_preview.mp4`` (e.g. 'fast', 'medium', 'slow').
     Slower presets give smaller files at the same CRF. Defaults to 'medium'."""
+
+    @pydantic.field_validator("resolution", mode="before")
+    @classmethod
+    def _resolution_tier_from_int(cls, value: object) -> object:
+        # JSON specs often write the tier as a number (``"resolution": 480``); the tier is the same
+        # string, so accept the integer instead of failing the Literal check.
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
 
     @override
     def download(self, output_dir: Path):
@@ -843,6 +902,10 @@ class InteractiveDataOverrides(OverridesBase):
             raise ValueError("'camera_trajectory' and 'action_path' are mutually exclusive")
         if not self.autoregressive:
             raise ValueError("'camera_trajectory' requires autoregressive inference")
+        # Parse it now, so a typo fails before generation instead of when its batch is prepared.
+        from cosmos_framework.inference.camera import check_camera_trajectory
+
+        check_camera_trajectory(self.camera_trajectory)
 
 
 class ActionDataOverrides(OverridesBase):
@@ -1346,8 +1409,8 @@ class TransferDataArgs(ArgsBase, _TransferDataBase):
     seg: TransferArgs | None = None
     wsm: TransferArgs | None = None
     lidar: LidarTransferArgs | None = None
-    negative_prompt_file: str | None = None
-    """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
+    negative_prompt_file: NegativePromptFile | None = None
+    """JSON negative caption file for transfer specs: absolute, relative to the launch folder or the spec (launch folder first), or a bare filename under ``defaults/``."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
     num_conditional_frames: pydantic.NonNegativeInt | None = None
     max_frames: pydantic.PositiveInt | None = None
@@ -1387,8 +1450,8 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     unset. Joint camera+LiDAR: pair it with ``wsm: {}`` and one or more multiview views, each
     carrying its own ``control_path``. ``lidar.condition_path`` and ``lidar.num_conditional_sweeps``
     supply measured target sweeps as a clean conditioning prefix."""
-    negative_prompt_file: str | None = None
-    """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
+    negative_prompt_file: NegativePromptFile | None = None
+    """JSON negative caption file for transfer specs: absolute, relative to the launch folder or the spec (launch folder first), or a bare filename under ``defaults/``."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
     """Number of video frames generated per autoregressive chunk."""
     num_conditional_frames: pydantic.NonNegativeInt | None = None
@@ -1516,6 +1579,11 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         "num_conditional_frames": (0, "generation starts from noise with no RGB history prefix"),
         "control_guidance_interval": (None, "control guidance is fixed at 1.0, so there is no control-guidance window"),
         "guidance_interval": (None, "guidance is fixed at 1.0, so there is no guidance window"),
+        "negative_metadata_mode": (
+            NegativeMetadataMode.NONE,
+            "the distilled schedule has no negative-caption branch to add metadata to",
+        ),
+        "negative_prompt_keep_metadata": (False, "the distilled schedule has no negative-caption branch"),
     }
 
     def _build_transfer_data(
@@ -1536,7 +1604,28 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
             return
 
         user_set = user_fields if user_fields is not None else frozenset()
-        if self.negative_prompt is None and self.negative_prompt_file is not None:
+        # Found means: a resolved path, or a bare filename under defaults/ (never a defaults/ match by the
+        # last component of a longer path, which would hide a typo in its folder).
+        neg_file_missing = self.negative_prompt_file is not None and not any(
+            c.is_file() for c in _negative_prompt_file_candidates(self.negative_prompt_file)
+        )
+        if neg_file_missing:
+            # A sample loaded from a spec file also tried the spec's own folder when the spec was parsed (a
+            # match there is stored as an absolute path). Nothing here records whether this sample came from
+            # a spec file, so that folder is named as conditional rather than as always tried.
+            tried = (
+                ", ".join(str(c) for c in _negative_prompt_file_candidates(cast(str, self.negative_prompt_file)))
+                + ", and the spec file's folder if the sample came from a spec file"
+            )
+            if self.negative_prompt is None:
+                # The file would be read and is not there: fail this sample only. A ValueError here is
+                # per-sample, so --skip-invalid-samples skips it instead of stopping the batch.
+                raise ValueError(f"negative_prompt_file not found: {self.negative_prompt_file} (tried {tried})")
+            log.warning(
+                f"[transfer] negative_prompt_file not found: {self.negative_prompt_file} (tried {tried}). "
+                "It is not used, because a negative_prompt is already set; fix or remove the path."
+            )
+        elif self.negative_prompt is None and self.negative_prompt_file is not None:
             self.negative_prompt = _load_transfer_negative_prompt_file(self.negative_prompt_file)
         elif (
             self.negative_prompt_file is not None
@@ -1704,6 +1793,32 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
                     f"[transfer] '{hint_key}.weight'={weight} has no effect with a single control; "
                     "weights only set the relative mix between multiple controls."
                 )
+        # load_transfer_control_frames reads a control_path as-is and computes edge/blur only when it is
+        # missing, so the preset of a control that comes from a file is never read. The default preset
+        # (medium, as in the shipped cookbook specs) stays silent.
+        preset_fields = {TransferHintKey.EDGE: "preset_edge_threshold", TransferHintKey.BLUR: "preset_blur_strength"}
+        for hint_key, config in hints.items():
+            preset_field = preset_fields.get(hint_key)
+            preset = getattr(config, preset_field, None) if preset_field else None
+            if hint_key in user_set and config.control_path is not None and preset is not None and preset != "medium":
+                log.warning(
+                    f"[transfer] '{hint_key}.{preset_field}'='{preset}' is ignored: '{hint_key}.control_path' is set, "
+                    "so that control video is used as-is and the preset only applies when the control is computed "
+                    "from 'vision_path'. Remove control_path and set 'vision_path' to apply the preset."
+                )
+        # show_input pastes the source RGB next to the output, so without vision_path there is nothing
+        # to show: single-view Transfer writes the output alone, and streaming Transfer rejects it.
+        if (
+            self.show_input is True
+            and "show_input" in user_set
+            and self.vision_path is None
+            and self.multiview is None
+            and all(config.control_path is not None for config in hints.values())
+        ):
+            log.warning(
+                "[transfer] 'show_input' has no effect without 'vision_path': there is no input video to show next "
+                "to the output (streaming Transfer rejects this request). Set 'vision_path' to the source video."
+            )
         # Single-view Transfer returns through _generate_transfer_batch before the native upsampler,
         # but native_prompt_upsampling still skips the duration/resolution text added to plain prompts.
         if (
@@ -1726,6 +1841,8 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         ):
             for field, (neutral, reason) in self._DISTILLED_TRANSFER_IGNORED_FIELDS.items():
                 value = getattr(self, field)
+                if field == "negative_metadata_mode" and self._negative_metadata_mode_promoted:
+                    value = NegativeMetadataMode.NONE  # the request said 'none'; keep_metadata promoted it
                 if field in user_set and value is not None and value != neutral:
                     log.warning(f"[transfer] '{field}' is ignored by distilled causal Transfer: {reason}.")
             # The recipe keeps the chunk equal to num_frames (601 for the long rollout), so a fixed
@@ -2056,7 +2173,7 @@ class OmniSampleOverrides(
         "Qwen/Qwen3-VL-32B-Instruct": "32B",
         "Qwen/Qwen3-VL-30B-A3B-Instruct": "30B-A3B",
         "Qwen/Qwen3-VL-235B-A22B-Instruct": "235B-A22B",
-        "nvidia/Cosmos3-Edge-Reasoner": "2B",
+        "nvidia/Cosmos3-Edge": "2B",
         "nvidia/Cosmos3-Nano-Reasoner": "8B",
     }
 
@@ -2064,8 +2181,17 @@ class OmniSampleOverrides(
         # Cosmos3-Edge defaults to a shorter 121-frame clip for video
         # generation; every other model keeps the per-modality JSON default
         # (189). Keyed by ``vlm_config.model_name`` so only Edge is affected.
-        "nvidia/Cosmos3-Edge-Reasoner": 121,
+        "nvidia/Cosmos3-Edge": 121,
     }
+
+    @staticmethod
+    def _vlm_model_key(vlm_config: Any) -> str:
+        """Resolve public defaults from architecture as well as a checkpoint's descriptive name."""
+        model_instance = getattr(vlm_config, "model_instance", None)
+        target = str(_mapping_get(model_instance, "_target_") or "")
+        if "Nemotron3DenseVLTextForCausalLM" in target:
+            return "nvidia/Cosmos3-Edge"
+        return getattr(vlm_config, "model_name", "") or ""
 
     _RESOLUTION_SHIFT_DEFAULTS: ClassVar[dict[(ModelSize, Resolution), float]] = {
         # 2B rows mirror Cosmos3-Edge's training shift (Cosmos3-Edge.yaml
@@ -2149,12 +2275,28 @@ class OmniSampleOverrides(
         # User-provided values take precedence over JSON defaults.
         if self.defaults_file is not None:
             defaults = json.loads(self.defaults_file.read_text())
+            # A defaults file is validated outside any chdir, so resolve its relative caption file here.
+            neg_file = defaults.get("negative_prompt_file")
+            if isinstance(neg_file, str) and not Path(neg_file).expanduser().is_absolute():
+                beside = self.defaults_file.parent / neg_file
+                if beside.is_file():
+                    defaults["negative_prompt_file"] = str(beside.absolute())
         else:
             defaults_key = sample_meta.model_mode
             if self.multiview is not None:
                 defaults_key = "multiview"
             defaults = _load_modality_defaults(defaults_key)
         overrides = self.model_dump(exclude_none=True)
+        if (
+            self.defaults_file is None
+            and "negative_prompt_file" in overrides
+            and "negative_prompt" not in overrides
+            and defaults.get("negative_prompt") is not None
+        ):
+            # The built-in presets carry their caption file already loaded as ``negative_prompt``. Left in,
+            # it would stop ``_build_transfer_data`` from reading the sample's own ``negative_prompt_file``,
+            # so the sample's file would be dropped without a warning. Copy: the presets are cached.
+            defaults = {k: v for k, v in defaults.items() if k != "negative_prompt"}
         shift_configured = "shift" in overrides or defaults.get("shift") is not None
         user_fields = frozenset(overrides)
         merged_data = _deep_merge(defaults, overrides)
@@ -2217,7 +2359,7 @@ class OmniSampleOverrides(
             and not sample_meta.model_mode.is_action
             and not sample_meta.model_mode.is_reasoner
         ):
-            num_frames_default = self._NUM_FRAMES_DEFAULTS.get(model_config.vlm_config.model_name)
+            num_frames_default = self._NUM_FRAMES_DEFAULTS.get(self._vlm_model_key(model_config.vlm_config))
             if num_frames_default is not None:
                 self.num_frames = num_frames_default
 
@@ -2267,7 +2409,7 @@ class OmniSampleOverrides(
         if not shift_configured and not sample_meta.model_mode.is_reasoner:
             # Unregistered backbone names (custom fine-tunes) simply skip shift
             # defaulting rather than KeyError-ing.
-            model_size = self._VLM_MODEL_SIZE.get(model_config.vlm_config.model_name)
+            model_size = self._VLM_MODEL_SIZE.get(self._vlm_model_key(model_config.vlm_config))
             key = (model_size, self.resolution)
             if key in self._RESOLUTION_SHIFT_DEFAULTS:
                 self.shift = self._RESOLUTION_SHIFT_DEFAULTS[key]
@@ -2311,7 +2453,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Nano": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["8B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Nano.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_16bm8b_v2_midtrain/checkpoints/iter_000006000/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Nano",
             revision="main",
@@ -2320,7 +2461,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Edge": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["2B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Edge.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_4bm2b_v1_midtrain_0630a/checkpoints/iter_000028000/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Edge",
             revision="main",
@@ -2329,19 +2469,16 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_64bm32b_v3_midtrain/checkpoints/iter_000001800/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super",
             revision="main",
         ),
     ),
     # Task-specialized Super variants published as diffusers HF checkpoints.
-    # s3_uri is unused for HF-backed checkpoints (kept for parity with the
-    # registry schema); the architecture lives in each model YAML.
+    # Each public checkpoint carries its own Hub source and architecture YAML.
     "Cosmos3-Super-Image2Video": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_image2video/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Image2Video",
             revision="main",
@@ -2353,7 +2490,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super-Text2Image": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_text2image/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Text2Image",
             revision="main",
@@ -2365,7 +2501,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super-Text2Image-4Step": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_text2image_4step/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Text2Image-4Step",
             revision="main",
@@ -2387,7 +2522,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super-Image2Video-4Step": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_image2video_4step/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Image2Video-4Step",
             revision="main",

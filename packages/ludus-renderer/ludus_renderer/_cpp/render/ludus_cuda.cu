@@ -254,7 +254,7 @@ static __device__ int binary_search_timestamps(
     return result;
 }
 
-// Default color palette matching GL get_default_prim_color() (imaginaire4 v3)
+// Default color palette matching GL get_default_prim_color() (the renderer)
 static __device__ uint32_t get_default_prim_color(uint32_t prim_type_id)
 {
     switch (prim_type_id) {

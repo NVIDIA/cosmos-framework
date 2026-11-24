@@ -1,22 +1,29 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# Checks that every cookbook and evaluation notebook parses and lints, then runs the
-# Auto cookbook's CPU tests (request helpers, media timelines, synthetic RDS-HQ scene)
-# and the Bimanual cookbook's CPU tests (input preparation, payload encoding, HTTP client).
+# Checks that every cookbook and evaluation notebook parses and lints, and lints the code of
+# the Simulation notebooks that were converted into skill references (the fenced python blocks
+# under .agents/skills/cosmos3-inference-simulation-*/references). Then runs the Simulation
+# Auto skill's CPU tests (request helpers, media timelines, synthetic RDS-HQ scene) and the
+# Simulation Bimanual skill's CPU tests (input preparation, payload encoding, HTTP client).
+# The tests are in tests/skills, next to reference_cells.py, the loader that reads a converted
+# reference as notebook cells.
 name: Validate cookbooks
 on:
   push:
     branches: [main]
-    paths: ['.agents/skills/cookbooks/**', '.agents/skills/evaluation/**', '.agents/skills/.gitattributes', '.github/workflows/validate-cookbooks.yml']
+    paths: ['.agents/skills/cookbooks/**', '.agents/skills/evaluation/**', '.agents/skills/cosmos3-inference-simulation*/**', 'tests/skills/**', '.agents/skills/.gitattributes', '.github/workflows/validate-cookbooks.yml']
   pull_request:
-    paths: ['.agents/skills/cookbooks/**', '.agents/skills/evaluation/**', '.agents/skills/.gitattributes', '.github/workflows/validate-cookbooks.yml']
+    paths: ['.agents/skills/cookbooks/**', '.agents/skills/evaluation/**', '.agents/skills/cosmos3-inference-simulation*/**', 'tests/skills/**', '.agents/skills/.gitattributes', '.github/workflows/validate-cookbooks.yml']
   workflow_dispatch:
 permissions:
   contents: read
 env:
-  AUTO: .agents/skills/cookbooks/cosmos3/simulation/auto
-  BIMANUAL: .agents/skills/cookbooks/cosmos3/simulation/bimanual
+  AUTO: .agents/skills/cosmos3-inference-simulation-auto
+  AUTO_TESTS: tests/skills/cosmos3-inference-simulation-auto
+  BIMANUAL: .agents/skills/cosmos3-inference-simulation-bimanual
+  BIMANUAL_TESTS: tests/skills/cosmos3-inference-simulation-bimanual
+  TRANSFER: .agents/skills/cosmos3-inference-simulation-transfer
 jobs:
   validate-cookbooks:
     name: Validate cookbooks
@@ -107,30 +114,128 @@ jobs:
           # Catch syntax and runtime-invalid constructs without enforcing style on legacy notebooks.
           ruff check --output-format=github --select=E9,F63,F7,F82 -- "${notebooks[@]}"
 
+      - name: Lint notebook code in converted skill references
+        shell: bash
+        run: |
+          # The Simulation notebooks are now Markdown references in which every former code cell is
+          # one fenced python block. Rebuild each notebook from its reference and lint it with the
+          # rule set of the step above, so that the code keeps the coverage it had as a notebook.
+          ruff check --output-format=github --select=E9,F63,F7,F82 tests/skills/reference_cells.py
+          python - \
+            "$AUTO/references/transfer-auto-cosmos-framework.md" \
+            "$AUTO/references/transfer-auto-vllm-omni.md" \
+            "$AUTO/references/transfer-auto-sglang.md" \
+            "$AUTO/references/sim-auto-cosmos-framework.md" \
+            "$AUTO/references/sim-auto-vllm-omni.md" \
+            "$AUTO/references/sim-auto-sglang.md" \
+            "$AUTO/references/generate-wsm.md" \
+            "$BIMANUAL/references/vllm-omni.md" \
+            "$BIMANUAL/references/sglang.md" \
+            "$TRANSFER/references/vllm-omni.md" \
+            "$TRANSFER/references/sglang.md" <<'PY'
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          import nbformat
+
+          sys.path.insert(0, "tests/skills")
+          from reference_cells import reference_notebook
+
+
+          def annotation_escape(value: object) -> str:
+              return (
+                  str(value)
+                  .replace("%", "%25")
+                  .replace("\r", "%0D")
+                  .replace("\n", "%0A")
+              )
+
+
+          references = [Path(argument) for argument in sys.argv[1:]]
+          invalid = 0
+          count = 0
+          for reference in references:
+              try:
+                  text = reference.read_text(encoding="utf-8")
+                  sources = []
+                  first_lines = []
+                  offset = 0
+                  # The loader returns the Markdown and the code in file order, so each cell is the
+                  # next match; the offset of a code cell gives the line its fenced block starts at.
+                  for cell in reference_notebook(reference)["cells"]:
+                      source = "".join(cell["source"])
+                      offset = text.index(source, offset)
+                      if cell["cell_type"] == "code":
+                          sources.append(source)
+                          first_lines.append(text.count("\n", 0, offset) + 1)
+                      offset += len(source)
+                  if not sources:
+                      raise ValueError("no fenced python block found, so none of its code would be linted")
+                  notebook = nbformat.v4.new_notebook(
+                      cells=[nbformat.v4.new_code_cell(source) for source in sources]
+                  )
+                  # The .ipynb name makes ruff read standard input as a notebook, as it read the
+                  # source notebook, and apply the repository's .ruff.toml; no file is written.
+                  result = subprocess.run(
+                      [
+                          "ruff", "check", "--output-format=json", "--select=E9,F63,F7,F82",
+                          "--stdin-filename", str(reference.with_suffix(".ipynb")), "-",
+                      ],
+                      input=nbformat.writes(notebook), capture_output=True, text=True,
+                  )
+                  if result.returncode not in (0, 1):
+                      raise RuntimeError(result.stderr.strip() or f"ruff exited with status {result.returncode}")
+                  findings = [
+                      (first_lines[finding["cell"] - 1] + finding["location"]["row"] - 1, finding)
+                      for finding in json.loads(result.stdout)
+                  ]
+              except Exception as error:
+                  print(
+                      f"::error file={annotation_escape(reference)}::"
+                      f"{annotation_escape(type(error).__name__ + ': ' + str(error))}"
+                  )
+                  invalid += 1
+                  continue
+              count += len(sources)
+              invalid += bool(findings)
+              for line, finding in findings:
+                  print(
+                      f"::error file={annotation_escape(reference)},line={line},"
+                      f"col={finding['location']['column']},title=Ruff ({finding['code']})::"
+                      f"{annotation_escape(finding['message'])}"
+                      f" (code cell {finding['cell']} of the converted notebook)"
+                  )
+
+          print(f"Linted {count} code cells in {len(references)} converted notebook references.")
+          raise SystemExit(bool(invalid))
+          PY
+
       - name: Check Multiview notebook helpers and execution order
         run: |
-          ruff check --output-format=github --select=E9,F63,F7,F82 "$AUTO"/*.py "$AUTO/helpers" "$AUTO/tests/test_framework_auto_helpers.py" "$AUTO/tests/test_wsm_inputs.py" "$AUTO/tests/test_auto_media.py"
-          python -m unittest discover -s "$AUTO/tests" -p 'test_framework_auto_helpers.py' -v
+          ruff check --output-format=github --select=E9,F63,F7,F82 "$AUTO/scripts/helpers" "$AUTO_TESTS/test_framework_auto_helpers.py" "$AUTO_TESTS/test_wsm_inputs.py" "$AUTO_TESTS/test_auto_media.py"
+          python -m unittest discover -s "$AUTO_TESTS" -p 'test_framework_auto_helpers.py' -v
 
       - name: Check published sample request preparation
         run: |
-          python -m unittest discover -s "$AUTO/tests" -p 'test_daytime_sample.py' -v
+          python -m unittest discover -s "$AUTO_TESTS" -p 'test_daytime_sample.py' -v
 
       - name: Check Sim-Auto request and HTTP helpers
         run: |
-          ruff check --output-format=github --select=E9,F63,F7,F82 "$AUTO/helpers/sim_auto_vllm_omni_helpers.py" "$AUTO/helpers/sim_auto_sglang_helpers.py" "$AUTO/tests/test_sim_auto_helpers.py"
-          python -m unittest discover -s "$AUTO/tests" -p 'test_sim_auto_helpers.py' -v
+          ruff check --output-format=github --select=E9,F63,F7,F82 "$AUTO/scripts/helpers/sim_auto_vllm_omni_helpers.py" "$AUTO/scripts/helpers/sim_auto_sglang_helpers.py" "$AUTO_TESTS/test_sim_auto_helpers.py"
+          python -m unittest discover -s "$AUTO_TESTS" -p 'test_sim_auto_helpers.py' -v
 
       - name: Check Bimanual input preparation and HTTP helpers
         run: |
-          ruff check --output-format=github --select=E9,F63,F7,F82 "$BIMANUAL/bimanual_helpers.py" "$BIMANUAL/tests/test_bimanual_helpers.py"
-          python -m unittest discover -s "$BIMANUAL/tests" -p 'test_bimanual_helpers.py' -v
+          ruff check --output-format=github --select=E9,F63,F7,F82 "$BIMANUAL/scripts/bimanual_helpers.py" "$BIMANUAL_TESTS/test_bimanual_helpers.py"
+          python -m unittest discover -s "$BIMANUAL_TESTS" -p 'test_bimanual_helpers.py' -v
 
       - name: Check media timelines with system FFmpeg
         run: |
           ffmpeg -version
           ffprobe -version
-          python -m unittest discover -s "$AUTO/tests" -p 'test_auto_media.py' -v
+          python -m unittest discover -s "$AUTO_TESTS" -p 'test_auto_media.py' -v
 
       - name: Check media timelines with imageio FFmpeg 7.0.2
         run: |
@@ -150,11 +255,11 @@ jobs:
           print(version, flush=True)
           assert "ffmpeg version 7.0.2" in version, "Expected the imageio-ffmpeg 0.6.0 bundled FFmpeg."
           subprocess.run(
-              [sys.executable, "-m", "unittest", "discover", "-s", os.environ["AUTO"] + "/tests", "-p", "test_auto_media.py", "-v"],
+              [sys.executable, "-m", "unittest", "discover", "-s", os.environ["AUTO_TESTS"], "-p", "test_auto_media.py", "-v"],
               env=env, check=True,
           )
           PY
 
       - name: Check caller-supplied scene and inference handoff
         run: |
-          python -m unittest discover -s "$AUTO/tests" -p 'test_wsm_inputs.py' -v
+          python -m unittest discover -s "$AUTO_TESTS" -p 'test_wsm_inputs.py' -v

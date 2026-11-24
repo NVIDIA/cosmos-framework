@@ -110,8 +110,11 @@ The tests need an NVIDIA GPU; they skip when CUDA or nvJPEG is unavailable.
 
 ## License
 
-Ludus is released under [OpenMDW-1.1](../../LICENSE). The rasterizer core and
+Ludus is released under [OpenMDW-1.1](LICENSE). The rasterizer core and
 GL/CUDA utilities under `ludus_renderer/_cpp/cudaraster/`,
 `ludus_renderer/_cpp/common/` and `ludus_renderer/_cpp/bindings/{torch_common.inl,torch_types.h}`
 are derived from [nvdiffrast](https://github.com/NVlabs/nvdiffrast) and remain
 under its [NVIDIA Source Code License](ludus_renderer/licenses/nvdiffrast/LICENSE.txt).
+Section 3.3 of that license limits use of those components and their derivatives
+to non-commercial purposes, with an exception for NVIDIA and its affiliates.
+Third-party commercial use needs separate authorization.

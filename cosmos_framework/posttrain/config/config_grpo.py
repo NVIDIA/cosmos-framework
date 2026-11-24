@@ -19,7 +19,7 @@ from cosmos_framework.posttrain.config.rl import GRPOConfig, RolloutConfig
 @attrs.define(slots=False)
 class PosttrainGRPOConfig(PosttrainConfig):
     algorithm: str = "grpo"
-    model_backend: str = "i4"
+    model_backend: str = "native"
     # The arithmetic quick-start deliberately demonstrates the minimal policy-gradient objective.
     # GRPOConfig itself defaults to the production clipped surrogate.
     rl: GRPOConfig = attrs.field(factory=lambda: GRPOConfig(grpo_surrogate="legacy_pg"))

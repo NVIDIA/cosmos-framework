@@ -44,7 +44,7 @@ from cosmos_framework.inference.common.args import (
     SampleOutputs,
     SetupArgs,
 )
-from cosmos_framework.inference.common.auto_fps import auto_camera_fps
+from cosmos_framework.inference.common.auto_fps import attach_auto_camera_fps, auto_camera_fps
 from cosmos_framework.inference.common.inference import (
     Inference,
     PreparedBatch,
@@ -254,7 +254,7 @@ _QWEN2_TOKENIZER_FILES = ("tokenizer_config.json", "vocab.json", "merges.txt")
 _QWEN3VL_TOKENIZER_TYPES = ("Qwen/Qwen3-VL", "Siglip2-Qwen3-1.7B")
 
 # Repos served by the native Cosmos3-Edge (Nemotron bridge) processor; covers
-# nvidia/Cosmos3-Edge and nvidia/Cosmos3-Edge-Reasoner (mirrors the substring
+# nvidia/Cosmos3-Edge and nvidia/Cosmos3-Edge (mirrors the substring
 # dispatch in ``build_processor``).
 _EDGE_REPO_SUBSTRING = "nvidia/Cosmos3-Edge"
 
@@ -1839,9 +1839,8 @@ class OmniInference(Inference):
         # Runtime-only policy: preserve immutable published checkpoint files and the shared
         # argument-builder signature. CLI, Ray and Python callers all use pipe.model_config.
         checkpoint_hf = setup_args.checkpoint_hf
-        setattr(
+        attach_auto_camera_fps(
             model.config,
-            "_auto_camera_fps",
             auto_camera_fps(
                 exported_metadata, repository=checkpoint_hf.repository if checkpoint_hf is not None else None
             ),

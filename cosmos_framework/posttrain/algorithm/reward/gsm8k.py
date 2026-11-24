@@ -11,7 +11,7 @@ Protocol and a dataclass in a file called `reward.py`, this reads as general cod
 Its paired half is `configs/grpo_qwen3b_gsm8k.py::GSM8K_SYSTEM_PROMPT`, which exists to make a model emit the
 `#### <number>` form this parses. The two are one contract split across two roles. That coupling is
 why the prompt wording matters so much here: the verifier is EXACT-MATCH, so `#### 72.` scores 0
-against gold `72`, and a laxer instruction costs ~0.20 mean reward (docs/design/grpo-cosmos-rl-parity.md).
+against gold `72`, so the instruction must request the exact output format.
 
 NOTE: cosmos-rl's `gsm8k` reward does NOT use `math_verify` -- that library backs only its
 `boxed_math_reward_fn`. Parity means porting the regex and taking no such dependency.

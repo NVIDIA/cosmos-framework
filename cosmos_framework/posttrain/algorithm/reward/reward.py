@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Group-native reward providers, composition, and run-bindable catalogs (DESIGN §1.5)."""
+"""Group-native reward providers, composition, and run-bindable catalogs."""
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def map_candidates(score_candidate: CandidateRewardFn) -> RewardProvider:
 
 
 class RewardCombiner:
-    """Reduce named components → final reward (DESIGN §1.5).
+    """Reduce named components → final reward.
 
     v0: weighted sum (identity if no weights). TODO: KL penalty term, shaping, etc.
     """

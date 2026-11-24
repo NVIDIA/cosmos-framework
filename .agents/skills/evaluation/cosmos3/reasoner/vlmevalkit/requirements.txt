@@ -8,7 +8,6 @@ cairosvg
 colormath
 datasets==2.21.0
 decord; platform_machine != 'arm64'
-distance
 editdistance
 emoji
 eva-decord; platform_machine == 'arm64'
@@ -22,7 +21,7 @@ latex2sympy2
 antlr4-python3-runtime==4.9.3  # latex2sympy2 1.5.4 ships an ATN-v3 parser; unpinned floats to 4.13.2 (ATN-v4) and breaks MathVision eval
 
 # Upstream benchmark dependencies (imported at module load time)
-Levenshtein
+rapidfuzz>=3.9.5,<4
 loguru
 lpips
 math-verify==0.9.0  # unpinned floats latex2sympy2->1.9.1, backtracking math-verify to 0.1.0 which imports the uninstalled latex2sympy2_extended
@@ -38,7 +37,7 @@ openpyxl
 pandas
 pillow
 physical-ai-av==0.2.2
-polygon3
+shapely>=2,<3
 portalocker
 protobuf
 pylatexenc

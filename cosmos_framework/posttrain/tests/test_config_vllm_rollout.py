@@ -707,11 +707,11 @@ def test_dp_coords_reports_the_full_policy_dp_extent():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_build_objective_ignores_pdims_for_both_flavors():
-    """Task 9 deleted `dp_group_sharded`: a NON-TRIVIAL pdims must NOT change what `build_objective`
+    """With `dp_group_sharded` deleted, a NON-TRIVIAL pdims must NOT change what `build_objective`
     returns — for BOTH flavors. Partitioning the dp axis is the ingress predicate's job now
     (`workers/dispatch.py::select_chunk`, applied by the WorkerGroup `train` edge); wrapping the
     objective on `pdims` here too would divide the same axis twice, training on `1/dp_world**2` of
-    the batch while every metric reported the full count — the exact silent bug Task 9 closes.
+    the batch while every metric reported the full count — the exact silent bug its deletion closes.
     """
     from types import SimpleNamespace
 

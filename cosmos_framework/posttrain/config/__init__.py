@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Posttrain config system (DESIGN: config system).
+"""Posttrain config system.
 
 - `model.py` — shared dependency-light model backend and parallelism schemas.
 - `rl.py` — typed RL schema (RunConfig lifecycle + optimizer; DPOConfig/GRPOConfig/OPDConfig

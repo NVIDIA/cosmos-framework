@@ -25,7 +25,7 @@ nav:
   - Inference & Deploy:
       - Run inference: inference.md
       - Prompt upsampling: prompt_upsampling.md
-      - Prompting the Reasoner: skills/cookbooks/cosmos3/reasoner/reasoner_prompt_guide.md
+      - Prompting the Reasoner: skills/cosmos3-inference-reasoning/references/prompt-guide.md
       - World simulation:
           - Transfer-Auto: inference_auto.md
           - Sim-Auto: inference_sim_auto.md
@@ -38,13 +38,14 @@ nav:
           - Backend environments: skills/cookbooks/cosmos3/README.md
           - Deploy with NIM: skills/cookbooks/cosmos3/nim/README.md # the other NIM pages are extra_pages
       - Notebooks:
-          - Generation: skills/cosmos3-generate-media/SKILL.md
-          - Action: skills/cookbooks/cosmos3/generator/action/README.md
-          - Control-to-video transfer: skills/cookbooks/cosmos3/generator/transfer/README.md
-          - Reasoner: skills/cookbooks/cosmos3/reasoner/README.md
-          - Simulation: skills/cookbooks/cosmos3/simulation/README.md
+          - Generation: skills/cosmos3-inference-generate-media/SKILL.md
+          - Action: skills/cosmos3-inference-action/SKILL.md
+          - Control-to-video transfer: skills/cosmos3-inference-transfer/SKILL.md
+          - Reasoner: skills/cosmos3-inference-reasoning/SKILL.md
+          - Simulation: skills/cosmos3-inference-simulation/SKILL.md
   - Post-Training:
       - Choose a path: post_training/choose_path.md
+      - Model and algorithm support: post_training/model_algorithm_support.md
       - SFT:
           - SFT recipes: training.md
           - Datasets:
@@ -60,10 +61,10 @@ nav:
           - Sim-Auto: training_sim_auto.md
           - Sim-Transfer:
               - "Stage 0: teacher": training_sim_transfer_stage0.md
-              - Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-transfer/post-training/SKILL.md
+              - Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-transfer/SKILL.md
           - Sim-Bimanual:
               - Check training data: bimanual_data_preflight.md
-              - Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-bimanual/post-training/SKILL.md
+              - Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-bimanual/SKILL.md
           - Super four-step (DMD2): skills/cookbooks/cosmos3/generator/audiovisual/distill/README.md
       - RL:
           - Overview: posttrain/index.md
@@ -137,8 +138,8 @@ hold:
   - docs/transfer_numerical_preservation.md
   - docs/posttrain/reference/compatibility.md
   # These simulation pages clone the code from a fork; publish once they use this repo.
-  - .agents/skills/cookbooks/cosmos3/simulation/auto/auto.md
-  - .agents/skills/cookbooks/cosmos3/simulation/transfer/transfer.md
+  - .agents/skills/cosmos3-inference-simulation-auto/references/transfer-auto-guide.md
+  - .agents/skills/cosmos3-inference-simulation-transfer/references/transfer-guide.md
 
 # Repo-only pages: links to them go to GitHub.
 not_on_site:

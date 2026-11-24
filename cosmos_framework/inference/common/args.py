@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import contextlib
+import contextvars
 import glob
 import hashlib
 import itertools
@@ -11,6 +12,8 @@ import random
 import re
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import (
@@ -95,8 +98,37 @@ def _download_file_url(url: str, path: Path):
     raise RuntimeError(f"Failed to download {url} after {_DOWNLOAD_MAX_ATTEMPTS} attempt(s)") from last_exc
 
 
+_HF_HOST = "huggingface.co"
+
+
+def _is_hf_url(url: str) -> bool:
+    """Whether ``url`` points at a Hugging Face host (exact host or subdomain, not a substring match)."""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    return host == _HF_HOST or host.endswith(f".{_HF_HOST}")
+
+
+def _may_send_hf_token(url: str) -> bool:
+    """Whether the Hugging Face token may be sent to ``url`` (https and a Hugging Face host)."""
+    return urllib.parse.urlsplit(url).scheme == "https" and _is_hf_url(url)
+
+
+class _HFRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Drop the token on redirects that leave Hugging Face or https (e.g. presigned CDN URLs need no token)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        # ``newurl`` is already absolute here: ``http_error_302`` joins it with the original URL.
+        if new_req is not None and not _may_send_hf_token(newurl):
+            new_req.remove_header("Authorization")
+        return new_req
+
+
 def _download_file_url_once(url: str, path: Path):
-    if "huggingface.co" in url:
+    if _is_hf_url(url):
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme == "http":
+            # Hugging Face redirects http to https anyway; upgrading first lets the token go over https only.
+            url = parts._replace(scheme="https").geturl()
         _download_file_hf(url, path)
     else:
         import obstore
@@ -110,20 +142,20 @@ def _download_file_url_once(url: str, path: Path):
 
 
 def _download_file_hf(url: str, path: Path):
-    """Download from HuggingFace with token auth."""
-    import urllib.request
-
+    """Download from HuggingFace, sending the token only to Hugging Face hosts over https."""
     url = url.replace("/blob/", "/resolve/")
     headers: dict[str, str] = {}
-    token = os.environ.get("HF_TOKEN")
-    if not token:
-        token_path = Path.home() / ".cache" / "huggingface" / "token"
-        if token_path.is_file():
-            token = token_path.read_text().strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    if _may_send_hf_token(url):
+        token = os.environ.get("HF_TOKEN")
+        if not token:
+            token_path = Path.home() / ".cache" / "huggingface" / "token"
+            if token_path.is_file():
+                token = token_path.read_text().strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req) as resp, path.open("wb") as f:
+    # Replaces the default redirect handler.
+    with urllib.request.build_opener(_HFRedirectHandler).open(req) as resp, path.open("wb") as f:
         while chunk := resp.read(8192):
             f.write(chunk)
 
@@ -534,8 +566,8 @@ class CheckpointConfig(pydantic.BaseModel):
 
     config_file: ConfigFile
     """Path to config file."""
-    s3_uri: str
-    """Checkpoint S3 URI."""
+    s3_uri: str = ""
+    """Optional operator-supplied checkpoint S3 URI."""
     hf: CheckpointDirHf
     """Config for checkpoint on Hugging Face."""
 
@@ -1134,9 +1166,10 @@ class SampleOverrides(OverridesBase):
     """Seed for the random number generator."""
 
     tensors_file: ResolvedFilePath | None = None
-    """Path to data tensors file."""
+    """Path to a data tensors file, e.g. a debug dump from an earlier run. Not accepted by the Ray server."""
     pickle_file: ResolvedFilePath | None = None
-    """Path to data pickle file."""
+    """Path to a data pickle file, e.g. a debug dump from an earlier run. It is unpickled, so only use files you
+    created. Not accepted by the Ray server."""
 
     @override
     @classmethod
@@ -1201,6 +1234,18 @@ def _deep_merge(base: dict, overrides: dict) -> dict:
     return merged
 
 
+_LAUNCH_DIR: contextvars.ContextVar[Path | None] = contextvars.ContextVar("_LAUNCH_DIR", default=None)
+
+
+def current_launch_dir() -> Path:
+    """The folder the current spec file was loaded from, or the current folder outside spec loading.
+
+    Spec files are validated inside a chdir to their own folder; this keeps the folder the run was in
+    just before that chdir available to validators that need it.
+    """
+    return _LAUNCH_DIR.get() or Path.cwd()
+
+
 def _from_file(cls: type[_PydanticModelT], path: Path, override_data: dict[str, Any]) -> list[_PydanticModelT]:
     """Load arguments from a json/jsonl/yaml file.
 
@@ -1219,6 +1264,17 @@ def _from_file(cls: type[_PydanticModelT], path: Path, override_data: dict[str, 
     # Validate data
     # Input paths are relative to the file path
     path = path.expanduser().absolute()
+    launch_token = _LAUNCH_DIR.set(Path.cwd())
+    try:
+        objs = _validate_in_spec_dir(cls, path, data_list, override_data)
+    finally:
+        _LAUNCH_DIR.reset(launch_token)
+    return objs
+
+
+def _validate_in_spec_dir(
+    cls: type[_PydanticModelT], path: Path, data_list: list[Any], override_data: dict[str, Any]
+) -> list[_PydanticModelT]:
     with contextlib.chdir(path.parent):
         objs: list[_PydanticModelT] = []
         for i, data in enumerate(data_list):

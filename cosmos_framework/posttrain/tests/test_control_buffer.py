@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Tests for ExperienceBuffer.select (DESIGN §5).
+"""Tests for ExperienceBuffer.select.
 
 Guards two bugs that a full-drain e2e test cannot catch:
 - partial drain must NOT duplicate the non-batched items;

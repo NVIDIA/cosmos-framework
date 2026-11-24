@@ -118,7 +118,7 @@ def test_mover_surface_matches_the_staged_contract():
     from cosmos_framework.posttrain.comm.transfer.mover import STAGED
 
     # STAGED, not COLLECTIVE: NIXL is one-sided, so pull_stream_from_peer takes the
-    # synchronous per-bucket branch and never enters the broadcast path (design §1).
+    # synchronous per-bucket branch and never enters the broadcast path.
     assert N.NixlWeightMover.lifetime == STAGED
     assert N.NixlWeightMover.tensors_only is True
 
@@ -371,7 +371,7 @@ def test_nixl_preflight_requires_a_cuda_ucx_plugin(tmp_path: pathlib.Path) -> No
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_stage_waits_before_reassigning_views():
-    """The §4 ordering invariant, checked structurally so it runs in CI where the GPU e2e
+    """The ordering invariant, checked structurally so it runs in CI where the GPU e2e
     cannot.
 
     `pack` returns a FRESH view each call and `wait_tensor_freed` keys on `id(tensor)`, so

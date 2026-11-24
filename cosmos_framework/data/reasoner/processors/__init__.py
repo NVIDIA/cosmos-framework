@@ -14,9 +14,12 @@ def build_processor(
     cache_dir: Optional[str] = None,
     credentials: str = "./credentials/s3_training.secret",
     bucket: str = "bucket4",
+    processor_family: str = "auto",
 ):
+    if processor_family not in ("auto", "dense_vl"):
+        raise ValueError("processor_family must be auto or dense_vl")
     credentials, bucket = resolve_hf_model_store(credentials, bucket)
-    if "NVIDIA-Nemotron-3-Dense-VL" in tokenizer_type or "Qwen3-2B-ViT-Nemotron-2B-BF16" in tokenizer_type:
+    if processor_family == "dense_vl" or "nvidia/Cosmos3-Edge" in tokenizer_type:
         return Nemotron3DenseVLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
     elif "Qwen3-VL" in tokenizer_type or "Siglip2-Qwen3-1.7B" in tokenizer_type:
         return Qwen3VLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)

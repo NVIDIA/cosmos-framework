@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Tests for ArithmeticEnv (DESIGN §1.3 degenerate 1-step Env), the JSONL prompt source, and the
-split_prompts dispatch adaptation (Task C2, DESIGN §2.3)."""
+"""Tests for ArithmeticEnv, the JSONL prompt source, and the
+split_prompts dispatch adaptation (Task C2)."""
 
 from __future__ import annotations
 
@@ -377,7 +377,7 @@ def test_split_prompts_uneven_last_shard_absorbs_remainder() -> None:
 @pytest.mark.CPU
 def test_split_prompts_deterministic_per_index_across_calls() -> None:
     # Every SPMD rank of one consumer replica calls with the SAME (i, n) and MUST get the identical
-    # slice (spec §2.2: divergent per-rank prompts would desync the replica's collectives).
+    # slice (divergent per-rank prompts would desync the replica's collectives).
     prompts = [f"p{k}" for k in range(10)]
     assert split_prompts(prompts, 1, 5) == split_prompts(list(prompts), 1, 5) == ["p2", "p3"]
 
