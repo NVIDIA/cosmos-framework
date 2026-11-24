@@ -1,0 +1,19 @@
+# CI maintainers for workflow definitions and the files that configure or run them.
+/.github/workflows/ @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln
+/.github/actions/ @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln
+/.github/scripts/ @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln
+/ci/ @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln
+/.pre-commit-config.yaml @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln
+/.github/CODEOWNERS @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln
+/CODEOWNERS @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln
+/docs/CODEOWNERS @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln
+
+# The rules below add the skill maintainers on skill and skill CI paths.
+/.agents/skills/ @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln @christinayyw @yaoxu-crypto @rickzw
+/.claude/skills/ @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln @christinayyw @yaoxu-crypto @rickzw
+/.github/scripts/skill_eval/ @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln @christinayyw @yaoxu-crypto @rickzw
+/.github/skill-eval.yml @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln @christinayyw @yaoxu-crypto @rickzw
+/.github/workflows/skill-eval.yml @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln @christinayyw @yaoxu-crypto @rickzw
+/.github/workflows/skill-eval-tests.yml @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln @christinayyw @yaoxu-crypto @rickzw
+/.github/workflows/validate-cookbooks.yml @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln @christinayyw @yaoxu-crypto @rickzw
+/.github/workflows/validate-wsm.yml @lfengad @Xuanmeng-Zhang @pengcuo @Zhang1Sheng @foreverlms @Dinghow @yy-code-nv @kane-vln @christinayyw @yaoxu-crypto @rickzw

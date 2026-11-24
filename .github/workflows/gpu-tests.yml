@@ -11,9 +11,9 @@
 # everything.
 #
 # A single ``pre-commit`` (lint) job and a changed-path check run first. The GPU
-# jobs wait on both, so the self-hosted runner is never spent on a lint-failing
-# commit or on a change limited to ``.agents/**`` and Markdown files. The
-# relevant docs, cookbook, and WSM workflows still validate those changes.
+# jobs wait on both. Pre-commit authorizes PRs before checkout, then lints.
+# GPU jobs skip lint failures and changes limited to agent files, Markdown,
+# issue templates, CI ownership, or the root license and notice files below.
 # The six GPU jobs then run (one at a time on the single runner):
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
 #   * generator-training-regression — vision_sft_nano loss vs goldens
@@ -40,6 +40,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: gpu-tests-${{ github.ref }}
   cancel-in-progress: true
@@ -49,8 +52,12 @@ jobs:
   # and is skipped if it fails.
   pre-commit:
     uses: ./.github/workflows/pre-commit.yml
+    permissions:
+      contents: read
+      pull-requests: read
 
   changes:
+    needs: pre-commit
     name: Detect GPU-relevant changes
     runs-on: ubuntu-latest
     outputs:
@@ -77,11 +84,12 @@ jobs:
           done
 
           run_gpu=true
-          if git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_files"; then
+          if git diff --name-only -z --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_files"; then
             run_gpu=false
-            while IFS= read -r path; do
+            while IFS= read -r -d '' path; do
               case "$path" in
                 .agents/*|*.md) ;;
+                .github/CODEOWNERS|.github/ISSUE_TEMPLATE/*|LICENSE|NOTICE|THIRD_PARTY_LICENSES) ;;
                 *)
                   run_gpu=true
                   break
@@ -95,9 +103,37 @@ jobs:
           echo "run_gpu=$run_gpu" >> "$GITHUB_OUTPUT"
           echo "Run GPU tests: \`$run_gpu\`" >> "$GITHUB_STEP_SUMMARY"
 
+  # Keep the existing required check meaningful: GitHub accepts a skipped job.
+  unittest:
+    needs: [pre-commit, changes, gpu-unittest]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Verify the GPU unit test result
+        env:
+          LINT_RESULT: ${{ needs.pre-commit.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUN_GPU: ${{ needs.changes.outputs.run_gpu }}
+          UNITTEST_RESULT: ${{ needs.gpu-unittest.result }}
+        run: |
+          if [[ "$LINT_RESULT" != success ]]; then
+            echo "::error::See pre-commit for the PR authorization and lint result."
+            exit 1
+          fi
+          if [[ "$CHANGES_RESULT" == success && "$RUN_GPU" == false ]]; then
+            echo "No GPU tests required for these paths."
+            exit 0
+          fi
+          if [[ "$UNITTEST_RESULT" != success ]]; then
+            echo "::error::GPU unit tests did not pass."
+            exit 1
+          fi
+
   training-smoke:
     needs: [pre-commit, changes]
-    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 90
     env:
@@ -146,7 +182,7 @@ jobs:
 
   generator-training-regression:
     needs: [pre-commit, changes]
-    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 75
     env:
@@ -190,7 +226,7 @@ jobs:
 
   generator-inference-smoke:
     needs: [pre-commit, changes]
-    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     # 105 (not 60) since the Nano step gained the three ModelOpt FP8 cases (two
     # parallelism layouts + mixed-precision diffusion steps): a 20 GB checkpoint
@@ -261,7 +297,7 @@ jobs:
 
   distilled-inference-smoke:
     needs: [pre-commit, changes]
-    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 120
     env:
@@ -305,7 +341,7 @@ jobs:
 
   reasoner-inference-smoke:
     needs: [pre-commit, changes]
-    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 60
     env:
@@ -378,7 +414,7 @@ jobs:
 
   reasoner-training-regression:
     needs: [pre-commit, changes]
-    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 60
     env:
@@ -422,9 +458,10 @@ jobs:
   # together) in one pytest invocation, plus two torchrun steps for the
   # distributed tests that hardcode their world size. Runs parallel to the jobs
   # above (all gated on the single pre-commit lint and changed-path check).
-  unittest:
+  gpu-unittest:
+    name: GPU unit tests
     needs: [pre-commit, changes]
-    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
+    if: ${{ !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     # 60 (not 30) so the first cold-cache run can download the Cosmos3-Nano
     # checkpoint for scripts/_test's convert->export->inference pipeline; steady

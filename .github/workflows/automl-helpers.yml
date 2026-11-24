@@ -13,11 +13,16 @@ on:
       - '.pytest.toml'
 permissions:
   contents: read
+  pull-requests: read
 jobs:
   cpu-regression:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Authorize PR CI
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 5
+        uses: NVIDIA/cosmos-framework/.github/actions/authorize-ci@ad054f0e71c57532610bccfc334d7977c204da76
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:

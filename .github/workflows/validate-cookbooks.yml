@@ -18,6 +18,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  pull-requests: read
 env:
   AUTO: .agents/skills/cosmos3-inference-simulation-auto
   AUTO_TESTS: tests/skills/cosmos3-inference-simulation-auto
@@ -30,6 +31,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Authorize PR CI
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 5
+        uses: NVIDIA/cosmos-framework/.github/actions/authorize-ci@ad054f0e71c57532610bccfc334d7977c204da76
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:

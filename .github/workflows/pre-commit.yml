@@ -9,10 +9,17 @@ on:
   # Allow the GPU workflows to gate on this as a reusable workflow so their
   # (single, expensive) self-hosted runner only runs after lint passes.
   workflow_call:
+permissions:
+  contents: read
+  pull-requests: read
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
     steps:
+      - name: Authorize PR CI
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 5
+        uses: NVIDIA/cosmos-framework/.github/actions/authorize-ci@ad054f0e71c57532610bccfc334d7977c204da76
       - uses: actions/checkout@v6
         with:
           lfs: true

@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+name: DCO
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, edited]
+
+permissions: {}
+
+jobs:
+  verify-signoff:
+    if: github.event.action != 'edited' || github.event.changes.base != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: dco-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      # Check commit messages without checking out or running the PR's code.
+      - name: Verify Signed-off-by trailers
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { spawnSync } = require('node:child_process');
+            const pr = context.payload.pull_request;
+            const sha = pr.head.sha;
+            const setStatus = (state, description) => github.rest.repos.createCommitStatus({
+              ...context.repo, sha, state, description, context: 'DCO sign-off',
+              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${context.runId}`,
+            });
+            const query = `query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  state headRefOid baseRefName baseRefOid
+                  commits(first: 100, after: $after) {
+                    totalCount
+                    nodes { commit { oid message } }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }`;
+            const signoff = /^Signed-off-by: [^<>\r\n]+ <[^\s<>@]+@[^\s<>@]+>$/im;
+            const checked = new Set();
+            const missing = [];
+            let after = null;
+            let expectedCount;
+            let baseSha;
+
+            await setStatus('pending', 'Checking PR commit sign-offs');
+            try {
+              do {
+                const { repository } = await github.graphql(query, { ...context.repo, number: pr.number, after });
+                const current = repository?.pullRequest;
+                if (current?.state !== 'OPEN' || current.headRefOid !== sha || current.baseRefName !== pr.base.ref) {
+                  throw new Error('The PR revision changed. Check the latest run.');
+                }
+                const { totalCount, nodes, pageInfo } = current.commits;
+                expectedCount ??= totalCount;
+                baseSha ??= current.baseRefOid;
+                if (totalCount !== expectedCount || current.baseRefOid !== baseSha) {
+                  throw new Error('The PR commit list changed during pagination.');
+                }
+                for (const { commit } of nodes) {
+                  const parsed = spawnSync('git', ['interpret-trailers', '--parse', '--no-divider'], {
+                    input: commit.message, encoding: 'utf8',
+                  });
+                  if (parsed.error || parsed.status !== 0) throw new Error('Could not parse commit trailers.');
+                  checked.add(commit.oid);
+                  if (!signoff.test(parsed.stdout)) missing.push(commit.oid.slice(0, 12));
+                }
+                if (pageInfo.hasNextPage && (!pageInfo.endCursor || pageInfo.endCursor === after)) {
+                  throw new Error('Could not advance the PR commit cursor.');
+                }
+                after = pageInfo.hasNextPage ? pageInfo.endCursor : null;
+              } while (after);
+              if (!checked.size || checked.size !== expectedCount) throw new Error('Incomplete PR commit list.');
+            } catch (error) {
+              await setStatus('error', 'Could not verify the complete PR commit list');
+              throw error;
+            }
+
+            if (missing.length) {
+              await setStatus('failure', `${missing.length} commit(s) missing a valid Signed-off-by trailer`);
+              core.setFailed(`Missing sign-off in ${missing.slice(0, 20).join(', ')}. See CONTRIBUTING.md.`);
+            } else {
+              await setStatus('success', `Checked Signed-off-by trailers on all ${checked.size} commits`);
+            }
