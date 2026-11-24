@@ -1,5 +1,8 @@
 # Evaluation
 
+For tokenizer reconstruction, point-cloud generation, temporal consistency and
+object metrics, see [LiDAR evaluation](./lidar_evaluation.md).
+
 `cosmos_framework.scripts.eval` scores a checkpoint against ground truth. It has two paths, and
 `--dataset.model-mode` picks one:
 
