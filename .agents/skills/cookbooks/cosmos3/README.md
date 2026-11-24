@@ -493,9 +493,10 @@ Notes for Edge on `release:1.4.0rc4` (verified on one RTX PRO 6000 Blackwell wit
   long Temporal Localization videos (88,000-93,600 encoder tokens) failed with HTTP 400
   `Multimodal item requires ... encoder tokens, exceeding the effective startup maximum 65536`. With
   `--max_num_tokens 131072`, all 19 request examples in the Reasoner notebook ran on both checkpoints.
-- **FP8 versus BF16.** With `temperature=0`, the 2D-grounding box (`[215, 136, 400, 740]`), the timestamp query and the
-  multiple-choice answer (`A`) matched BF16. Most free-text answers differ in wording, and one trajectory point and
-  the "interval" question differed in content. Accuracy was not benchmarked.
+- **FP8 versus BF16.** FP8 is not bit-identical to BF16, and `temperature=0` is not reproducible on this setup: two
+  BF16 runs differed too (2D-grounding box, "interval" question, several trajectory points). Across one FP8 run and two
+  BF16 runs, the timestamp query and the multiple-choice answer (`A`) were the same. Treat FP8-versus-BF16 differences
+  as run-to-run variation unless a benchmark shows otherwise. Accuracy was not benchmarked.
 
 ## TensorRT-Edge-LLM
 

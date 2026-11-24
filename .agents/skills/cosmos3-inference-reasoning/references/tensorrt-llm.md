@@ -220,8 +220,10 @@ echo "Cosmos3-Edge starting in container '$CONTAINER' — run the readiness cell
 > - With `--max_num_tokens 32768` the effective startup limit was 65,536 encoder tokens, and the long Temporal Localization videos in § 3
 >   (88,000–93,600 encoder tokens) failed with HTTP 400 `Multimodal item requires ... encoder tokens, exceeding the effective startup maximum 65536`.
 >   With `131072` all 19 request cells of § 3 ran without an error on this checkpoint and on `nvidia/Cosmos3-Edge`.
-> - FP8 is not bit-identical to BF16. With `temperature=0`, the 2D-grounding box, the timestamp query and the multiple-choice answer matched BF16;
->   most free-text answers differ in wording, and one trajectory point and the "Interval Question" differed in content. Accuracy was not benchmarked.
+> - FP8 is not bit-identical to BF16, and `temperature=0` is not reproducible on this setup either: two BF16 runs differed too
+>   (2D-grounding box, Interval Question, several trajectory points). Across one FP8 run and two BF16 runs, the timestamp query and the
+>   multiple-choice answer (`A`) were the same, while free-text answers, trajectory coordinates and the 2D-grounding box varied.
+>   Treat FP8-vs-BF16 differences as run-to-run variation unless a benchmark shows otherwise. Accuracy was not benchmarked.
 
 ```bash
 set -euo pipefail
