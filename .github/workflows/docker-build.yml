@@ -38,10 +38,21 @@ permissions:
   contents: read
 
 jobs:
-  runtime-image:
-    # Temporarily disabled while the image build is being repaired. Re-enable by
-    # removing this `if: false` once the Docker Build check passes.
+  authorize-build:
+    # Enable the whole build pipeline here once the image build is repaired.
     if: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Authorize PR CI
+        if: github.event_name == 'pull_request'
+        uses: NVIDIA/cosmos-framework/.github/actions/authorize-ci@ad054f0e71c57532610bccfc334d7977c204da76
+
+  runtime-image:
+    # A PR must pass authorization before GitHub allocates the H200 runner.
+    needs: authorize-build
     runs-on: [self-hosted, docker-build, h200, cosmos-framework]
     timeout-minutes: 120
     env:
