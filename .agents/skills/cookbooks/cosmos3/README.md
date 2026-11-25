@@ -290,6 +290,43 @@ weights are not served by this pipeline, and video-to-video is validated for Nan
 and Super. Requests outside the model card's validated envelope (256p/480p,
 50-150 frames, 12-30 FPS) still run and log an advisory line.
 
+**Cosmos3-Edge-FP8** (single GPU, static FP8). `nvidia/Cosmos3-Edge-FP8` is its own repository, so do not pass `--revision`. Edge-FP8 needs a TensorRT-LLM that contains the Cosmos3 static-FP8 path, which `release:1.4.0rc4` includes. Without `--visual_gen_args`, `trtllm-serve` starts the LLM path and image requests return 404. The YAML below turns off torch.compile, because the default warm-up fails in the static-FP8 quantization kernel:
+
+```bash
+cat > "$PWD/cosmos3-edge-fp8-1gpu.yaml" <<'EOF'
+torch_compile_config:
+  enable: false
+EOF
+
+trtllm-serve nvidia/Cosmos3-Edge-FP8 \
+  --visual_gen_args "$PWD/cosmos3-edge-fp8-1gpu.yaml" \
+  --port "$COSMOS3_TRTLLM_PORT"
+```
+
+The step policy, sampling defaults, and supported tasks are the same as Edge above: W8A16 on the first and last three denoising steps, W8A8 in between, no audio or video-to-video. The offline entry point takes the same Hub ID, run from the TensorRT-LLM checkout where the YAML above was written:
+
+```bash
+python3 examples/visual_gen/models/cosmos3/cosmos3.py \
+  --model nvidia/Cosmos3-Edge-FP8 \
+  --visual_gen_args cosmos3-edge-fp8-1gpu.yaml \
+  --prompt_file examples/visual_gen/models/cosmos3/prompts/t2v.json \
+  --output_path edge_fp8_t2v.mp4
+```
+
+MP4 output needs `ffmpeg` on the `PATH`. The requests in the VisualGen server section above can be sent to this server unchanged.
+
+Guardrails are on by default, and `release:1.4.0rc4` does not ship `cosmos_guardrail`, so the command above exits at startup with
+`Cosmos Guardrail is not installed` until you do one of two things. Either install the package, which needs access to the gated
+`nvidia/Cosmos-1.0-Guardrail` repository:
+
+```bash
+pip install cosmos_guardrail==0.3.2 && pip uninstall -y opencv-python && pip install opencv-python-headless==5.0.0.93
+```
+
+or start the server with `TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1`, in which case you are responsible for deploying the model
+without guardrails. Both were verified on one RTX PRO 6000 Blackwell with text-to-image, text-to-video (832x480, 121 frames, 24 fps)
+and image-to-video requests.
+
 **Cosmos3-Super-Text2Image-4Step** (single GPU; DMD2-distilled text-to-image):
 
 ```bash
@@ -422,10 +459,45 @@ trtllm-serve nvidia/Cosmos3-Edge \
   --max_num_tokens 32768
 ```
 
+**Cosmos3-Edge-FP8** (single GPU, port 8001, static FP8). `nvidia/Cosmos3-Edge-FP8` is its own
+Hugging Face repository, so pass its ID to `trtllm-serve` and do not set `--revision`. The
+checkpoint carries a root `hf_quant_config.json`, so no quantization flag is needed. Run it inside
+`nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc4`, which contains the Cosmos3 static-FP8 path
+(`release:1.4.0rc2` is the BF16 minimum above and is not tested with FP8). Use a larger token budget
+than the BF16 line, and set `TRTLLM_MEDIA_ALLOWED_LOCAL_PATH` if you send `file://` media (see the
+notes below). Video requests also need the headless OpenCV install above; without it they fail with
+HTTP 400 `OpenCV (cv2) is required for video decoding`:
+
+```bash
+export TRTLLM_MEDIA_ALLOWED_LOCAL_PATH=/path/to/media   # only for file:// requests
+CUDA_VISIBLE_DEVICES=0 \
+trtllm-serve nvidia/Cosmos3-Edge-FP8 \
+  --host 0.0.0.0 \
+  --port 8001 \
+  --max_num_tokens 131072
+```
+
 The server exposes `/health` and the OpenAI-compatible API at
 `http://localhost:8001/v1`. See the
 [Reasoner TensorRT-LLM notebook](../../cosmos3-inference-reasoning/references/tensorrt-llm.md) for image
 and video requests.
+
+Notes for Edge on `release:1.4.0rc4` (verified on one RTX PRO 6000 Blackwell with both
+`nvidia/Cosmos3-Edge` and `nvidia/Cosmos3-Edge-FP8`):
+
+- **Local media.** The server rejects `file://` and plain-path media with
+  `Local media paths are not accepted by this server` unless it is started with
+  `TRTLLM_MEDIA_ALLOWED_LOCAL_PATH=<directory>`; files under that directory are then accepted. Alternatively send
+  `http(s)` or base64 `data:` URLs. The refusal was observed on the FP8 server; the check lives in the
+  TensorRT-LLM server, not in the checkpoint.
+- **Token budget.** With `--max_num_tokens 32768` the effective startup limit was 65,536 encoder tokens, and the
+  long Temporal Localization videos (88,000-93,600 encoder tokens) failed with HTTP 400
+  `Multimodal item requires ... encoder tokens, exceeding the effective startup maximum 65536`. With
+  `--max_num_tokens 131072`, all 19 request examples in the Reasoner notebook ran on both checkpoints.
+- **FP8 versus BF16.** FP8 is not bit-identical to BF16, and `temperature=0` is not reproducible on this setup: two
+  BF16 runs differed too (2D-grounding box, "interval" question, several trajectory points). Across one FP8 run and two
+  BF16 runs, the timestamp query and the multiple-choice answer (`A`) were the same. Treat FP8-versus-BF16 differences
+  as run-to-run variation unless a benchmark shows otherwise. Accuracy was not benchmarked.
 
 ## TensorRT-Edge-LLM
 

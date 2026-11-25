@@ -307,7 +307,7 @@ command; setup guide [`../cookbooks/cosmos3/README.md#tensorrt-llm-reasoner`](..
 "**Cosmos3-Nano** and **Cosmos3-Super** use the prebuilt `nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc22` Docker image"
 (the § 1 pull cell, "~20 GB on first run"); "**Cosmos3-Edge** requires TensorRT-LLM >= `v1.4.0rc2` and uses
 `nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc2`" (its § 2 cell pulls it; source-build fallback at `39a44fab`). Client
-dependencies: `pip install -q "openai>=1.0" pillow huggingface_hub`; no FP8 section. Nano launch (§ 2, verbatim, after the
+dependencies: `pip install -q "openai>=1.0" pillow huggingface_hub`; the notebook has no Nano/Super FP8 section. Nano launch (§ 2, verbatim, after the
 exports of Read this first item 3; `COSMOS3_TRTLLM_IMAGE` is `nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc22` from § 1):
 
 ```bash
@@ -342,7 +342,7 @@ Readiness: the § 2 "Wait for the server to be ready" block, verbatim (container
 Requests: § 3 — the same OpenAI-client cells against `http://localhost:8001/v1` (the Variant 2 request block is this
 backend's README quickstart, verbatim); the video cells add `"mm_processor_kwargs": {"do_sample_frames": False}` to
 `extra_body` next to `media_io_kwargs`. Edge: the § 2 Edge cell (`"$COSMOS3_EDGE_TRTLLM_IMAGE"`, `trtllm-serve nvidia/Cosmos3-Edge`);
-Super: `--tensor_parallel_size 4` on `--gpus all`. Shut down: the § 4 block (`docker rm -f cosmos3-reasoner-trtllm`, plus the Edge PID-file cleanup).
+Super: `--tensor_parallel_size 4` on `--gpus all`. Edge-FP8 (`nvidia/Cosmos3-Edge-FP8`): the § 2 "Cosmos3-Edge-FP8 inference with TensorRT-LLM" cell verbatim instead of the Edge cell (`release:1.4.0rc4`, `TRTLLM_MEDIA_ALLOWED_LOCAL_PATH`, `--max_num_tokens 131072`; its note says why: without them § 3 fails with HTTP 400; verified on one RTX PRO 6000 Blackwell, not on H100). Shut down: the § 4 block (`docker rm -f cosmos3-reasoner-trtllm`, plus the Edge PID-file cleanup).
 
 ## Variant 5 — Transformers (in-process venv, no server)
 
