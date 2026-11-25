@@ -131,7 +131,11 @@ def require_source_available(data: SFTDatasetConfig) -> None:
 
 
 def validate_config(config: Any) -> SFTConfig:
-    """Pure configuration/source preflight (structure, then every enabled source's availability); no model or processor."""
+    """Pure configuration/source preflight (structure, then every enabled source's availability); no model or processor.
+
+    GPU-free: an opt-in eight-bit optimizer is checked here only as an installed package; its CUDA
+    kernels are probed once by ``build_trainer`` (``preflight_quantized_optimizer``) before the model.
+    """
     from cosmos_framework.posttrain.config.build import refuse_rounding_or_unavailable_optimizer
 
     rl = validate_config_structure(config)
@@ -147,6 +151,7 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         build_backbone,
         build_optimizer,
         build_sft_lr_scheduler,
+        preflight_quantized_optimizer,
         resolve_precision,
     )
     from cosmos_framework.posttrain.data.packer.sft import build_sft_packer
@@ -183,6 +188,8 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         "precision": asdict(resolve_precision(config)),
     }
     misc.set_random_seed(seed=rl.seed, by_rank=False)
+    # The one CUDA probe of an opt-in eight-bit backend, before the model is allocated.
+    preflight_quantized_optimizer(rl.optimizer, "SFT optimizer preflight")
     model = build_backbone(config)
     optimizer = build_optimizer(model.net, rl.optimizer)
     groups = []
