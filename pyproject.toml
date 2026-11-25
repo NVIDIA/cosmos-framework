@@ -60,6 +60,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+quantized-optimizers = ["bitsandbytes==0.49.2"]
 automl = ["nvidia-automl-core==0.1.0"]
 automl-prompts = ["nvidia-automl-core==0.1.0", "gepa==0.1.2"]
 quantization = ["datasets", "nvidia-modelopt==0.44.0"]
