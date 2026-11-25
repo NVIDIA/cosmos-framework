@@ -352,6 +352,20 @@ def test_failed_restore_keeps_live_values_and_next_update(name, failure, monkeyp
         assert torch.equal(value, actual) if isinstance(value, torch.Tensor) else value == actual
 
 
+def test_frozen_selection_stays_out_only_for_trainable_owners():
+    # Existing optimizers keep the historical membership: a key-matched frozen parameter
+    # joins the group, so pre-existing checkpoints keep their group sizes.
+    net = torch.nn.Linear(2, 2)
+    net.weight.requires_grad_(False)
+    opt = build_optimizer(net, OptimizerConfig(train_keys=["weight", "bias"]))
+    assert opt.param_groups[0]["params"] == [net.weight, net.bias]
+    # The opt-in local-master owner (and the eight-bit backend) accept live trainables only.
+    net = torch.nn.Linear(2, 2)
+    net.weight.requires_grad_(False)
+    opt = build_optimizer(net, OptimizerConfig(train_keys=["weight", "bias"], update_policy="fp32_master"))
+    assert opt.param_groups[0]["params"] == [net.bias]
+
+
 def test_paged_buffer_lifetime_follows_storage_aliases(monkeypatch):
     import gc
 
@@ -405,6 +419,57 @@ def test_backend_probe_runs_once_per_device(monkeypatch):
     monkeypatch.setattr(backend, "_owned_state_buffer", lambda *a, **k: probes.append(1) or original(*a, **k))
     backend.require_backend()
     assert probes == []
+
+
+def test_sharded_master_decides_eight_bit_eligibility_from_logical_parameters(monkeypatch):
+    """bitsandbytes compares min_8bit_size with the LOCAL shard; the owner overrides it per logical tensor."""
+    from types import SimpleNamespace
+
+    from cosmos_framework.utils import quantized_optimizer as backend
+
+    class Upstream(torch.optim.Optimizer):
+        def __init__(self, groups, **options):
+            super().__init__(groups, {k: options[k] for k in ("lr", "betas", "eps", "weight_decay")})
+
+    params = [torch.nn.Parameter(torch.zeros(n)) for n in (1536, 1024, 2048)]
+    names = ["ff.bias", "norm.weight", "explicit.weight"]
+    groups = [{"params": params, "param_names": names}]
+    config = SimpleNamespace(
+        name="adamw_bnb_8bit",
+        lr=1e-4,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.0,
+        bnb_min_8bit_size=4096,
+        warmup_steps=0,
+    )
+
+    def owner(world):
+        # Logical shapes 6144 (>= 4096), 1024 (< 4096) and 8192 (explicit FP32 exception).
+        shapes = [[1536 * world], [1024], [2048 * world]]
+        return {
+            "world_size": world,
+            "parameters": [
+                {"name": n, "shape": shape, "local_shape": list(p.shape)} for n, shape, p in zip(names, shapes, params)
+            ],
+        }
+
+    optimizer_type = backend._optimizer_type(Upstream)
+    sharded = optimizer_type(
+        groups, params, {id(p): n for p, n in zip(params, names)}, config, {"explicit.weight"}, owner(4)
+    )
+    # The 1536-element shard of a 6144-element bias is eight-bit on every rank and world size.
+    assert sharded.mng.index2config == {
+        (0, 0): {"min_8bit_size": 1},
+        (0, 1): {"optim_bits": 32},
+        (0, 2): {"optim_bits": 32},
+    }
+    assert sharded.identity["min_8bit_size_basis"] == "logical_parameter"
+    assert sharded._owner_checks_finite  # the master owner already scanned every rank
+    # An unsharded owner sees logical == local sizes: same decisions, unchanged identity.
+    single = optimizer_type(groups, params, {id(p): n for p, n in zip(params, names)}, config, set(), owner(1))
+    assert single.mng.index2config[(0, 0)] == {"optim_bits": 32}
+    assert "min_8bit_size_basis" not in single.identity
 
 
 def test_empty_and_noncontiguous_trainables_fail():

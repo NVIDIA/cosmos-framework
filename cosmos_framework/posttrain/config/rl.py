@@ -68,7 +68,7 @@ OPTIMIZER_IMPLS: tuple[str, ...] = ("fused", "foreach", "for-loop")
 OPTIMIZER_NAMES: tuple[str, ...] = ("adamw", "fusedadam", "muon", *QUANTIZED_OPTIMIZER_NAMES)
 """Optimizer CLASSES `OptimizerConfig.name` selects (its docstring describes each); `build_optimizer` dispatches on them."""
 
-OPTIMIZER_IDENTITY_OPT_IN_FIELDS: tuple[str, ...] = ("bnb_min_8bit_size", "bnb_fp32_state_names")
+OPTIMIZER_IDENTITY_OPT_IN_FIELDS: tuple[str, ...] = ("bnb_min_8bit_size", "bnb_fp32_state_names", "update_policy")
 """`OptimizerConfig` fields omitted from run identities while at their defaults (pre-existing identities unchanged)."""
 
 FIXED_NORMALISER_OPTIMIZER_EPS_CEILING: float = 1e-7
@@ -214,8 +214,11 @@ class OptimizerConfig:
     - "fusedadam" — apex-fused AdamW with fp32 master weights + fp32 moments
       (`utils/fused_adam.py`). Requires apex + GPU (training containers ship it).
     - "adamw_bnb_8bit" / "paged_adamw_8bit" — bitsandbytes 0.49.2 blockwise
-      eight-bit moments, with managed memory only for the paged name. They update
-      ordinary FP32 trainables on one CUDA device with consolidated checkpoints. Small
+      eight-bit moments, with managed memory only for the paged name. The default
+      parameter-update policy uses ordinary FP32 trainables on one CUDA device
+      with consolidated checkpoints. The explicit `fp32_master` policy bridges
+      BF16 storage and one-dimensional native FSDP2 shards to local FP32 updates
+      with same-topology recovery; model/workflow qualification remains separate. Small
       tensors and exact-name `bnb_fp32_state_names` exceptions retain FP32 moments.
       The bitsandbytes backends alone keep no master weights for BF16-stored trainables;
       `update_policy="fp32_master"` supplies them.
@@ -301,8 +304,20 @@ class OptimizerConfig:
     # Append backend fields to preserve the existing dataclass positional API.
     bnb_min_8bit_size: int = 4096
     bnb_fp32_state_names: list[str] = field(default_factory=list)
+    # Explicit update policy: preserve BF16 model storage with optimizer-owned FP32
+    # local masters. Also usable with AdamW as the matched high-precision control.
+    update_policy: str = "parameter"
 
     def __post_init__(self) -> None:
+        if self.update_policy not in ("parameter", "fp32_master"):
+            raise ValueError("optimizer.update_policy must be parameter or fp32_master")
+        if self.update_policy == "fp32_master" and self.name not in ("adamw", *QUANTIZED_OPTIMIZER_NAMES):
+            raise ValueError("fp32_master supports AdamW and bitsandbytes AdamW only")
+        if self.update_policy == "fp32_master" and not self.force_finite_grads:
+            # The master owner relies on the trainer's rank-consistent finite check: without it a
+            # NaN window would abort the run (posttrain policy "raise") and every step would pay a
+            # second collective and host sync to decide finiteness inside the optimizer.
+            raise ValueError("optimizer.update_policy=fp32_master requires force_finite_grads=True")
         if self.name not in QUANTIZED_OPTIMIZER_NAMES and (self.bnb_min_8bit_size != 4096 or self.bnb_fp32_state_names):
             raise ValueError("bnb state options require a bitsandbytes optimizer")
         if self.name in QUANTIZED_OPTIMIZER_NAMES and not self.force_finite_grads:
@@ -1336,6 +1351,9 @@ class RunConfig:
     # Opt-in capabilities. Only workflows whose trainer save/load understands the
     # backend's checkpoint schema enable these; every other RunConfig rejects them here.
     supports_quantized_optimizer: ClassVar[bool] = False
+    # ``update_policy="fp32_master"`` checkpoints use MasterWeightOptimizer's rank-local
+    # schema, which only LLMTrainer's save/load (SFT, Joint PPO) understands.
+    supports_fp32_master_optimizer: ClassVar[bool] = False
 
     def __post_init__(self) -> None:
         for optimizer in (self.optimizer, getattr(self, "critic_optimizer", None)):
@@ -1343,6 +1361,14 @@ class RunConfig:
                 raise ValueError(
                     f"quantized optimizers are not supported by {type(self).__name__}; "
                     "supported: native SFT and GR00T Joint PPO"
+                )
+            if (
+                getattr(optimizer, "update_policy", "parameter") == "fp32_master"
+                and not self.supports_fp32_master_optimizer
+            ):
+                raise ValueError(
+                    f"optimizer.update_policy=fp32_master is not supported by {type(self).__name__}; "
+                    "its trainer cannot save/restore the rank-local master schema (supported: native SFT, Joint PPO)"
                 )
         if isinstance(self.max_steps, bool) or not isinstance(self.max_steps, int) or self.max_steps < 0:
             raise ValueError(f"max_steps must be a non-negative integer, got {self.max_steps!r}")
@@ -3346,7 +3372,7 @@ class JointPPOConfig(PPOBaseConfig):
         from cosmos_framework.posttrain.utils.identity import canonical_config_value
 
         optimizer_identity = asdict(self.optimizer)
-        # Fields added by the opt-in eight-bit work appear only when set, so every
+        # Fields added by the opt-in eight-bit/master work appear only when set, so every
         # existing run (all defaults) keeps its pre-existing identity and exact resume.
         defaults = OptimizerConfig()
         for name in OPTIMIZER_IDENTITY_OPT_IN_FIELDS:

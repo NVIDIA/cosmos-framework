@@ -46,3 +46,16 @@ def validate_quantized_options(
 def is_quantized_optimizer(optimizer: object) -> bool:
     """Whether ``optimizer`` runs the bitsandbytes eight-bit backend (directly or as an FP32-master backend)."""
     return bool(getattr(optimizer, "cosmos_quantized_optimizer", False))
+
+
+def is_local_master_optimizer(optimizer: object) -> bool:
+    """Whether ``optimizer`` is the FP32-master update owner (``update_policy=fp32_master``).
+
+    Its state is rank-local (masters, moments) and uses its own checkpoint schema.
+    """
+    return bool(getattr(optimizer, "cosmos_local_master_optimizer", False))
+
+
+def supports_host_offload(optimizer: object) -> bool:
+    """Whether generic trainer host offload may move ``optimizer`` state (the opt-in optimizers refuse it)."""
+    return not (is_quantized_optimizer(optimizer) or is_local_master_optimizer(optimizer))

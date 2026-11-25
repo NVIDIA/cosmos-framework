@@ -66,6 +66,30 @@ def collective_device() -> torch.device:
     return torch.device("cpu")
 
 
+def all_ranks_tensor_min(local_value: torch.Tensor) -> int:  # local_value: [], returns scalar int
+    """The minimum of a scalar integer status over every rank, with one host synchronization total."""
+    import torch
+    import torch.distributed as dist
+
+    if not (dist.is_initialized() and dist.get_world_size() > 1):
+        return int(local_value.item())
+    value = local_value.to(device=collective_device(), dtype=torch.int32)  # []
+    dist.all_reduce(value, op=dist.ReduceOp.MIN)
+    return int(value.item())
+
+
+def all_ranks_tensor_true(local_flag: torch.Tensor) -> bool:  # local_flag: [], returns scalar bool
+    """Logical-AND a scalar tensor flag with one host synchronization total."""
+    import torch
+    import torch.distributed as dist
+
+    if not (dist.is_initialized() and dist.get_world_size() > 1):
+        return bool(local_flag.item())
+    flag = local_flag.to(device=collective_device(), dtype=torch.int32)  # []
+    dist.all_reduce(flag, op=dist.ReduceOp.MIN)
+    return bool(flag.item())
+
+
 def rank_mean_count(local_count: int, device: torch.device) -> float:
     """Return the mean count across ranks, or the local count outside a process group."""
     import torch
