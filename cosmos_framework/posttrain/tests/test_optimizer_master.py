@@ -683,3 +683,22 @@ def test_save_returns_the_device_cache_only_for_fp32_master(policy, monkeypatch)
     assert all(parameter.grad is None for parameter in net.parameters())  # every opt-in optimizer
     # The single-device parameter policy has no DCP/NCCL pressure: no device sync or cache release.
     assert emptied == ([1] if policy == "fp32_master" else [])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_master_mismatch_compares_on_the_device_without_copying_model_shards_to_the_host(monkeypatch):
+    from types import SimpleNamespace
+
+    from cosmos_framework.posttrain.checkpoint.master_optimizer import _master_mismatch
+
+    live = torch.nn.Parameter(torch.randn(8, 4, device="cuda").to(torch.bfloat16))
+    optimizer = SimpleNamespace(names=("weight",), live=(live,))
+    exact = live.detach().float().cpu()
+    nudged = exact.clone()
+    nudged[0, 0] += 1  # rounds to another BF16 value
+    sub_bf16 = exact.clone()
+    sub_bf16[0, 0] += exact[0, 0].abs() * 2**-12  # rounds back to the same BF16 value: still equal
+    monkeypatch.setattr(torch.Tensor, "cpu", lambda self, *a, **k: pytest.fail("model shard copied to the host"))
+    assert _master_mismatch(optimizer, {"masters": [exact]}, lambda _, value: value) is None
+    assert _master_mismatch(optimizer, {"masters": [sub_bf16]}, lambda _, value: value) is None
+    assert "disagree for weight" in _master_mismatch(optimizer, {"masters": [nudged]}, lambda _, value: value)

@@ -26,12 +26,20 @@ import torch
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict, set_model_state_dict
 from torch.utils._pytree import tree_map
 
-from cosmos_framework.posttrain.utils.dist import run_rank_converged
-from cosmos_framework.utils.optimizer_master import local_tensor
+from cosmos_framework.posttrain.utils.dist import all_ranks_tensor_true, run_rank_converged
+from cosmos_framework.utils.optimizer_master import ResumeIdentityMismatchError, local_tensor
 
 # v4: tensor leaves only (v3 stored a pickled tuple, which a default DCP planner unpickles).
 _FORMAT = "cosmos_rank_master_v4"
 _DIGEST_BYTES = 32
+
+
+class TopologyMismatchError(ValueError):
+    """The checkpoint's rank-local payload was written by another world size (or is incomplete).
+
+    Raised from the global DCP metadata alone, so every rank raises it together; callers that
+    may start the optimizer fresh instead (``strict_resume=False``) catch exactly this.
+    """
 
 
 def _rank_key(rank: int) -> str:
@@ -110,7 +118,7 @@ def load_template(optimizer, shapes: Mapping[str, tuple[int, ...] | None]):
     expected = {"world_size", *(_rank_key(rank) for rank in range(world))}
     if saved != expected or shapes.get(f"{prefix}world_size") != (1,):
         written = len(saved - {"world_size"})
-        raise ValueError(
+        raise TopologyMismatchError(
             f"master optimizer checkpoint format/topology mismatch: written by {written} ranks, resuming on "
             f"{world}; exact resume requires the same topology"
         )
@@ -137,27 +145,60 @@ def stage_payload(optimizer, loaded):
     return optimizer.stage_state_dict(_decode_rank_state(payload[key]))
 
 
+def _master_mismatch(optimizer, saved, model_value: Callable[[str, torch.Tensor], torch.Tensor]) -> str | None:
+    """The first saved master that does not round to its model value, as an error message, else None."""
+    for name, master, live in zip(optimizer.names, saved["masters"], optimizer.live):
+        value = local_tensor(model_value(name, live)).detach()
+        # Compared where the model value lives: round the host master on the host (as before),
+        # then move only that copy, never the model shard, to the other side.
+        if not torch.equal(value, master.detach().to(dtype=live.dtype).to(value.device)):
+            return f"checkpoint model/master values disagree for {name}"
+    return None
+
+
 def require_masters_match(optimizer, saved, model_value: Callable[[str, torch.Tensor], torch.Tensor]):
     """Every saved master must round to the model value the same checkpoint restores for it.
 
     ``model_value(name, live_parameter)`` returns that value; names are the canonical
     state-dict names (activation-checkpoint and compile segments removed).
     """
-    for name, master, live in zip(optimizer.names, saved["masters"], optimizer.live):
-        value = local_tensor(model_value(name, live)).detach()
-        if not torch.equal(value.cpu(), master.detach().to(dtype=live.dtype, device="cpu")):
-            raise ValueError(f"checkpoint model/master values disagree for {name}")
+    mismatch = _master_mismatch(optimizer, saved, model_value)
+    if mismatch is not None:
+        raise ValueError(mismatch)
 
 
-def restore_into_live_model(optimizer, loaded, context: str) -> None:
-    """Restore after the model was loaded in place (generator DCP): validate, commit, roll back on failure."""
+def restore_into_live_model(optimizer, loaded, context: str, *, strict: bool = True) -> bool:
+    """Restore after the model was loaded in place (generator DCP): validate, commit, roll back on failure.
+
+    Model and optimizer come from one checkpoint, so every saved master must equal the live model
+    exactly. ``strict`` refuses a difference (corruption or a mixed checkpoint), and a payload saved
+    by an optimizer of another structure (parameter grouping, eight-bit options). Otherwise, as for
+    a lenient (``strict_resume=False``) partial model load that kept initial values for some
+    trained parameters, either one on ANY rank returns False on every rank, with nothing
+    changed, so the caller can start the optimizer fresh; True means the payload was committed.
+    No supported load replaces the model weights from another source while loading this payload:
+    the generator ``DistributedCheckpointer`` refuses ``load_ema_to_reg`` together with
+    ``load_training_state``, and a matching ``keys_to_skip_loading`` pattern skips this payload.
+    """
 
     def stage():
-        saved = stage_payload(optimizer, loaded)
-        require_masters_match(optimizer, saved, lambda _, live: live)
-        return saved
+        try:
+            saved = stage_payload(optimizer, loaded)
+        except ResumeIdentityMismatchError:
+            if strict:
+                raise
+            return None, False
+        mismatch = _master_mismatch(optimizer, saved, lambda _, live: live)
+        if mismatch is not None and strict:
+            raise ValueError(mismatch)
+        return saved, mismatch is None
 
-    _commit_with_rollback(optimizer, run_rank_converged(stage, f"{context} staging"), context)
+    saved, matches = run_rank_converged(stage, f"{context} staging")
+    # The comparisons are rank-local; the decision must not be.
+    if not strict and not all_ranks_tensor_true(torch.tensor(matches)):
+        return False
+    _commit_with_rollback(optimizer, saved, context)
+    return True
 
 
 def _rollback_point(optimizer, context: str):

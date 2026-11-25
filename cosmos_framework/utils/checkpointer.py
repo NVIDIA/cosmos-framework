@@ -11,6 +11,7 @@ import torch
 
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, log, misc, object_store
+from cosmos_framework.utils.quantized_optimizer_names import refuse_rank_local_optimizer
 
 if TYPE_CHECKING:
     from cosmos_framework.utils.config import CheckpointConfig, JobConfig
@@ -72,6 +73,7 @@ class Checkpointer:
             grad_scaler (torch.amp.GradScaler): The gradient scaler (for mixed precision training).
             iteration (int): Current iteration number.
         """
+        refuse_rank_local_optimizer(optimizer, "The single-file Checkpointer (rank 0 optimizer state only)")
         self.callbacks.on_save_checkpoint_start(model, iteration)
 
         checkpoint_file = f"epoch_{epoch}.pt" if epoch is not None else f"iter_{iteration:09}.pt"
@@ -178,6 +180,7 @@ class Checkpointer:
         Returns:
             iteration (int): the iteration number to start/resume from.
         """
+        refuse_rank_local_optimizer(optimizer, "The single-file Checkpointer (rank 0 optimizer state only)")
         self.callbacks.on_load_checkpoint_start(model)
 
         latest_checkpoint_file = self._read_latest_checkpoint_file()
@@ -325,6 +328,7 @@ class MultiRankCheckpointer(Checkpointer):
             grad_scaler (torch.amp.GradScaler): The gradient scaler (for mixed precision training).
             iteration (int): Current iteration number.
         """
+        refuse_rank_local_optimizer(optimizer, "MultiRankCheckpointer")
         # checkpoint_file = f"iter_{iteration:09}.pt"
         postfix, _, total_ema_num = model.get_ckpt_postfix()
         checkpoint_file = f"epoch_{epoch}{postfix}.pt" if epoch is not None else f"iter_{iteration:09}{postfix}.pt"
@@ -377,6 +381,7 @@ class MultiRankCheckpointer(Checkpointer):
         Returns:
             iteration (int): the iteration number to start/resume from.
         """
+        refuse_rank_local_optimizer(optimizer, "MultiRankCheckpointer")
         latest_checkpoint_file = self._read_latest_checkpoint_file()
         if latest_checkpoint_file is not None:
             # different from base checkpointer, this support multi-EMA

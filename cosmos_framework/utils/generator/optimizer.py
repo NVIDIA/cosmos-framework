@@ -3,9 +3,11 @@
 
 import collections
 import copy
+import json
 import math
+import os
 import re
-from typing import Any, Iterator, NamedTuple
+from typing import Any, Iterable, Iterator, NamedTuple
 
 import torch
 import torch.nn as nn
@@ -14,6 +16,7 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_optimi
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
+from cosmos_framework.utils import log
 from cosmos_framework.utils.functional.lr_scheduler import (
     ConstantScheduler,
     LambdaLinearScheduler,
@@ -21,7 +24,7 @@ from cosmos_framework.utils.functional.lr_scheduler import (
     WSDScheduler,
     WSFDScheduler,
 )
-from cosmos_framework.utils import log
+from cosmos_framework.utils.quantized_optimizer_names import QUANTIZED_OPTIMIZER_NAMES
 
 # Hybrid orthogonalizing optimizers (Muon / Dion2) that own their parameter
 # categorization and run their own collective communication. They must be built
@@ -43,6 +46,9 @@ _DEFAULT_WEIGHT_DECAY_BY_OPTIMIZER = {
     "fusedadam": 0.0,
     "muonwithauxadamw": 0.1,
     "dion2withauxadamw": 0.1,
+    # Shared eight-bit AdamW (bitsandbytes AdamW8bit) keeps torch AdamW's default decay.
+    "adamw_bnb_8bit": 0.01,
+    "paged_adamw_8bit": 0.01,
 }
 
 
@@ -395,6 +401,11 @@ def _build_optimizer_internal(
         A ``torch.optim.Optimizer`` configured with one param group per distinct
         ``ParamMetadata`` value found in ``params_with_metadata``.
     """
+    return _optimizer_cls(_param_groups_from_metadata(params_with_metadata), optimizer_type, **optimizer_kwargs)
+
+
+def _param_groups_from_metadata(params_with_metadata: list[tuple[nn.Parameter, ParamMetadata]]) -> list[dict[str, Any]]:
+    """One ``{"params", "lr", "weight_decay"}`` group per distinct ``ParamMetadata``, in sorted order."""
     params_by_metadata: dict[ParamMetadata, list[nn.Parameter]] = collections.defaultdict(list)
     for param, metadata in params_with_metadata:
         params_by_metadata[metadata].append(param)
@@ -412,8 +423,103 @@ def _build_optimizer_internal(
             "weight_decay": metadata.weight_decay,
         }
         param_groups.append(param_group)
+    return param_groups
 
-    return _optimizer_cls(param_groups, optimizer_type, **optimizer_kwargs)
+
+def rank_local_skip_matches(keys_to_skip_loading: list[str], optimizer_names: Iterable[str]) -> list[str]:
+    """``keys_to_skip_loading`` patterns that name a parameter the rank-local optimizer trains.
+
+    Matched as the DCP ``CustomLoadPlanner`` matches model keys: a substring of the model
+    state-dict FQN, which carries the ``net.`` prefix that the optimizer's ``model.net``-relative
+    names lack.
+    """
+    names = [f"net.{name}" for name in optimizer_names]
+    return [skip for skip in keys_to_skip_loading if any(skip in name for name in names)]
+
+
+# Shared eight-bit AdamW (``cosmos_framework.utils.quantized_optimizer``) behind the
+# shared FP32 update owner. Selected only by name (``QUANTIZED_OPTIMIZER_NAMES``); the
+# legacy optimizers are unchanged.
+# Constructor options the eight-bit backend can honor exactly. Anything else (e.g. amsgrad,
+# master_weights, foreach) is rejected rather than silently dropped.
+_QUANTIZED_OPTIMIZER_KWARGS = frozenset(
+    {"lr", "betas", "eps", "weight_decay", "fused", "bnb_min_8bit_size", "bnb_fp32_state_names"}
+)
+
+
+def _build_quantized_optimizer(
+    model: nn.Module,
+    params_with_metadata: list[tuple[nn.Parameter, ParamMetadata]],
+    optimizer_type: str,
+    optimizer_kwargs: dict[str, Any],
+    base_weight_decay: float,
+) -> torch.optim.Optimizer:
+    """One shared FP32-update-owner optimizer over the final (FSDP2) trainables.
+
+    Uses the identical (lr, weight_decay) grouping as the legacy path
+    (``_param_groups_from_metadata``); every group carries its resolved decay, and
+    ``base_weight_decay`` is the container's already-resolved default. FP32 FSDP shards
+    are their own masters (aliased, no copy); BF16 storage gets one tracked FP32 copy.
+    Gradients arrive after native reduction and the native global-norm clip callback.
+    Only a single one-dimensional full-world FSDP2 shard mesh (or one unsharded device)
+    is supported; HSDP/TP/EP layouts fail here, before any optimizer state exists.
+
+    A nonfinite gradient on any rank skips the step on every rank without changing masters,
+    moments or weights, and logs it. That matches the legacy generator optimizers, which
+    survive such a step (``GradClip``/``SkipNaNStep``); as there, the trainer still advances
+    the LR scheduler.
+
+    Resume also follows the legacy container: the checkpoint's structure must match, but its
+    group hyperparameters need not; the configured weight decay and epsilon are re-applied after
+    loading (``resume_hyperparameters="configured"``).
+    """
+    from types import SimpleNamespace
+
+    from cosmos_framework.utils.optimizer_master import MasterWeightOptimizer
+    from cosmos_framework.utils.quantized_optimizer_names import validate_quantized_options
+
+    unsupported = set(optimizer_kwargs) - _QUANTIZED_OPTIMIZER_KWARGS
+    if unsupported:
+        raise ValueError(f"{optimizer_type} does not support optimizer options {sorted(unsupported)}")
+    lr = optimizer_kwargs["lr"]
+    betas = tuple(optimizer_kwargs.get("betas", (0.9, 0.999)))
+    eps = optimizer_kwargs.get("eps", 1e-8)
+    bnb_min_8bit_size = optimizer_kwargs.get("bnb_min_8bit_size", 4096)
+    bnb_fp32_state_names = list(optimizer_kwargs.get("bnb_fp32_state_names", ()))
+    # The same checks OptimizerConfig runs, on the raw values, before any conversion or allocation.
+    validate_quantized_options(
+        lr=lr,
+        eps=eps,
+        weight_decay=base_weight_decay,
+        betas=betas,
+        bnb_min_8bit_size=bnb_min_8bit_size,
+        bnb_fp32_state_names=bnb_fp32_state_names,
+        owner="optimizer",
+    )
+    param_groups = _param_groups_from_metadata(params_with_metadata)
+    for group in param_groups:
+        # Each group's effective values, after lr_multipliers and the 1-D weight-decay rules.
+        for key in ("lr", "weight_decay"):
+            if not math.isfinite(group[key]) or group[key] < 0:
+                raise ValueError(
+                    f"{optimizer_type} parameter group {key}={group[key]} must be finite and non-negative "
+                    "(after lr_multipliers and weight_decay_multipliers_for_1d_params)"
+                )
+    config = SimpleNamespace(
+        name=optimizer_type.lower(),
+        impl="",
+        lr=float(lr),
+        betas=tuple(float(b) for b in betas),
+        eps=float(eps),
+        weight_decay=float(base_weight_decay),
+        bnb_min_8bit_size=int(bnb_min_8bit_size),
+        bnb_fp32_state_names=bnb_fp32_state_names,
+        warmup_steps=0,
+    )
+    optimizer = MasterWeightOptimizer(model.net, param_groups, config)
+    optimizer.nonfinite_policy = "skip"
+    optimizer.resume_hyperparameters = "configured"
+    return optimizer
 
 
 class OptimizersContainer(Stateful):
@@ -498,7 +604,11 @@ class OptimizersContainer(Stateful):
         # (aux) optimizers, which accept it as a named arg. Normalize to a tuple of str.
         orthogonalize_skip_patterns = tuple(optimizer_kwargs.pop("orthogonalize_skip_patterns", None) or ())
 
-        if not optimizer_kwargs.get("fused", False):
+        quantized = optimizer_type.lower() in QUANTIZED_OPTIMIZER_NAMES
+        if quantized and optimizer_kwargs.get("fused", False):
+            # The eight-bit backend has its own kernels; a fused request would be silently ignored.
+            raise ValueError(f"{optimizer_type} does not support fused=True; set optimizer fused=False")
+        if not quantized and not optimizer_kwargs.get("fused", False):
             raise ValueError("Optimizers with fused=False are not supported; pass fused=True in optimizer_kwargs.")
         if "lr" not in optimizer_kwargs:
             raise ValueError("`lr` is required in optimizer_kwargs (used as the base for per-group LR multipliers).")
@@ -526,7 +636,16 @@ class OptimizersContainer(Stateful):
             weight_decay_multipliers_for_1d_params=weight_decay_multipliers_for_1d_params,
         )
 
-        if optimizer_type.lower() in _AUX_ADAMW_OPTIMIZERS:
+        self.rank_local_checkpoint = quantized
+        # Opt-in, once per run: read here, not on every step.
+        self._state_report_pending = bool(os.environ.get("COSMOS_OPTIMIZER_STATE_REPORT"))
+        if self.rank_local_checkpoint:
+            self.optimizers.append(
+                _build_quantized_optimizer(
+                    model, params_with_metadata, optimizer_type, optimizer_kwargs, base_weight_decay
+                )
+            )
+        elif optimizer_type.lower() in _AUX_ADAMW_OPTIMIZERS:
             # Muon / Dion2 categorize parameters into an orthogonalized-matrix group
             # and an auxiliary AdamW group internally, and run their own collective
             # communication across the FULL device mesh. They must therefore be a
@@ -606,6 +725,13 @@ class OptimizersContainer(Stateful):
         # the Muon/Dion2 step paths, which is deliberately not supported.
         for optimizer in self.optimizers:
             optimizer.step()
+        if getattr(self, "_state_report_pending", False):
+            # Opt-in, once: initialized optimizer-owned bytes per rank for memory accounting.
+            self._state_report_pending = False
+            rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+            log.info(
+                f"optimizer_state_report rank={rank} {json.dumps(self.state_report(), default=str)}", rank0_only=False
+            )
 
     def zero_grad(self, set_to_none: bool = True) -> None:
         # Default matches ``torch.optim.Optimizer.zero_grad`` (set_to_none=True
@@ -614,7 +740,64 @@ class OptimizersContainer(Stateful):
         for optimizer in self.optimizers:
             optimizer.zero_grad(set_to_none=set_to_none)
 
+    def state_report(self) -> dict[str, Any]:
+        """Initialized optimizer-owned tensor bytes on this rank (moments, scales, masters)."""
+        if self.rank_local_checkpoint:
+            # Byte and element counters plus the backend's scalar identity fields; the per-group and
+            # per-parameter layouts (master identity, groups, topology) stay out of the log line.
+            report = self.optimizers[0].state_report()
+            reduced = {k: v for k, v in report.items() if k not in ("master_identity", "backend", "exceptions")}
+            reduced["exceptions"] = dict(report.get("exceptions", {}))
+            reduced["backend"] = {
+                k: list(v) if isinstance(v, list) else v
+                for k, v in report.get("backend", {}).items()
+                if k not in ("groups", "topology")
+            }
+            return reduced
+        moment = metadata = master = 0
+        seen: set[int] = set()
+        for optimizer in self.optimizers:
+            for state in optimizer.state.values():
+                for key, value in state.items():
+                    if not isinstance(value, torch.Tensor):
+                        continue
+                    # Dedup on the local shard: a DTensor wrapper has no storage of its own.
+                    local = value.to_local() if hasattr(value, "to_local") else value
+                    if local.data_ptr() in seen:
+                        continue
+                    seen.add(local.data_ptr())
+                    size = local.numel() * local.element_size()
+                    if key in ("exp_avg", "exp_avg_sq"):
+                        moment += size
+                    else:
+                        metadata += size
+            for group in getattr(optimizer, "param_groups_master", None) or []:
+                for value in group["params"]:
+                    if value is None:  # FusedAdam keeps None where no master is needed
+                        continue
+                    local = value.to_local() if hasattr(value, "to_local") else value
+                    master += local.numel() * local.element_size()
+        return {"moment_bytes": moment, "metadata_bytes": metadata, "master_bytes": master}
+
+    def checkpoint_load_template(self, metadata: Any) -> dict[str, Any] | None:
+        """Allocation-only DCP load target for this rank's rank-local payload, from the checkpoint's
+        DCP ``Metadata``; None when the checkpoint holds no such payload (e.g. a legacy optimizer)."""
+        from cosmos_framework.posttrain.checkpoint.master_optimizer import load_template, tensor_shapes
+
+        return load_template(self.optimizers[0], tensor_shapes(metadata))
+
     def state_dict(self) -> dict[str, Any]:
+        if self.rank_local_checkpoint:
+            # Opaque per-rank payload (masters, uint8 moments, block scales, counters).
+            # DCP writes each unique rank key once and never reshards it as a parameter.
+            from cosmos_framework.posttrain.checkpoint.master_optimizer import optimizer_payload
+            from cosmos_framework.posttrain.utils.dist import run_rank_converged
+
+            # Its state_dict() syncs scheduler-owned groups, and may refuse on one rank (masters that
+            # disagree with a model changed under its moments): converge before DCP's save collectives.
+            return run_rank_converged(
+                lambda: optimizer_payload(self.optimizers[0]), "quantized optimizer checkpoint snapshot"
+            )
         return get_optimizer_state_dict(
             model=self.model,
             optimizers=self.optimizers,
@@ -622,6 +805,9 @@ class OptimizersContainer(Stateful):
         )
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        if self.rank_local_checkpoint:
+            self._load_rank_local(state_dict)
+            return
         set_optimizer_state_dict(
             model=self.model,
             optimizers=self.optimizers,
@@ -652,6 +838,82 @@ class OptimizersContainer(Stateful):
                     )
                 if configured_eps_values:
                     param_group["eps"] = configured_eps_values.pop()
+
+    def _load_rank_local(self, state_dict: dict[str, Any], *, strict: bool = True) -> bool:
+        """Validate on every rank before mutation, commit, and roll back if any rank fails.
+
+        The model component is restored before the optimizer (DCP key order), so saved masters
+        must equal the restored local model shards exactly (``strict``); otherwise a difference
+        on any rank returns False on every rank without loading. Same-topology resume only.
+        """
+        from cosmos_framework.posttrain.checkpoint.master_optimizer import restore_into_live_model
+
+        return restore_into_live_model(self.optimizers[0], state_dict, "quantized optimizer restore", strict=strict)
+
+    def load_rank_local_checkpoint(
+        self, storage_reader: Any, *, path: str, strict_resume: bool, keys_to_skip_loading: list[str]
+    ) -> None:
+        """The DCP checkpointer's load of this rank's payload, after the model component.
+
+        Every rank takes the same branch before the load's collectives: the decisions come from
+        the config, the global DCP metadata, or a rank-converged comparison.
+
+        - A ``keys_to_skip_loading`` pattern naming a trained parameter: start fresh.
+        - No payload (e.g. another optimizer wrote it), or one written by another world size:
+          raise under ``strict_resume``, else start fresh.
+        - A payload of another structure (changed parameter grouping or eight-bit options), or saved
+          masters that differ from the loaded model (e.g. a lenient partial model load that kept
+          initial values): raise under ``strict_resume``, else start fresh.
+
+        Fresh means no moments and FP32 masters re-seeded from the loaded model; it is logged.
+        """
+        import torch.distributed.checkpoint as dcp
+
+        from cosmos_framework.checkpoint.safe_dcp import SafeLoadPlanner
+        from cosmos_framework.posttrain.checkpoint.master_optimizer import TopologyMismatchError
+
+        optimizer = self.optimizers[0]
+        fresh = None
+        skipped = rank_local_skip_matches(keys_to_skip_loading, optimizer.names)
+        if skipped:
+            fresh = f"keys_to_skip_loading={skipped}"
+        else:
+            try:
+                template = self.checkpoint_load_template(storage_reader.read_metadata())
+            except TopologyMismatchError as error:
+                if strict_resume:
+                    raise
+                fresh = f"strict_resume=False: {error}"
+            else:
+                if template is None:
+                    if strict_resume:
+                        raise ValueError(
+                            f"{path} has no rank-local quantized optimizer state (e.g. it was written by another "
+                            "optimizer). Set checkpoint.strict_resume=False to start this optimizer fresh from the "
+                            "loaded model."
+                        )
+                    fresh = "strict_resume=False: no rank-local optimizer state"
+                else:
+                    log.info("- Loading the rank-local optimizer...")
+                    # Each rank reads only its own key; the payload bytes are decoded with weights_only=True.
+                    dcp.load(
+                        template,
+                        storage_reader=storage_reader,
+                        planner=SafeLoadPlanner(allow_partial_load=False),
+                        no_dist=True,
+                    )
+                    if self._load_rank_local(template, strict=strict_resume):
+                        return
+                    fresh = (
+                        "strict_resume=False: the saved state does not match this optimizer's structure "
+                        "(e.g. changed parameter grouping or eight-bit options) or the loaded model "
+                        "(e.g. a partial model load)"
+                    )
+        log.warning(
+            f"- Not loading the rank-local optimizer ({fresh}): fresh moments, FP32 masters re-seeded from the "
+            "loaded model."
+        )
+        optimizer.reset_state()
 
 
 def build_optimizer(

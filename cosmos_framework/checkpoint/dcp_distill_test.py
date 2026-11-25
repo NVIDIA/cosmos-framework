@@ -286,3 +286,47 @@ def test_save_emits_exact_distillation_components(async_mode: AsyncMode) -> None
     assert any(key.startswith("net.") for key in model_state)
     assert any(key.startswith("net_fake_score.") for key in model_state)
     assert not any(key.startswith("net_teacher.") for key in model_state)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_distillation_checkpointer_refuses_rank_local_optimizers_before_training() -> None:
+    from cosmos_framework.model.generator.distillation.optimizer import PhaseOptimizer
+
+    checkpointer = object.__new__(DistributedCheckpointer)
+    checkpointer.callbacks = None
+    # Distillation hands over a PhaseOptimizer. Its entries may be the eight-bit container, a bare
+    # FP32-master owner, or a container holding one; the shared refusal looks inside all three.
+    for optimizer in (
+        SimpleNamespace(rank_local_checkpoint=True),
+        SimpleNamespace(cosmos_local_master_optimizer=True),
+        SimpleNamespace(optimizers=[SimpleNamespace(cosmos_local_master_optimizer=True)]),
+    ):
+        rank_local = PhaseOptimizer({"net": torch.optim.SGD([torch.nn.Parameter(torch.ones(1))]), "fake": optimizer})
+        with pytest.raises(ValueError, match="rank-local.*use a standard optimizer for distillation"):
+            checkpointer.load(None, optimizer=rank_local)
+        with pytest.raises(ValueError, match="rank-local.*use a standard optimizer for distillation"):
+            checkpointer.save(None, rank_local, None, None, iteration=1)
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="bitsandbytes eight-bit AdamW requires CUDA")
+def test_distillation_checkpointer_refuses_a_phase_optimizer_holding_an_eight_bit_container() -> None:
+    from cosmos_framework.model.generator.distillation.optimizer import PhaseOptimizer
+    from cosmos_framework.utils.generator.optimizer import build_optimizer
+
+    class _Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.net = torch.nn.Linear(64, 64).cuda()
+
+    container = build_optimizer(_Model(), "adamw_bnb_8bit", lr=1e-4)
+    legacy = build_optimizer(_Model(), "adamw", lr=1e-4, fused=True)
+    phases = PhaseOptimizer({"net": container, "fake_score": legacy})
+    checkpointer = object.__new__(DistributedCheckpointer)
+    checkpointer.callbacks = None
+    with pytest.raises(ValueError, match="rank-local.*use a standard optimizer for distillation"):
+        checkpointer.load(None, optimizer=phases)
+    with pytest.raises(ValueError, match="rank-local.*use a standard optimizer for distillation"):
+        checkpointer.save(None, phases, None, None, iteration=1)

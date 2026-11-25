@@ -249,6 +249,29 @@ def _snapshot_into(value, paged_devices):
     return deepcopy(value)
 
 
+# Group values a configured-hyperparameter restore does not require to match (see
+# ``structural_identity``); everything else in an identity decides the saved layout.
+GROUP_HYPERPARAMETERS = ("initial_lr", "betas", "eps", "weight_decay")
+
+
+def structural_identity(identity):
+    """An exact-resume identity without group hyperparameters (``GROUP_HYPERPARAMETERS``).
+
+    What remains (format, backend and version, names, shapes, layout, topology and group
+    membership) decides what the saved state means. Applied recursively to the master owner's
+    identity that an eight-bit backend embeds as its ``topology``.
+    """
+    if not isinstance(identity, dict):
+        return identity
+    result = {key: structural_identity(value) for key, value in identity.items()}
+    if isinstance(result.get("groups"), list):
+        result["groups"] = [
+            {k: v for k, v in group.items() if k not in GROUP_HYPERPARAMETERS} if isinstance(group, dict) else group
+            for group in result["groups"]
+        ]
+    return result
+
+
 def canonical_parameter_names(net):
     """``id(parameter) -> name`` for live trainables, in model state-dict naming.
 
@@ -393,6 +416,10 @@ class _QuantizedOptimizerMethods:
         # Log the state report on the first step, and again whenever ``init_state`` allocates
         # state for another parameter: a flag, not a per-step scan over every parameter's state.
         self._report_state = True
+        # ``load_state_dict`` policy for group hyperparameters, set by the local-master owner before
+        # each restore: ``"exact"`` requires them to match; ``"configured"`` (generator) checks the
+        # structural identity only and restores the saved groups for the owner to re-apply its own.
+        self._resume_hyperparameters = "exact"
         # The local-master owner rejects nonfinite gradients across all ranks before it
         # stages them; a second full scan here would only repeat that host decision.
         self._owner_checks_finite = _local_owner is not None
@@ -553,7 +580,13 @@ class _QuantizedOptimizerMethods:
         dtypes, shapes and quantization maps. ``load_state_dict`` runs it first; an owner may also
         run it while staging, to decide before any commit.
         """
-        if saved.get("cosmos_quantized_optimizer") != self.identity:
+        exact = self._resume_hyperparameters == "exact"
+        identity = saved.get("cosmos_quantized_optimizer")
+        if (
+            (identity != self.identity)
+            if exact
+            else (structural_identity(identity) != structural_identity(self.identity))
+        ):
             raise ValueError("quantized optimizer exact-resume identity mismatch; use an explicit weights-only restart")
         live_groups = self.param_groups
         if len(saved["param_groups"]) != len(live_groups):
@@ -564,7 +597,7 @@ class _QuantizedOptimizerMethods:
         for old, new in zip(saved["param_groups"], live_groups):
             if old["param_names"] != new["param_names"] or len(old["params"]) != len(new["params"]):
                 raise ValueError("quantized optimizer parameter order mismatch")
-            for key in ("betas", "eps", "weight_decay"):
+            for key in ("betas", "eps", "weight_decay") if exact else ():
                 if old[key] != new[key]:
                     raise ValueError(f"quantized optimizer {key} mismatch")
         tables = None  # the constant quantization maps on the host, built once on first use

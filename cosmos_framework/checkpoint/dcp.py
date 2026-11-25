@@ -80,11 +80,11 @@ from cosmos_framework.checkpoint.background_store import (
     reserve_background_store_socket,
 )
 from cosmos_framework.checkpoint.base import AbstractCheckpointer, CheckpointLoadSource
-from cosmos_framework.checkpoint.safe_dcp import SafeFileSystemReader, SafeLoadPlanner
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
-from cosmos_framework.utils.config import CheckpointConfig, JobConfig
+from cosmos_framework.checkpoint.safe_dcp import SafeFileSystemReader, SafeLoadPlanner
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, log, misc
+from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
 from cosmos_framework.utils.safe_unpickle import safe_loads
@@ -897,6 +897,9 @@ class DistributedCheckpointer(AbstractCheckpointer):
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
         grad_scaler: torch.amp.GradScaler | None = None,
     ) -> int:
+        # The trainer loads (or finds nothing to load) before its first save, so refuse here
+        # rather than after `save_iter` iterations of training.
+        self._require_sync_for_rank_local_optimizer(optimizer)
         if self.callbacks is not None:
             self.callbacks.on_load_checkpoint_start(model)
 
@@ -974,6 +977,17 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         raise ValueError(
                             f"Unexpected keys (found in checkpoint but not in model): {results.unexpected_keys}"
                         )
+
+                elif key == "optim" and getattr(optimizer, "rank_local_checkpoint", False):
+                    # Rank-owned opaque payloads (eight-bit moments, scales, masters): the container
+                    # owns the whole load, including whether strict_resume / keys_to_skip_loading
+                    # start it fresh instead (OptimizersContainer.load_rank_local_checkpoint).
+                    optimizer.load_rank_local_checkpoint(
+                        storage_reader,
+                        path=cur_key_ckpt_full_path,
+                        strict_resume=strict_resume,
+                        keys_to_skip_loading=keys_to_skip_loading,
+                    )
 
                 elif key == "optim":
                     log.info("- Loading the optimizer...")
@@ -1287,6 +1301,15 @@ class DistributedCheckpointer(AbstractCheckpointer):
 
         log.info(f"Saved checkpoint to {os.path.join(self.save_dirname, checkpoint_file)}")
 
+    def _require_sync_for_rank_local_optimizer(self, optimizer: Any) -> None:
+        """Rank-local opaque optimizer payloads are not staged through the pinned-memory async path."""
+        async_mode = getattr(self, "async_mode", AsyncMode.DISABLED)  # subclasses/tests may skip __init__
+        if async_mode == AsyncMode.ASYNC_WITH_PINNED_MEM and getattr(optimizer, "rank_local_checkpoint", False):
+            raise ValueError(
+                "rank-local quantized optimizer checkpoints require synchronous DCP saves; "
+                "set checkpoint.dcp_async_mode_enabled=false"
+            )
+
     def save(
         self,
         model: ImaginaireModel,
@@ -1305,6 +1328,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
             grad_scaler (torch.amp.GradScaler): The gradient scaler (for mixed precision training).
             iteration (int): Current iteration number.
         """
+        self._require_sync_for_rank_local_optimizer(optimizer)
         if self.async_mode == AsyncMode.ASYNC_WITH_PINNED_MEM:
             self._wait_for_previous_async_checkpoint()
 

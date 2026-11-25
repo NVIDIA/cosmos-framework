@@ -420,3 +420,130 @@ def test_recovery_resumes_once_gradients_return_to_normal():
     for _ in range(80):  # genuinely healthy steps
         _step(model, optimizer, scheduler, callback, 0.01)
     assert callback._lr_scale > suppressed, "rate never recovered despite a healthy run"
+
+
+def test_rollback_restores_fp32_masters_so_the_next_step_keeps_it():
+    """The FP32-master owner writes masters into the model each step; they must rewind too."""
+    from cosmos_framework.posttrain.config.build import build_optimizer
+    from cosmos_framework.posttrain.config.rl import OptimizerConfig
+
+    torch.manual_seed(0)
+    model = nn.Linear(8, 8).to(torch.bfloat16)
+    optimizer = build_optimizer(model, OptimizerConfig(lr=0.01, weight_decay=0.0, update_policy="fp32_master"))
+    scheduler = LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
+    callback = LossSpikeRollback(enabled=True, window=10, min_observations=5, rollback_depth=2, grad_norm_factor=10.0)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+    expected_masters = [master.clone() for master in callback._ring[0]["masters"][0]]
+    _step(model, optimizer, scheduler, callback, 10.0)
+    assert callback.rollbacks == 1
+    for master, expected in zip(optimizer.masters, expected_masters):
+        torch.testing.assert_close(master, expected, rtol=0, atol=0)
+    # The model and its masters agree, so the next update continues from the rewound point.
+    for parameter, master in zip(optimizer.live, optimizer.masters):
+        assert torch.equal(parameter.detach(), master.to(parameter.dtype))
+    rewound = {name: p.detach().clone() for name, p in model.named_parameters()}
+    _step(model, optimizer, scheduler, callback, 0.01)
+    for name, parameter in model.named_parameters():
+        assert (parameter.detach().float() - rewound[name].float()).abs().max() < 0.05
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="bitsandbytes eight-bit AdamW requires CUDA")
+def test_rollback_rewinds_non_tensor_optimizer_state_with_the_moments():
+    """bitsandbytes keeps ``step`` as a Python int; old moments with a newer step skew bias correction."""
+    from cosmos_framework.posttrain.config.build import build_optimizer
+    from cosmos_framework.posttrain.config.rl import OptimizerConfig
+
+    torch.manual_seed(0)
+    model = nn.Linear(64, 128).cuda()
+    optimizer = build_optimizer(model, OptimizerConfig(name="adamw_bnb_8bit", lr=0.01, bnb_min_8bit_size=1))
+    scheduler = LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
+    callback = LossSpikeRollback(enabled=True, window=10, min_observations=5, rollback_depth=2, grad_norm_factor=10.0)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+    saved = callback._ring[0]["moments"][(0, 0)]
+    assert type(saved["step"]) is int
+    # The shared, constant quantization maps are not copied per parameter (nor restored).
+    assert not {"qmap1", "qmap2"} & set(saved) and "absmax1" in saved
+    qmap = optimizer.state[model.weight]["qmap1"]
+    _step(model, optimizer, scheduler, callback, 10.0)
+    assert callback.rollbacks == 1
+    state = optimizer.state[model.weight]
+    assert state["step"] == saved["step"]
+    assert torch.equal(state["state1"], saved["state1"])
+    assert state["qmap1"] is qmap and state["qmap1"] is optimizer.state[model.bias]["qmap1"]
+
+
+def test_rollback_does_not_copy_fp32_masters_that_alias_parameters():
+    from cosmos_framework.posttrain.config.build import build_optimizer
+    from cosmos_framework.posttrain.config.rl import OptimizerConfig
+
+    torch.manual_seed(0)
+    model = nn.Linear(8, 8)
+    optimizer = build_optimizer(model, OptimizerConfig(lr=0.01, weight_decay=0.0, update_policy="fp32_master"))
+    scheduler = LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
+    callback = LossSpikeRollback(enabled=True, window=10, min_observations=5, rollback_depth=2, grad_norm_factor=10.0)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+    assert callback._ring[0]["masters"][0] == [None, None]
+    expected = {name: p.detach().clone() for name, p in callback._ring[0]["params"].items()}
+    _step(model, optimizer, scheduler, callback, 10.0)
+    assert callback.rollbacks == 1
+    for name, parameter in model.named_parameters():
+        assert torch.equal(parameter, expected[name])
+    assert all(m.data_ptr() == p.data_ptr() for m, p in zip(optimizer.masters, optimizer.live))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="bitsandbytes eight-bit AdamW requires CUDA")
+def test_paged_moment_snapshots_stage_in_pinned_host_memory_and_restore_into_managed_memory():
+    from cosmos_framework.posttrain.config.build import build_optimizer
+    from cosmos_framework.posttrain.config.rl import OptimizerConfig
+
+    torch.manual_seed(0)
+    model = nn.Linear(1024, 1024).cuda()  # large enough for bitsandbytes to page its moments
+    optimizer = build_optimizer(model, OptimizerConfig(name="paged_adamw_8bit", lr=0.01, bnb_min_8bit_size=1))
+    scheduler = LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
+    callback = LossSpikeRollback(enabled=True, window=10, min_observations=5, rollback_depth=2, grad_norm_factor=10.0)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+    live = optimizer.state[model.weight]["state1"]
+    assert live.is_paged and live.device.type == "cpu"
+    saved = callback._ring[0]["moments"][(0, 0)]
+    # Pinned host memory, filled by a stream-ordered device-side copy from the CUDA view: no VRAM
+    # copy of the paged bytes (before the fix every capture cloned them on the device).
+    for key in ("state1", "state2"):
+        assert saved[key].device.type == "cpu" and saved[key].is_pinned()
+    assert saved["absmax1"].is_cuda  # small non-paged state is cloned where it lives
+    expected = saved["state1"].clone()
+    _step(model, optimizer, scheduler, callback, 10.0)
+    assert callback.rollbacks == 1
+    # The restore synchronized the device: the managed pages are already readable from the host.
+    assert optimizer.state[model.weight]["state1"] is live  # restored in place, into managed memory
+    assert torch.equal(live, expected)
+
+
+@pytest.mark.parametrize("damage", ["missing_optimizer", "master_count", "master_shape"])
+def test_mismatched_master_snapshot_is_refused_before_anything_is_restored(damage):
+    from cosmos_framework.posttrain.config.build import build_optimizer
+    from cosmos_framework.posttrain.config.rl import OptimizerConfig
+
+    torch.manual_seed(0)
+    model = nn.Linear(8, 8).to(torch.bfloat16)
+    optimizer = build_optimizer(model, OptimizerConfig(lr=0.01, weight_decay=0.0, update_policy="fp32_master"))
+    callback = LossSpikeRollback(enabled=True, window=10, min_observations=5, rollback_depth=2)
+    callback._capture(model, optimizer)
+    masters = callback._ring[0]["masters"]
+    if damage == "missing_optimizer":
+        masters[1] = masters[0]
+    elif damage == "master_count":
+        masters[0] = masters[0][:1]
+    else:
+        masters[0] = [masters[0][0][:1], *masters[0][1:]]
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.add_(1)
+    live = [p.detach().clone() for p in model.parameters()]
+    # Before the fix the model was rewound first and the masters loop then raised (or indexed past
+    # the optimizer list), leaving a half-applied rollback.
+    assert callback._restore(model, optimizer) is False
+    assert all(torch.equal(a, b) for a, b in zip(live, model.parameters()))

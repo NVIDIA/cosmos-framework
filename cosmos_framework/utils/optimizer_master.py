@@ -26,7 +26,16 @@ from cosmos_framework.utils.quantized_optimizer import (
     build_quantized_optimizer,
     named_parameter_groups,
     state_log_summary,
+    structural_identity,
 )
+
+
+class ResumeIdentityMismatchError(ValueError):
+    """A payload saved by an optimizer of another structure (names, shapes, grouping, backend options).
+
+    Decided from the payload and the configuration alone; lenient callers (``strict_resume=False``)
+    may start the optimizer fresh instead of failing.
+    """
 
 
 def local_tensor(parameter):
@@ -81,6 +90,13 @@ class MasterWeightOptimizer(torch.optim.Optimizer):
     # reject such windows, so reaching here is a bug) or ``"skip"`` (generator: legacy optimizers
     # survive a NaN step, so this owner skips it on every rank without touching state).
     nonfinite_policy = "raise"
+    # What a restore does with group hyperparameters (initial_lr, betas, eps, weight_decay).
+    # ``"exact"`` (posttrain: same-identity exact resume) requires them to equal the configured
+    # ones. ``"configured"`` (generator) matches legacy ``OptimizersContainer.load_state_dict``:
+    # only the structure (names, shapes, layout, topology, group membership) must match; the
+    # saved groups are loaded (lr and betas, as legacy) and then the configured weight_decay and
+    # eps are re-applied.
+    resume_hyperparameters = "exact"
 
     def __init__(self, net, params, config):
         self.config = deepcopy(config)
@@ -413,11 +429,18 @@ class MasterWeightOptimizer(torch.optim.Optimizer):
         """Validate a host-resident payload against this optimizer; allocates nothing on the device.
 
         Returns the validated payload for ``commit_state_dict``. Staging never builds a second
-        set of device masters or moments next to the live ones. The eight-bit backend checks its
-        own moment schema in ``commit_state_dict``, before it replaces anything.
+        set of device masters or moments next to the live ones. The eight-bit backend's own
+        payload check (moment schema included) runs here too, and again in ``commit_state_dict``.
         """
-        if set(saved) - {"versions"} != {"identity", "masters", "backend"} or saved["identity"] != self.identity:
+        exact = self.resume_hyperparameters == "exact"
+        # What must match: everything (exact), or the structure without group hyperparameters.
+        compared = (lambda identity: identity) if exact else structural_identity
+        if set(saved) - {"versions"} != {"identity", "masters", "backend"}:
             raise ValueError("master optimizer identity/topology mismatch; exact resume requires the same layout")
+        if compared(saved["identity"]) != compared(self.identity):
+            raise ResumeIdentityMismatchError(
+                "master optimizer identity/topology mismatch; exact resume requires the same layout"
+            )
         values = saved["masters"]
         if len(values) != len(self.masters):
             raise ValueError("missing master weights")
@@ -429,13 +452,22 @@ class MasterWeightOptimizer(torch.optim.Optimizer):
                 or not torch.isfinite(value).all()
             ):
                 raise ValueError("invalid master weight shape/dtype/value")
+        if self.config.name in NAMES:
+            # The eight-bit backend's whole payload check (identity, mapping, moment schema, maps),
+            # repeated by its load_state_dict. Running it while staging lets a lenient caller start
+            # fresh before any commit (e.g. after a changed bnb_min_8bit_size).
+            self.backend._resume_hyperparameters = self.resume_hyperparameters
+            try:
+                self.backend.validate_state_dict(saved["backend"])
+            except ValueError as error:
+                raise ResumeIdentityMismatchError(str(error)) from error
         saved_groups = saved["backend"].get("param_groups", [])
         if len(saved_groups) != len(self.param_groups):
-            raise ValueError("master optimizer group count mismatch")
+            raise ResumeIdentityMismatchError("master optimizer group count mismatch")
         for old, live in zip(saved_groups, self.param_groups):
-            for key in ("param_names", "name", "betas", "eps", "weight_decay"):
+            for key in ("param_names", "name", *(("betas", "eps", "weight_decay") if exact else ())):
                 if old.get(key) != live.get(key):
-                    raise ValueError(f"master optimizer group {key} mismatch")
+                    raise ResumeIdentityMismatchError(f"master optimizer group {key} mismatch")
             lr = _real_scalar(old.get("lr"))
             if lr is None or not math.isfinite(lr) or lr < 0:
                 raise ValueError("invalid master optimizer learning rate")
@@ -465,6 +497,8 @@ class MasterWeightOptimizer(torch.optim.Optimizer):
         """
         if self._realias_fp32_masters():
             self.backend = self._backend(self.masters)  # the backend must own the new master objects
+        if self.config.name in NAMES:
+            self.backend._resume_hyperparameters = self.resume_hyperparameters
         self.backend.load_state_dict(saved["backend"])
         with torch.no_grad():
             # FP32 masters alias the model shard; callers apply this only after every rank has
@@ -472,8 +506,13 @@ class MasterWeightOptimizer(torch.optim.Optimizer):
             for master, value in zip(self.masters, saved["masters"]):
                 master.copy_(value)
         self._verify_masters = True
+        configured = [{k: live[k] for k in ("weight_decay", "eps")} for live in self.param_groups]
         for live, restored in zip(self.param_groups, self.backend.param_groups):
             live.update({k: v for k, v in restored.items() if k != "params"})
+        if self.resume_hyperparameters == "configured":
+            for live, values in zip(self.param_groups, configured):
+                live.update(values)
+            self.sync_groups()
         self._refresh_state()
 
     def _realias_fp32_masters(self) -> bool:

@@ -59,3 +59,31 @@ def is_local_master_optimizer(optimizer: object) -> bool:
 def supports_host_offload(optimizer: object) -> bool:
     """Whether generic trainer host offload may move ``optimizer`` state (the opt-in optimizers refuse it)."""
     return not (is_quantized_optimizer(optimizer) or is_local_master_optimizer(optimizer))
+
+
+def refuse_rank_local_optimizer(
+    optimizer: object,
+    checkpointer: str,
+    remedy: str = (
+        "use cosmos_framework.checkpoint.dcp.DistributedCheckpointer with checkpoint.dcp_async_mode_enabled=false"
+    ),
+) -> None:
+    """Refuse an optimizer whose state is rank-local, in a checkpointer that cannot write it.
+
+    The eight-bit generator container and the FP32-master owner keep per-rank masters and
+    moments. Checkpointers that save only rank 0's state, or reshape optimizer state through
+    torch's generic DCP conversion, would write a checkpoint that cannot resume, so they call
+    this from both ``save`` and ``load``. The trainer always loads (or finds nothing to load)
+    before its first save, so the refusal happens before any training. ``optimizer`` may be a
+    keyed collection of optimizers (anything with ``items()``: a dict, or the distillation
+    ``PhaseOptimizer``), and each entry may be a container holding raw ``optimizers``.
+    """
+    items = getattr(optimizer, "items", None)
+    entries = [value for _, value in items()] if callable(items) else [optimizer]
+    for entry in entries:
+        inner = getattr(entry, "optimizers", None)
+        for candidate in (entry, *(inner if isinstance(inner, (list, tuple)) else ())):
+            if getattr(candidate, "rank_local_checkpoint", False) or is_local_master_optimizer(candidate):
+                raise ValueError(
+                    f"{checkpointer} cannot checkpoint rank-local (eight-bit / FP32-master) optimizer state; {remedy}"
+                )
