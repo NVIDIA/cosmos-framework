@@ -28,6 +28,7 @@ from cosmos_framework.posttrain.model.sft_source import register_native_sft_sour
 
 if TYPE_CHECKING:
     from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
+    from cosmos_framework.utils.generator.adapter_config import AdapterSetup
 
 _SUPPORTED_MODEL_TYPES: frozenset[str] = frozenset({"qwen3_vl", "qwen3_vl_moe"})
 _NATIVE_BACKBONE_IDENTITIES: frozenset[tuple[str, str]] = frozenset(
@@ -308,6 +309,9 @@ class Qwen3VLBuildHooks:
     parallelize: Callable[[nn.Module, Any], None] | None = None
     materialize: Callable[[nn.Module], None] | None = None
     load_weights: Callable[[nn.Module, str, str | None, Any], None] | None = None
+    # Optional transformation of the loaded model before distributed parameter registration (SFT adapters).
+    # When set, the full model is loaded on every rank and parallelized after this hook.
+    after_load: Callable[[nn.Module], None] | None = None
 
 
 def validate_qwen3_vl_parallelism(parallel_dims: Any | None) -> None:
@@ -653,14 +657,20 @@ def build_qwen3_vl_policy(
 
     if hooks.prepare_model is not None:
         hooks.prepare_model(net)
-    if hooks.parallelize is not None:
+    shard_after_load = hooks.after_load is not None
+    if hooks.parallelize is not None and not shard_after_load:
         hooks.parallelize(net, parallel_dims)
     (hooks.materialize or _default_materialize)(net)
     _tie_embeddings(net, native_config)
+    load_dims = None if shard_after_load else parallel_dims
     if checkpoint_path:
-        (hooks.load_weights or _default_load_weights)(net, checkpoint_path, credential_path, parallel_dims)
+        (hooks.load_weights or _default_load_weights)(net, checkpoint_path, credential_path, load_dims)
     elif hooks.load_weights is not None:
-        hooks.load_weights(net, "", credential_path, parallel_dims)
+        hooks.load_weights(net, "", credential_path, load_dims)
+    if hooks.after_load is not None:
+        hooks.after_load(net)
+        if hooks.parallelize is not None:
+            hooks.parallelize(net, parallel_dims)
     if model_type == "qwen3_vl_moe":
         from cosmos_framework.posttrain.model.qwen3_vl_moe import Qwen3VLMoePolicy
 
@@ -672,8 +682,12 @@ def build_qwen3_vl_native_policy(
     model_id: str,
     cfg: "Qwen3VLModelConfig",
     pdims: Any = None,
+    *,
+    adapters: AdapterSetup | None = None,
 ) -> Qwen3VLPolicy:
     """Build from the generic native seam's single policy/tokenizer identity.
+
+    ``adapters`` (SFT adapters) is forwarded to :func:`build_qwen3_vl_model`.
 
     ``checkpoint_path`` may still name a local or object-store mirror of the same weights. The
     structural model identity, processor, rollout engine, and native config all use ``model_id``.
@@ -684,7 +698,9 @@ def build_qwen3_vl_native_policy(
             f"{model_id!r} and {cfg.name_or_path!r}"
         )
     cfg.name_or_path = model_id
-    return build_qwen3_vl_model(cfg, pdims)
+    if adapters is None:  # Keep the original call so wrapped or patched builders keep their signature.
+        return build_qwen3_vl_model(cfg, pdims)
+    return build_qwen3_vl_model(cfg, pdims, adapters=adapters)
 
 
 @register_native_sft_source(f"{__name__}.{build_qwen3_vl_native_policy.__name__}")
@@ -720,8 +736,36 @@ def build_qwen3_vl_native_value_model(
     return DenseValueModel(build_qwen3_vl_native_policy(model_id, cfg, pdims), pdims=pdims)
 
 
-def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3VLPolicy:
-    """Build a native dense/MoE Qwen3-VL policy with model-owned AC and FSDP setup."""
+def _shard_with_adapters(net: nn.Module, slots: list[Any], parallel_dims: Any) -> None:
+    """FSDP2/HSDP for a dense native Qwen3-VL with SFT adapters: the blocks ``apply_ac`` returned, then the root.
+
+    Same units as ``parallelize_vlm.apply_fsdp`` for dense Qwen3-VL, with the adapter mixed-precision policy
+    (no parameter cast, so float32 adapters sit next to the frozen base; float32 gradient reduction).
+    """
+    from torch.distributed.fsdp import fully_shard
+
+    from cosmos_framework.utils.generator.adapters import adapter_mixed_precision_policy
+    from cosmos_framework.utils.generator.parallelism import fsdp_mesh
+
+    if not parallel_dims.dp_enabled:
+        return
+    kwargs = {"mesh": fsdp_mesh(parallel_dims), "mp_policy": adapter_mixed_precision_policy()}
+    for _, _, block in reversed(slots):
+        fully_shard(block, **kwargs)
+    fully_shard(net, **kwargs)
+
+
+def build_qwen3_vl_model(
+    cfg: "Qwen3VLModelConfig",
+    pdims: Any = None,
+    *,
+    adapters: AdapterSetup | None = None,
+) -> Qwen3VLPolicy:
+    """Build a native dense/MoE Qwen3-VL policy with model-owned AC and FSDP setup.
+
+    ``adapters`` (an ``AdapterSetup``) installs SFT adapters into the loaded base before activation
+    checkpointing and FSDP.
+    """
     if not cfg.name_or_path:
         raise ValueError("Qwen3VLModelConfig.name_or_path must be non-empty")
     validate_qwen3_vl_parallelism(pdims)
@@ -748,6 +792,10 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
             "Qwen3VLModelConfig.dtype must be 'bfloat16' for qwen3_vl_moe; the native grouped-mm "
             f"expert kernel does not support {cfg.dtype!r}"
         )
+    if adapters is not None:
+        from cosmos_framework.utils.generator.adapter_training import validate_adapter_build
+
+        validate_adapter_build(model_config, dtype=cfg.dtype, reduce_dtype=cfg.fsdp_reduce_dtype)
     if bool(getattr(model_config, "tie_word_embeddings", False)):
         raise ValueError(
             "native Qwen3-VL OPD requires tie_word_embeddings=False: publishing one tied policy tensor "
@@ -772,6 +820,10 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
         # Every policy rank enters the vision FSDP units once per forward. The temporary override
         # uses a graph-connected empty image for text-only shards and real media otherwise.
         override_qwen3_vl_forward(backbone)
+        if adapters is not None:
+            from cosmos_framework.utils.generator.adapter_training import check_full_base_fits, full_base_bytes
+
+            check_full_base_fits(full_base_bytes(net))
         if resolved_model_type == "qwen3_vl_moe":
             overridden = override_qwen3_vl_moe_for_padded_batches(net)
             if overridden < 1:
@@ -790,8 +842,15 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
 
         shim = NativeVLMShim()
         slots = apply_ac(shim, activation_checkpointing)
-        if parallel_dims is not None:
+        if parallel_dims is not None and adapters is not None:
+            _shard_with_adapters(net, slots, parallel_dims)
+        elif parallel_dims is not None:
             apply_fsdp(shim, slots, parallel_dims, parallelism_config, cfg.dtype)
+
+    def _install_sft_adapters(net: nn.Module) -> None:
+        from cosmos_framework.utils.generator.adapter_training import prepare_adapter_model
+
+        prepare_adapter_model(net, adapters, base_dtype=cfg.dtype, architecture=resolved_model_type)
 
     return build_qwen3_vl_policy(
         model_type=resolved_model_type,
@@ -801,7 +860,11 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
         parallel_dims=pdims,
         dtype=getattr(torch, cfg.dtype),
         attn_implementation=cfg.attn_impl,
-        hooks=Qwen3VLBuildHooks(prepare_model=prepare_native, parallelize=parallelize_native),
+        hooks=Qwen3VLBuildHooks(
+            prepare_model=prepare_native,
+            parallelize=parallelize_native,
+            after_load=_install_sft_adapters if adapters is not None else None,
+        ),
         initialize_on_meta=True,
     )
 

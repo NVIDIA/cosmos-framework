@@ -24,6 +24,7 @@ per-model RADIO buffer skips) parity with cosmos3 ``HFModel``, plus HF safetenso
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
     # is imported by the native adapter too, and hoisting it here would put a model module on
     # the import path of every consumer of this one.
     from cosmos_framework.posttrain.model.protocol import VLMPolicyOutput
+    from cosmos_framework.utils.generator.adapter_config import AdapterSetup
 
 # Class-name suffixes used by transformers for the repeated decoder block. Only consulted
 # as a FALLBACK when ``_no_split_modules`` is absent/unresolvable (see _resolve_block_types).
@@ -419,7 +421,7 @@ class HFModel(nn.Module):
             recurse=True,
         )
 
-    def setup(self, pdims: ParallelDims | None) -> None:
+    def setup(self, pdims: ParallelDims | None, *, adapters: AdapterSetup | None = None) -> None:
         """Run the load-bearing lifecycle: parallelize -> materialize -> tie -> load [-> ckpt].
 
         The ordering is required (mirrors cosmos3 ``_init_vlm``): FSDP2 wrap first so
@@ -427,13 +429,40 @@ class HFModel(nn.Module):
         (the tie must exist before the load so the shared pointer is filled once), then
         stripe the pretrained safetensors into each rank's shard. Single device (pdims
         None) short-circuits parallelize/striping inside the primitives and still works.
+
+        With ``adapters`` (an ``AdapterSetup``) the order is materialize -> tie -> load ->
+        install adapters -> [ckpt ->] parallelize: PiSSA and DoRA initialize from the loaded base
+        weights, and every adapter parameter must exist before FSDP registers parameters. Each
+        rank holds the full base until the wrap shards it.
         """
+        if adapters is not None:
+            self._setup_with_adapters(pdims, adapters)
+            return
         parallelize(self.net, self.shard_plan, pdims)
         self._materialize_meta()
         self.tie_embeddings()
         load_weights(self.net, self.ckpt_path, self.load_plan, pdims)
         if self.grad_ckpt:
             self.apply_gradient_checkpointing()
+
+    def _setup_with_adapters(self, pdims: ParallelDims | None, adapters: AdapterSetup) -> None:
+        from cosmos_framework.utils.generator.adapter_training import (
+            check_full_base_fits,
+            full_base_bytes,
+            prepare_adapter_model,
+        )
+
+        base_dtype = str(self.model.dtype).removeprefix("torch.")  # The storage (master) dtype.
+        check_full_base_fits(full_base_bytes(self.net))
+        self._materialize_meta()
+        self.tie_embeddings()
+        load_weights(self.net, self.ckpt_path, self.load_plan, None)
+        prepare_adapter_model(self.net, adapters, base_dtype=base_dtype, architecture=self.hf_config.model_type)
+        if self.grad_ckpt:
+            self.apply_gradient_checkpointing()
+        # The frozen base keeps its storage dtype and the adapters stay float32 in the forward:
+        # the wrap casts no parameter (validate_adapter_build requires a float32 reduce dtype).
+        parallelize(self.net, dataclasses.replace(self.shard_plan, param_dtype=None), pdims)
 
     # Keys added by the VLM collate_fn that are NOT valid HF model forward arguments; they
     # must be stripped before calling self.model(...). A blocklist (not a whitelist) is used
@@ -562,7 +591,11 @@ class HFModel(nn.Module):
 
 
 def build_hf_model(
-    hf_cfg: "HFModelConfig", pdims: ParallelDims | None = None, precision: "Precision | None" = None
+    hf_cfg: "HFModelConfig",
+    pdims: ParallelDims | None = None,
+    precision: "Precision | None" = None,
+    *,
+    adapters: AdapterSetup | None = None,
 ) -> HFModel:
     """Build the HuggingFace model body and run its model-owned FSDP lifecycle.
 
@@ -581,6 +614,8 @@ def build_hf_model(
             reduction and the config field did nothing. The default is `"float32"`, so nothing
             shipped moves; a config that set the field was silently ignored there and is obeyed
             here. `test_model_hf_precision.py` pins both halves.
+
+        adapters: an optional ``AdapterSetup`` (SFT adapters); requires storage == compute dtype.
 
     Returns:
         A set-up `HFModel`.
@@ -602,5 +637,13 @@ def build_hf_model(
         reduce_dtype=getattr(torch, precision.reduce),
         mixed_precision_mode=precision.mode,
     )
-    model.setup(pdims)
+    if adapters is not None:
+        from cosmos_framework.utils.generator.adapter_training import validate_adapter_build
+
+        validate_adapter_build(
+            model.hf_config, dtype=precision.master, reduce_dtype=precision.reduce, compute_dtype=precision.param
+        )
+        model.setup(pdims, adapters=adapters)
+    else:
+        model.setup(pdims)
     return model

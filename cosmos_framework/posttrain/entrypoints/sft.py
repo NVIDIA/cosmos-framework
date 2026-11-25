@@ -107,6 +107,10 @@ def validate_config_structure(config: Any) -> SFTConfig:
     # ``SFTConfig.__post_init__`` judges ``mask_think_opener=True`` by the typed ``serve_contract`` field for every source
     # of the value (the recipe variant, a YAML, a ``--`` override).
     rl.__post_init__()
+    if rl.adapters is not None:
+        from cosmos_framework.posttrain.model.adapters import validate_sft_adapters
+
+        validate_sft_adapters(config, rl, sft_policy_source(config))
     if rl.lr_schedule.kind == "cosine" and (rl.lr_schedule.cycle_steps or rl.max_steps) <= rl.optimizer.warmup_steps:
         # Legal (a short canary of a long warmup) but worth one line: the run never leaves the warmup ramp.
         info0(
@@ -135,7 +139,8 @@ def validate_config(config: Any) -> SFTConfig:
     from cosmos_framework.posttrain.config.build import refuse_rounding_or_unavailable_optimizer
 
     rl = validate_config_structure(config)
-    refuse_rounding_or_unavailable_optimizer(config, rl.optimizer)
+    if rl.adapters is None:  # Adapter parameters are float32 whatever the base storage dtype.
+        refuse_rounding_or_unavailable_optimizer(config, rl.optimizer)
     for data in enabled_sources(rl):
         require_source_available(data)
     return rl
@@ -183,8 +188,14 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         "precision": asdict(resolve_precision(config)),
     }
     misc.set_random_seed(seed=rl.seed, by_rank=False)
-    model = build_backbone(config)
-    optimizer = build_optimizer(model.net, rl.optimizer)
+    if rl.adapters is None:
+        model = build_backbone(config)
+        optimizer = build_optimizer(model.net, rl.optimizer)
+    else:
+        from cosmos_framework.posttrain.model.adapters import build_sft_adapter_model
+
+        model, optimizer, adapter_identity = build_sft_adapter_model(config, rl, checkpoint.resume_checkpoint)
+        objective.identity = {**objective.identity, **adapter_identity}
     groups = []
     for index, group in enumerate(optimizer.param_groups):
         lr = group["lr"]

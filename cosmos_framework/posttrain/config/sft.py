@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from cosmos_framework.posttrain.config.rl import HFRunConfig, ValidationScheduleConfig, _normalize_factory_kwargs
+from cosmos_framework.utils.generator.adapter_config import AdapterConfig
 
 SFT_SERVE_CONTRACT_DEFAULT = "tools_no_prefill"
 SFT_SERVE_CONTRACT_PREFILLS_OPENER = "prefills_opener"
@@ -123,6 +125,11 @@ class SFTConfig(HFRunConfig):
 
     data: SFTDatasetConfig = field(default_factory=SFTDatasetConfig)
     validation: SFTValidationConfig = field(default_factory=SFTValidationConfig)
+    # Parameter-efficient training: freeze the base and train LoRA/rsLoRA/DoRA/PiSSA adapters on the
+    # selected linear layers (``utils/generator/adapter_config.py``). ``None`` trains every parameter.
+    adapters: AdapterConfig | None = None
+    # A portable adapter directory a new adapter run starts from; a run resuming its own checkpoint ignores it.
+    adapter_warm_start: str | None = None
     micro_batch_size: int = 1
     max_length: int = 4096
     processor_kwargs: dict[str, Any] = field(default_factory=dict)
@@ -175,6 +182,12 @@ class SFTConfig(HFRunConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if isinstance(self.adapters, Mapping):
+            self.adapters = AdapterConfig(**self.adapters)
+        if self.adapters is not None:
+            self.adapters.validate()
+        if self.adapter_warm_start and self.adapters is None:
+            raise ValueError("SFT adapter_warm_start requires adapters")
         for name in ("micro_batch_size", "max_length"):
             value = getattr(self, name)
             minimum = 2 if name == "max_length" else 1
