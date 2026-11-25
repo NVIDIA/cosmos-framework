@@ -46,6 +46,7 @@ nav:
   - Post-Training:
       - Choose a path: post_training/choose_path.md
       - Model and algorithm support: post_training/model_algorithm_support.md
+      - 8-bit AdamW optimizers: quantized_optimizers.md
       - SFT:
           - SFT recipes: training.md
           - Datasets:
