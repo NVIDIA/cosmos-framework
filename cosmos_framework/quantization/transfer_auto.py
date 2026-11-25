@@ -202,8 +202,15 @@ def calibrate_transfer_auto(
     }
 
     out_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(prefix="transfer-auto-calibration-"))
+    # Eager, uncached runtime: the diffusion cache skips denoiser calls, and compilation or CUDA graphs
+    # can bypass the ModelOpt quantizer hooks. Every one of the 35 steps must reach the observers.
     setup_args = OmniSetupOverrides(
-        checkpoint_path=str(checkpoint_path), output_dir=out_dir, diffusion_cache=True
+        checkpoint_path=str(checkpoint_path),
+        output_dir=out_dir,
+        diffusion_cache=False,
+        use_torch_compile=False,
+        use_cuda_graphs=False,
+        guardrails=False,
     ).build_setup()
     init_output_dir(setup_args.output_dir)
     overrides_list = setup_args.get_sample_overrides_cls().from_files(
