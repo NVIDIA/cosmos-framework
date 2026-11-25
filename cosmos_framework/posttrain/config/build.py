@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from cosmos_framework.posttrain.config.sft import SFTLRScheduleConfig
     from cosmos_framework.posttrain.data.packer.base import DataPacker
     from cosmos_framework.posttrain.roles.teacher import VLLMTeacher
+    from cosmos_framework.utils.generator.adapter_config import AdapterSetup
 
 
 _QWEN3_VL_NATIVE_BUILDER = "cosmos_framework.posttrain.model.qwen3_vl.build_qwen3_vl_native_policy"
@@ -416,6 +417,7 @@ class OptimizerParameterGroup:
     name: str
     parameter_names: tuple[str, ...]
     lr: float
+    weight_decay: float | None = None  # None keeps the optimizer's configured weight decay
 
 
 def _explicit_parameter_groups(
@@ -443,8 +445,15 @@ def _explicit_parameter_groups(
     for group in parameter_groups:
         if not group.name or not group.parameter_names or not math.isfinite(group.lr) or group.lr <= 0:
             raise ValueError(f"invalid optimizer parameter group {group.name!r}")
+        if group.weight_decay is not None and (not math.isfinite(group.weight_decay) or group.weight_decay < 0):
+            raise ValueError(f"invalid optimizer weight decay for group {group.name!r}")
     return [
-        {"params": [names[name] for name in group.parameter_names], "lr": group.lr, "name": group.name}
+        {
+            "params": [names[name] for name in group.parameter_names],
+            "lr": group.lr,
+            "name": group.name,
+            **({"weight_decay": group.weight_decay} if group.weight_decay is not None else {}),
+        }
         for group in parameter_groups
     ]
 
@@ -1046,8 +1055,14 @@ def _resolve_dotted_callable(path: str) -> Any:
     return builder
 
 
-def _build_native_from_spec(config: Any, pdims: Any, *, builder_field: str) -> tuple[Any, Any]:
-    """Invoke one model-family builder from the selected native spec."""
+def _build_native_from_spec(
+    config: Any,
+    pdims: Any,
+    *,
+    builder_field: str,
+    adapters: AdapterSetup | None = None,
+) -> tuple[Any, Any]:
+    """Invoke one model-family builder from the selected native spec (``adapters`` is passed only when set)."""
     from cosmos_framework.utils.lazy_config import instantiate
 
     spec = select_policy_backend(config).native_spec
@@ -1061,10 +1076,12 @@ def _build_native_from_spec(config: Any, pdims: Any, *, builder_field: str) -> t
         raise ValueError(f"config.model.{builder_field} must be configured for this native role")
     model_config = instantiate(getattr(spec, "model_config"))
     builder = _resolve_dotted_callable(builder_path)
-    return builder(str(getattr(spec, "model_id")), model_config, pdims), model_config
+    # Pass ``adapters`` only when set, so builders without the keyword keep working unchanged.
+    adapter_kwargs = {} if adapters is None else {"adapters": adapters}
+    return builder(str(getattr(spec, "model_id")), model_config, pdims, **adapter_kwargs), model_config
 
 
-def build_native_policy(config: Any, pdims: Any = None) -> tuple[Any, Any]:
+def build_native_policy(config: Any, pdims: Any = None, *, adapters: AdapterSetup | None = None) -> tuple[Any, Any]:
     """Build the generic native online policy and return the exact builder config used."""
     spec = select_policy_backend(config).native_spec
     if spec is None:
@@ -1081,7 +1098,7 @@ def build_native_policy(config: Any, pdims: Any = None) -> tuple[Any, Any]:
             "explicit policy mesh disagrees with config.model.parallelism: "
             f"pdims={(pdims.dp_replicate, pdims.dp_shard)}, configured={configured_parallelism}"
         )
-    return _build_native_from_spec(config, pdims, builder_field="builder")
+    return _build_native_from_spec(config, pdims, builder_field="builder", adapters=adapters)
 
 
 def build_native_model(config: Any, pdims: Any = None) -> tuple[Any, Any]:
@@ -1094,8 +1111,11 @@ def build_native_value_model(config: Any, pdims: Any = None) -> tuple[Any, Any]:
     return _build_native_from_spec(config, pdims, builder_field="value_builder")
 
 
-def build_backbone(config: Any, world_size: int = 1, pdims: Any = None) -> Any:
+def build_backbone(config: Any, world_size: int = 1, pdims: Any = None, *, adapters: AdapterSetup | None = None) -> Any:
     """Backend dispatch to a legacy native model, generic native policy, or HF model.
+
+    ``adapters`` (SFT adapters) reaches the native policy builder or ``build_hf_model``; a legacy
+    native model tree does not support adapters.
 
     A legacy ``model_backend='native'`` config still instantiates ``config.model`` and moves it to CUDA.
     When ``config.model`` is a :class:`NativePolicyBuildSpec`, its dotted builder owns construction
@@ -1115,10 +1135,12 @@ def build_backbone(config: Any, world_size: int = 1, pdims: Any = None) -> Any:
     backend = selection.backend
     if backend == NATIVE:
         if selection.native_spec is None:
+            if adapters is not None:
+                raise ValueError("adapters require a NativePolicyBuildSpec or the HF backend")
             return instantiate(config.model).cuda()
         # Native construction owns its mesh resolution. Keeping that in one place avoids validating
         # the same generic spec once here and again immediately inside build_native_policy().
-        return build_native_policy(config, pdims)[0]
+        return build_native_policy(config, pdims, adapters=adapters)[0]
 
     policy_world = pdims.world_size if pdims is not None else world_size_or_1()
     parallelism = resolve_policy_parallelism(config, int(policy_world))
@@ -1134,7 +1156,8 @@ def build_backbone(config: Any, world_size: int = 1, pdims: Any = None) -> Any:
 
     # `precision` splits STORAGE from COMPUTE; without it the one `model_hf.dtype` drives both
     # and fp32-master/bf16-compute -- what the reference GRPO recipe runs -- is inexpressible.
-    return build_hf_model(instantiate(config.model_hf), pdims, precision=resolve_precision(config))
+    adapter_kwargs = {} if adapters is None else {"adapters": adapters}  # Existing build_hf_model callers unchanged.
+    return build_hf_model(instantiate(config.model_hf), pdims, precision=resolve_precision(config), **adapter_kwargs)
 
 
 def vllm_engine_kwargs(

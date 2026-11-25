@@ -67,7 +67,8 @@ class NativePolicyBuildSpec:
     """Generic construction seam for a native online policy.
 
     ``builder`` is an absolute dotted callable with signature
-    ``(model_id, model_config, pdims) -> policy``. ``value_builder`` is the matching optional
+    ``(model_id, model_config, pdims) -> policy``; a builder that supports SFT adapters also accepts
+    ``adapters=AdapterSetup`` (passed only when adapters are configured). ``value_builder`` is the matching optional
     callable for algorithms such as PPO that own a learned critic; those algorithms validate that
     it is present before worker allocation. Keeping the callables as strings makes the root
     config dependency-light and defers importing a concrete model family until the policy worker
