@@ -320,7 +320,7 @@ Guardrails are on by default, and `release:1.4.0rc4` does not ship `cosmos_guard
 `nvidia/Cosmos-1.0-Guardrail` repository:
 
 ```bash
-pip install cosmos_guardrail==0.3.2 && pip uninstall opencv-python && pip install opencv-python-headless
+pip install cosmos_guardrail==0.3.2 && pip uninstall -y opencv-python && pip install opencv-python-headless==5.0.0.93
 ```
 
 or start the server with `TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1`, in which case you are responsible for deploying the model
@@ -465,7 +465,8 @@ checkpoint carries a root `hf_quant_config.json`, so no quantization flag is nee
 `nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc4`, which contains the Cosmos3 static-FP8 path
 (`release:1.4.0rc2` is the BF16 minimum above and is not tested with FP8). Use a larger token budget
 than the BF16 line, and set `TRTLLM_MEDIA_ALLOWED_LOCAL_PATH` if you send `file://` media (see the
-notes below):
+notes below). Video requests also need the headless OpenCV install above; without it they fail with
+HTTP 400 `OpenCV (cv2) is required for video decoding`:
 
 ```bash
 export TRTLLM_MEDIA_ALLOWED_LOCAL_PATH=/path/to/media   # only for file:// requests
