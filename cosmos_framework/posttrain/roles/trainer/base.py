@@ -30,6 +30,7 @@ import torch
 
 from cosmos_framework.posttrain.checkpoint import CheckpointManager
 from cosmos_framework.posttrain.schema.checkpoint import CheckpointComponentPlan
+from cosmos_framework.utils.quantized_optimizer_names import is_local_master_optimizer, is_quantized_optimizer
 
 if TYPE_CHECKING:
     from cosmos_framework.posttrain.checkpoint.store import CheckpointStore
@@ -300,6 +301,9 @@ class BaseTrainer(ABC):
         checkpoint_store: Mapping[str, Any] | CheckpointStore | None = None,
         checkpoint_manager: CheckpointManager | None = None,
     ) -> None:
+        if is_quantized_optimizer(optimizer) and not is_local_master_optimizer(optimizer):
+            if (checkpoint_manager.checkpoint_format if checkpoint_manager else checkpoint_format) != "consolidated":
+                raise ValueError("quantized optimizer requires the consolidated checkpoint transaction path")
         self.opt = optimizer
         self.grad_accum = max(1, int(grad_accum))
         # TOKEN_SUM + grad_accum>1 is not refused here: `backward` (algorithm/primitives/objective.py)
@@ -701,12 +705,24 @@ class BaseTrainer(ABC):
             yield guard
         finally:
             if guard.pristine:
-                self.opt.state.clear()
+                self._clear_optimizer_state()
                 for group, keys in zip(self.opt.param_groups, guard.group_keys):
                     for created in set(group) - keys:
                         del group[created]
                 if hasattr(self.opt, "param_groups_master"):
                     self.opt.param_groups_master = master
+
+    def _clear_optimizer_state(self) -> None:
+        """Drop per-parameter optimizer state.
+
+        The opt-in optimizers own state outside ``opt.state``: the eight-bit backend's managed
+        buffers, and the FP32-master owner's backend moments behind its model-facing ``state``
+        view (for every backend, torch AdamW included). Their ``reset_state`` drops all of it.
+        """
+        if is_quantized_optimizer(self.opt) or is_local_master_optimizer(self.opt):
+            self.opt.reset_state()
+        else:
+            self.opt.state.clear()
 
     def reset_optimizer_to_pristine(self) -> None:
         """Return the optimizer to never-stepped, wherever it records having stepped.
@@ -718,7 +734,7 @@ class BaseTrainer(ABC):
         pristine save wrote: DCP's planner is strict, and a target field the checkpoint omits
         fails the load before any later cleanup could run.
         """
-        self.opt.state.clear()
+        self._clear_optimizer_state()
         for group in self.opt.param_groups:
             # Group-owned counters belong to an optimizer that has stepped; a pristine one has
             # none (`utils/fused_adam.py::FusedAdam`).
