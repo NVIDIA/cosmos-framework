@@ -119,6 +119,7 @@ sources:
   examples/integration/README.md: examples/integration/README.md
 
 extra_pages:
+  - .agents/skills/cosmos3-quantization/references/nvfp4.md
   - .agents/skills/cookbooks/cosmos3/nim/action.md
   - .agents/skills/cookbooks/cosmos3/nim/api-reference.md
   - .agents/skills/cookbooks/cosmos3/nim/bring-your-own-checkpoint.md

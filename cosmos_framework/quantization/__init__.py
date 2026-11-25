@@ -10,6 +10,7 @@ with a different :class:`Sampler`.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
@@ -129,6 +130,8 @@ def quantize_fp8_checkpoint(
     keep_model: bool = False,
     calibration_behavior: Literal["framework", "legacy"] = "framework",
     mixed_precision_steps: int = 3,
+    quant_format: Literal["fp8", "nvfp4"] = "fp8",
+    fp8_last_k_layers: int = 0,
 ):
     """Quantize a diffusers-layout Cosmos3 checkpoint to FP8 and write a drop-in dir.
 
@@ -144,14 +147,23 @@ def quantize_fp8_checkpoint(
     behavior to pursue legacy-equivalent FP8 calibration. Returns the assembled
     ``output_dir`` (and, if ``keep_model``, the calibrated model for inspection).
 
+    Use :func:`quantize_nvfp4_checkpoint` for ``quant_format="nvfp4"`` and a
+    configurable ``fp8_last_k_layers`` generator tail.
+
     ``mixed_precision_steps`` controls the symmetric first/last denoising-step
     A16 policy written to ``transformer/config.json`` for vLLM-Omni.
     ``quantization_metadata.json`` records the producing environment, source
     identity, and calibration recipe independently of inherited source configs.
     """
+    from .nvfp4_recipe import validate_recipe
+
+    if quant_format != "fp8" or fp8_last_k_layers:
+        validate_recipe(quant_format, fp8_last_k_layers, mixed_precision_steps)
     input_dir, output_dir = resolve_checkpoint_path(model_name_or_path), Path(output_dir)
     if profile not in ("t2v", "t2i", "i2v"):
         raise ValueError(f"profile must be t2v/t2i/i2v, got {profile!r}")
+    if quant_format == "nvfp4" and output_dir.exists():
+        raise FileExistsError(f"Choose a fresh output_dir to preserve {output_dir}")
     i2v = profile == "i2v"
     legacy_behavior = calibration_behavior == "legacy"
 
@@ -167,7 +179,11 @@ def quantize_fp8_checkpoint(
         scheduler = model.fixed_step_sampler or model.sampler
     vae = model.tokenizer_vision_gen if i2v else _StubVAE()
 
-    num_gen_layers = _calib.count_gen_layers(model)
+    if quant_format == "nvfp4":
+        num_gen_layers = len(model.net.language_model.model.layers)
+        validate_recipe(quant_format, fp8_last_k_layers, mixed_precision_steps, num_gen_layers)
+    else:
+        num_gen_layers = _calib.count_gen_layers(model)
     print(f"[init] gen_layers={num_gen_layers} profile={profile} sampler={sampler.label!r}")
 
     prompts = _calib.prepare_calibration_prompts(num_samples=num_samples)
@@ -193,7 +209,8 @@ def quantize_fp8_checkpoint(
         source=model_name_or_path,
         input_dir=input_dir,
         recipe={
-            "format": "fp8",
+            "format": quant_format,
+            **({"fp8_last_k_layers": fp8_last_k_layers} if quant_format == "nvfp4" else {}),
             "profile": profile,
             "shape": asdict(shape),
             "sampler": asdict(sampler),
@@ -240,28 +257,66 @@ def quantize_fp8_checkpoint(
         num_gen_layers=num_gen_layers,
         quantize_language_model=quantize_language_model,
     )
-    quant_cfg = _calib.build_quant_config(model, quant_algo, skip_filter=skip_filter)
+    if quant_format == "fp8":
+        quant_cfg = _calib.build_quant_config(model, quant_algo, skip_filter=skip_filter)
+    print(f"[quant] format={quant_format} algo={quant_algo}")
+    with ExitStack() as stack:
+        attention = r"net\.language_model\.model\.layers\.(\d+)\.self_attn$"
+        stack.enter_context(temporary_fuse_named_linears(model, attention, "qkv_proj", ["q_proj", "k_proj", "v_proj"]))
+        if quant_format == "nvfp4":
+            from .nvfp4 import build_nvfp4_quant_config
 
-    print(f"[quant] format=fp8 algo={quant_algo}")
-    with temporary_fuse_named_linears(
-        model, r"net\.language_model\.model\.layers\.(\d+)\.self_attn$", "qkv_proj", ["q_proj", "k_proj", "v_proj"]
-    ):
+            stack.enter_context(
+                temporary_fuse_named_linears(
+                    model, attention, "qkv_proj_moe_gen", ["q_proj_moe_gen", "k_proj_moe_gen", "v_proj_moe_gen"]
+                )
+            )
+            stack.enter_context(
+                temporary_fuse_named_linears(
+                    model,
+                    r"net\.language_model\.model\.layers\.(\d+)\.mlp(?:_moe_gen)?$",
+                    "gate_up_proj",
+                    ["gate_proj", "up_proj"],
+                )
+            )
+            quant_cfg = build_nvfp4_quant_config(
+                model, num_gen_layers, fp8_last_k_layers, quantize_language_model, quant_algo
+            )
         mtq.quantize(model, quant_cfg, forward_loop)
     mtq.print_quant_summary(model)
 
     staging_dir = output_dir.parent / f".quantized_transformer_{profile}.tmp"
-    _export.export_quantized_transformer(
+    export_transformer = _export.export_quantized_transformer
+    if quant_format == "nvfp4":
+        from .nvfp4 import export_nvfp4_transformer
+
+        staging_dir = output_dir.parent / f".{output_dir.name}.quantized_transformer_{profile}.tmp"
+        if staging_dir.exists():
+            raise FileExistsError(f"Quantization staging directory already exists: {staging_dir}")
+        export_transformer = export_nvfp4_transformer
+    export_transformer(
         model,
         staging_dir,
         transformer_dir,
         mixed_precision_steps=mixed_precision_steps,
         modelopt_config=quant_cfg,
     )
-    _export.assemble_output_dir(input_dir, output_dir, staging_dir)
+    _export.assemble_output_dir(input_dir, output_dir, staging_dir, write_modelopt_state=quant_format == "fp8")
     write_quantization_metadata(output_dir, metadata)
 
     print(f"[done] {output_dir}")
     return (output_dir, model) if keep_model else output_dir
+
+
+def quantize_nvfp4_checkpoint(*, fp8_last_k_layers: int = 0, **kwargs):
+    """Export NVFP4 generator weights with an optional FP8 tail and FP8 reasoner.
+
+    Accepts the calibration arguments of :func:`quantize_fp8_checkpoint`.
+    ``fp8_last_k_layers`` counts final generator blocks, not diffusion steps.
+    Set ``quantize_language_model=False`` to retain the BF16 reasoner, and
+    ``mixed_precision_steps=0`` for native activations at every diffusion step.
+    """
+    return quantize_fp8_checkpoint(quant_format="nvfp4", fp8_last_k_layers=fp8_last_k_layers, **kwargs)
 
 
 def diffusers_input_scales(model) -> dict[str, torch.Tensor]:
@@ -287,6 +342,7 @@ __all__ = [
     "SAMPLER_IMAGE_BASE",
     "SAMPLER_DISTILLED",
     "quantize_fp8_checkpoint",
+    "quantize_nvfp4_checkpoint",
     "diffusers_input_scales",
     "load_transformer",
     "load_legacy_scheduler",

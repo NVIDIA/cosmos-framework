@@ -12,9 +12,9 @@ name: Validate cookbooks
 on:
   push:
     branches: [main]
-    paths: ['.agents/skills/cookbooks/**', '.agents/skills/evaluation/**', '.agents/skills/cosmos3-inference-simulation*/**', 'tests/skills/**', '.agents/skills/.gitattributes', '.github/workflows/validate-cookbooks.yml']
+    paths: ['.agents/skills/cookbooks/**', '.agents/skills/evaluation/**', '.agents/skills/cosmos3-inference-simulation*/**', 'tests/skills/**', '.agents/skills/.gitattributes', '.github/workflows/validate-cookbooks.yml', '.agents/skills/cosmos3-quantization/**', 'cosmos_framework/quantization/**', 'tests/quantization/nvfp4_recipe_test.py']
   pull_request:
-    paths: ['.agents/skills/cookbooks/**', '.agents/skills/evaluation/**', '.agents/skills/cosmos3-inference-simulation*/**', 'tests/skills/**', '.agents/skills/.gitattributes', '.github/workflows/validate-cookbooks.yml']
+    paths: ['.agents/skills/cookbooks/**', '.agents/skills/evaluation/**', '.agents/skills/cosmos3-inference-simulation*/**', 'tests/skills/**', '.agents/skills/.gitattributes', '.github/workflows/validate-cookbooks.yml', '.agents/skills/cosmos3-quantization/**', 'cosmos_framework/quantization/**', 'tests/quantization/nvfp4_recipe_test.py']
   workflow_dispatch:
 permissions:
   contents: read
@@ -263,3 +263,20 @@ jobs:
       - name: Check caller-supplied scene and inference handoff
         run: |
           python -m unittest discover -s "$AUTO_TESTS" -p 'test_wsm_inputs.py' -v
+
+  quantization-recipes:
+    name: NVFP4 recipe CPU contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install CPU quantization dependencies
+        run: |
+          python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install nvidia-modelopt==0.48.0 pytest
+      - name: Run recipe and packed export contracts
+        run: |
+          python -m pytest --noconftest -c /dev/null -v tests/quantization/nvfp4_recipe_test.py

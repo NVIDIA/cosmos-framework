@@ -9,7 +9,7 @@ preserves non-quantized projections, modality towers, and the language-model hea
 The resulting drop-in checkpoint has a new ``transformer/`` and links the remaining
 components back to the quantization source directory.
 
-FP8 only — the NIM pipeline's NVFP4 exporter is out of scope for the cookbook.
+FP8 export lives here; packed NVFP4 export is implemented in ``nvfp4.py``.
 The exported transformer config includes the vLLM-Omni inference-time A16 policy.
 """
 
@@ -31,6 +31,8 @@ from modelopt.torch.export.unified_export_hf import _process_quantized_modules
 from .metadata import METADATA_FILENAME
 from .modelopt_state import build_reasoner_modelopt_state
 from .safetensors_index import build_root_index
+from .tensor_formats import FP8_DTYPES as _FP8_DTYPES
+from .tensor_formats import SCALE_SUFFIXES as _SCALE_SUFFIXES
 
 
 def collapse_input_amax_to_scalar(mdl) -> int:
@@ -111,13 +113,23 @@ def remap_framework_state_dict(
     return remapped
 
 
+def collect_export_weights(net, dtype, src_transformer_dir):
+    """Pack ModelOpt weights and map their CPU tensors to the source Diffusers keys."""
+    from .checkpoint_io import load_sharded_safetensors
+
+    _process_quantized_modules(net, dtype)
+    print(f"[export] loading bf16 base from {src_transformer_dir}")
+    bf16 = load_sharded_safetensors(src_transformer_dir)
+    with hide_quantizers_from_state_dict(net):
+        state = {key: value.detach().contiguous().cpu() for key, value in net.state_dict().items()}
+    return bf16, remap_framework_state_dict(state, bf16)
+
+
 # Top-level projections produced by reverse_remap use the cosmos3_vfm names; the
 # bf16 diffusers base provides the equivalently-named proj_in/proj_out, so we drop
 # ours and keep the base copies.
 _DROP_FROM_QUANTIZED = ("vae2llm.", "llm2vae.")
-_FP8_DTYPES = {torch.float8_e4m3fn, getattr(torch, "float8_e5m2", torch.float8_e4m3fn)}
 FP8_MAX = 448.0
-_SCALE_SUFFIXES = (".weight_scale", ".weight_scale_2", ".input_scale", ".input_scale_2", ".alpha", ".pre_quant_scale")
 
 # Linears the diffusers checkpoint keeps in bf16 (never quantized), emitted in the
 # ModelOpt ``ignore`` list so a reasoning-path loader (vllm Cosmos3ForConditionalGeneration)
@@ -422,7 +434,7 @@ class Fp8DiffusersExporter:
         mixed_precision_steps: int = 3,
         modelopt_config: dict | None = None,
     ) -> None:
-        from .checkpoint_io import load_sharded_safetensors, save_sharded_safetensors
+        from .checkpoint_io import save_sharded_safetensors
 
         net = mdl.net
         transformer_export_dir.mkdir(parents=True, exist_ok=True)
@@ -436,16 +448,7 @@ class Fp8DiffusersExporter:
         mtq.compress(mdl)
         framework_modelopt_state = copy.deepcopy(mto.modelopt_state(mdl))
 
-        # TODO: removed _fuse_qkv_linear_diffusion and dummy_forward due to
-        # no-op for fp8. Add back when nvfp4 is supported.
-        _process_quantized_modules(net, dtype)
-
-        print(f"[export] loading bf16 base from {src_transformer_dir}")
-        bf16 = load_sharded_safetensors(src_transformer_dir)
-
-        with hide_quantizers_from_state_dict(net):
-            net_state_dict = {k: v.detach().contiguous().cpu() for k, v in net.state_dict().items()}
-        quantized = remap_framework_state_dict(net_state_dict, bf16)
+        bf16, quantized = collect_export_weights(net, dtype, src_transformer_dir)
         merged = self.overlay(bf16, quantized)
         n_shards = save_sharded_safetensors(merged, transformer_export_dir)
         print(f"[export] wrote {len(merged)} tensors across {n_shards} shard(s)")
@@ -513,7 +516,9 @@ def _write_root_weight_index(root_dir: Path) -> None:
     print(f"[assemble] wrote {dst.name} ({len(index.weight_map)} tensors, {index.metadata['total_size']} bytes)")
 
 
-def assemble_output_dir(input_dir: Path, output_dir: Path, quantized_transformer_dir: Path):
+def assemble_output_dir(
+    input_dir: Path, output_dir: Path, quantized_transformer_dir: Path, *, write_modelopt_state: bool = True
+):
     """Materialize a drop-in checkpoint dir mirroring ``input_dir``.
 
     ``output_dir`` mirrors ``input_dir`` (vae, scheduler, model_index.json, tokenizers,
@@ -553,7 +558,8 @@ def assemble_output_dir(input_dir: Path, output_dir: Path, quantized_transformer
         print(f"[assemble] linking {entry.name} -> {rel_src}")
         dst.symlink_to(rel_src)
     _write_root_weight_index(output_dir)
-    component_state = torch.load(target_transformer / "modelopt_state.pth", map_location="cpu", weights_only=False)
-    Fp8DiffusersExporter().write_transformers_modelopt_state(component_state, output_dir, output_dir)
+    if write_modelopt_state:
+        component_state = torch.load(target_transformer / "modelopt_state.pth", map_location="cpu", weights_only=False)
+        Fp8DiffusersExporter().write_transformers_modelopt_state(component_state, output_dir, output_dir)
     _write_root_hf_quant_config(output_dir, target_transformer)
     print(f"[assemble] drop-in dir ready at {output_dir}")
