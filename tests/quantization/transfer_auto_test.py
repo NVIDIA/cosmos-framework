@@ -295,3 +295,28 @@ def _read_keys(path: Path) -> set[str]:
 def _read_file(path: Path) -> dict[str, torch.Tensor]:
     with safe_open(path, framework="pt") as handle:
         return {k: handle.get_tensor(k) for k in handle.keys()}
+
+
+def test_capture_real_rows_removes_padding_and_spaces_rows():
+    value = torch.arange(100 * 4, dtype=torch.float32).reshape(1, 100, 4)
+    value[0, 90:] = 1e6  # padding rows beyond the real-token count
+    rows = ta._capture_real_rows(value, 60, limit=8, include_extreme=False)
+    assert rows.shape == (8, 4)
+    assert rows.max() < 1e6
+    assert torch.equal(rows[0], value[0, 0]) and torch.equal(rows[-1], value[0, 59])
+    few = ta._capture_real_rows(value, 5, limit=32, include_extreme=False)
+    assert few.shape == (5, 4)
+    with pytest.raises(ValueError):
+        ta._capture_real_rows(value, 0, limit=8, include_extreme=False)
+    with pytest.raises(ValueError):
+        ta._capture_real_rows(value, 101, limit=8, include_extreme=False)
+
+
+def test_capture_real_rows_keeps_extreme_row():
+    value = torch.ones(50, 4)
+    value[17, 2] = 99.0
+    rows = ta._capture_real_rows(value, 50, limit=4, include_extreme=True)
+    assert rows.shape == (4, 4)
+    assert (rows == 99.0).any()
+    plain = ta._capture_real_rows(value, 50, limit=4, include_extreme=False)
+    assert not (plain == 99.0).any()

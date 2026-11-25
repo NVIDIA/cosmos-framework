@@ -9,8 +9,9 @@ runs alone:
 
 1. :func:`calibrate_transfer_auto` records the per-projection activation amax (ModelOpt ``max``
    calibration). Amax files from several runs merge by elementwise max (:func:`load_activation_amax`).
-2. :func:`search_weight_scales` (optional) picks a weight scale for each projection by minimum
-   projection-output MSE on captured activation rows.
+2. (optional) :func:`capture_projection_inputs` saves real-token projection inputs.
+   :func:`search_weight_scales` picks a weight scale for each projection by minimum projection-output MSE
+   on those rows.
 3. :func:`export_transfer_auto_fp8` streams the BF16 source shards and writes the FP8 checkpoint.
 
 The quantized set is the 504 attention and MLP projections of both towers (``projection_map``).
@@ -20,6 +21,7 @@ Command line (``python -m cosmos_framework.quantization.transfer_auto <command> 
 
     calibrate   --checkpoint SRC --requests a.jsonl ... --output amax.json
     calibrate   --merge amax_a.json amax_b.json --output amax.json
+    capture     --checkpoint SRC --requests a.jsonl ... --output captures.pt
     search      --source SRC --activation-amax amax.json --captures cap.pt ... --output weight_scales.json
     export      --source SRC --activation-amax amax.json [--weight-scales weight_scales.json] --output OUT
 """
@@ -162,6 +164,55 @@ def load_activation_amax(paths: Sequence[str | Path]) -> dict[str, float]:
     return merged
 
 
+def _load_native_pipeline(
+    checkpoint_path: str | Path, input_files: Sequence[str | Path], output_dir: str | Path | None
+):
+    """Load ``OmniInference`` on the eager, uncached runtime and build the samples of the request files.
+
+    Returns ``(pipe, samples, native)``. ``native`` maps each projection weight key to its native module
+    name. The runtime is eager and uncached: the diffusion cache skips denoiser calls, and compilation or
+    CUDA graphs can bypass the observers, so every denoising step must reach the hooks.
+    """
+    # init_script must run before the model implementation is imported.
+    from cosmos_framework.inference.common.init import init_script
+
+    init_script()
+    import tempfile
+
+    from cosmos_framework.inference.args import OmniSetupOverrides
+    from cosmos_framework.inference.common.args import sample_output_dir
+    from cosmos_framework.inference.common.init import init_output_dir
+    from cosmos_framework.inference.model import _diffusers_to_net_key
+
+    checkpoint_path = Path(checkpoint_path)
+    config = json.loads((checkpoint_path / "transformer/config.json").read_text())
+    index = json.loads((checkpoint_path / "transformer/diffusion_pytorch_model.safetensors.index.json").read_text())
+    mapping = projection_map(index["weight_map"], config["num_hidden_layers"], "both")
+    native = {
+        key: _diffusers_to_net_key(key, "transformer/weights.safetensors").removesuffix(".weight") for key in mapping
+    }
+
+    out_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(prefix="transfer-auto-calibration-"))
+    setup_args = OmniSetupOverrides(
+        checkpoint_path=str(checkpoint_path),
+        output_dir=out_dir,
+        diffusion_cache=False,
+        use_torch_compile=False,
+        use_cuda_graphs=False,
+        guardrails=False,
+    ).build_setup()
+    init_output_dir(setup_args.output_dir)
+    overrides_list = setup_args.get_sample_overrides_cls().from_files(
+        [Path(p) for p in input_files], overrides=setup_args.sample_overrides
+    )
+    for overrides in overrides_list:
+        overrides.output_dir = sample_output_dir(setup_args.output_dir, overrides.name)
+        overrides.download(overrides.output_dir / "inputs")
+    pipe = setup_args.get_inference_cls().create(setup_args)
+    samples = [overrides.build_sample(model_config=pipe.model_config) for overrides in overrides_list]
+    return pipe, samples, native
+
+
 def calibrate_transfer_auto(
     checkpoint_path: str | Path,
     input_files: Sequence[str | Path],
@@ -180,47 +231,8 @@ def calibrate_transfer_auto(
     Needs a GPU and the BF16 source checkpoint. Generated videos go to ``output_dir`` (a temporary
     directory by default).
     """
-    # init_script must run before the model implementation is imported.
-    from cosmos_framework.inference.common.init import init_script
-
-    init_script()
-    import tempfile
-
+    pipe, samples, native = _load_native_pipeline(checkpoint_path, input_files, output_dir)
     import modelopt.torch.quantization as mtq
-
-    from cosmos_framework.inference.args import OmniSetupOverrides
-    from cosmos_framework.inference.common.args import sample_output_dir
-    from cosmos_framework.inference.common.init import init_output_dir
-    from cosmos_framework.inference.model import _diffusers_to_net_key
-
-    checkpoint_path = Path(checkpoint_path)
-    config = json.loads((checkpoint_path / "transformer/config.json").read_text())
-    index = json.loads((checkpoint_path / "transformer/diffusion_pytorch_model.safetensors.index.json").read_text())
-    mapping = projection_map(index["weight_map"], config["num_hidden_layers"], "both")
-    native = {
-        key: _diffusers_to_net_key(key, "transformer/weights.safetensors").removesuffix(".weight") for key in mapping
-    }
-
-    out_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(prefix="transfer-auto-calibration-"))
-    # Eager, uncached runtime: the diffusion cache skips denoiser calls, and compilation or CUDA graphs
-    # can bypass the ModelOpt quantizer hooks. Every one of the 35 steps must reach the observers.
-    setup_args = OmniSetupOverrides(
-        checkpoint_path=str(checkpoint_path),
-        output_dir=out_dir,
-        diffusion_cache=False,
-        use_torch_compile=False,
-        use_cuda_graphs=False,
-        guardrails=False,
-    ).build_setup()
-    init_output_dir(setup_args.output_dir)
-    overrides_list = setup_args.get_sample_overrides_cls().from_files(
-        [Path(p) for p in input_files], overrides=setup_args.sample_overrides
-    )
-    for overrides in overrides_list:
-        overrides.output_dir = sample_output_dir(setup_args.output_dir, overrides.name)
-        overrides.download(overrides.output_dir / "inputs")
-    pipe = setup_args.get_inference_cls().create(setup_args)
-    samples = [overrides.build_sample(model_config=pipe.model_config) for overrides in overrides_list]
 
     modules = dict(pipe.model.net.named_modules())
     for key, name in native.items():
@@ -265,6 +277,124 @@ def calibrate_transfer_auto(
     output_json.write_text(json.dumps(record, indent=2))
     print(f"[calib] wrote {output_json}", flush=True)
     return amax
+
+
+def _capture_real_rows(value: torch.Tensor, real_rows: int, limit: int, include_extreme: bool) -> torch.Tensor:
+    """Pick up to ``limit`` evenly spaced real-token rows of a projection input (padding removed)."""
+    value = value.detach().reshape(-1, value.shape[-1])
+    if not 0 < real_rows <= len(value) or limit < 1:
+        raise ValueError("Need a positive real-token count and capture budget")
+    value = value[:real_rows]
+    count = min(limit, real_rows)
+    indices = torch.arange(count, device=value.device) * (real_rows - 1) // max(count - 1, 1)
+    if include_extreme and count < real_rows:
+        extreme = value.abs().reshape(-1).argmax() // value.shape[-1]
+        if not torch.any(indices == extreme):
+            indices[-1] = extreme
+    return value[indices].cpu().clone()
+
+
+def capture_projection_inputs(
+    checkpoint_path: str | Path,
+    input_files: Sequence[str | Path],
+    output_pt: str | Path,
+    *,
+    output_dir: str | Path | None = None,
+    max_rows: int = 32,
+    include_extreme_row: bool = False,
+    cfg_branches: int = 2,
+) -> dict[str, torch.Tensor]:
+    """Save real-token inputs of the 504 projections for :func:`search_weight_scales`.
+
+    Runs native ``OmniInference.generate`` on the BF16 checkpoint, one request at a time, on the
+    same eager, uncached runtime as :func:`calibrate_transfer_auto`. At the first, middle and last
+    denoising step, for each CFG branch, it keeps ``max_rows`` evenly spaced rows of each projection
+    input. Rows come from real tokens only (padding is removed). With ``include_extreme_row`` the row
+    that holds the largest absolute value replaces the last row. Capture keys are
+    ``"<request name>/call<N>:<weight_key>"``, where ``N`` is the index of the network call.
+
+    A request needs ``num_steps * cfg_branches`` network calls; the function raises if the real
+    count differs (for example with a guidance interval). ``output_pt`` is written with ``torch.save``.
+    These rows are a bounded sample, not a population estimate. Needs a GPU.
+    """
+    pipe, samples, native = _load_native_pipeline(checkpoint_path, input_files, output_dir)
+    from cosmos_framework.data.generator.sequence_packing.runtime import get_num_real_tokens
+
+    net = pipe.model.net
+    modules = dict(net.named_modules())
+    for key, name in native.items():
+        if name not in modules or not isinstance(modules[name], torch.nn.Linear):
+            raise ValueError(f"Missing native projection {key} -> {name}")
+
+    context: dict = {"call": -1, "real_und": None, "real_gen": None, "wanted": set(), "label": ""}
+    offsets: dict[tuple[int, str], int] = {}
+    captures: dict[str, torch.Tensor] = {}
+
+    def net_begin(_module, _args, _kwargs) -> None:
+        context["call"] += 1
+
+    def layer_begin(_module, args, kwargs) -> None:
+        pack = kwargs.get("input", args[0] if args else None)
+        context["real_und"], context["real_gen"] = get_num_real_tokens(pack)
+
+    def hook_for(key: str, name: str):
+        tower_rows = "real_gen" if "_moe_gen" in name else "real_und"
+
+        def observe(_module, args) -> None:
+            call = context["call"]
+            if call not in context["wanted"]:
+                return
+            x = args[0]
+            rows = context[tower_rows]
+            if rows is None:
+                raise RuntimeError("Missing real-token counts; refusing an unmasked capture")
+            # A chunked projection runs several times in one call; count rows across the chunks.
+            offset = offsets.get((call, key), 0)
+            count = x.numel() // x.shape[-1]
+            rows = min(max(rows - offset, 0), count)
+            offsets[(call, key)] = offset + count
+            if not rows:
+                return
+            label = f"{context['label']}/call{call}:{key}"
+            captured = _capture_real_rows(x, rows, max_rows, include_extreme_row)
+            previous = captures.get(label)
+            if include_extreme_row and previous is not None and previous.abs().max() > captured.abs().max():
+                captured[-1] = previous[previous.abs().amax(dim=1).argmax()]
+            captures[label] = captured
+
+        return observe
+
+    handles = [net.register_forward_pre_hook(net_begin, with_kwargs=True)]
+    handles += [
+        layer.register_forward_pre_hook(layer_begin, with_kwargs=True) for layer in net.language_model.model.layers
+    ]
+    handles += [modules[name].register_forward_pre_hook(hook_for(key, name)) for key, name in native.items()]
+    try:
+        for sample in samples:
+            steps = int(sample.num_steps)
+            wanted_steps = sorted({0, steps // 2, steps - 1})
+            context.update(
+                call=-1,
+                label=str(sample.name),
+                wanted={step * cfg_branches + branch for step in wanted_steps for branch in range(cfg_branches)},
+            )
+            offsets.clear()
+            print(f"[capture] {sample.name}: calls {sorted(context['wanted'])}", flush=True)
+            results = pipe.generate([sample])
+            if not results or any(str(item.status) != "success" for item in results):
+                raise RuntimeError(f"Capture generation failed: {[str(item.status) for item in results]}")
+            if context["call"] + 1 != steps * cfg_branches:
+                raise RuntimeError(
+                    f"{sample.name}: {context['call'] + 1} network calls, expected {steps} steps x {cfg_branches}"
+                )
+    finally:
+        for handle in handles:
+            handle.remove()
+    output_pt = Path(output_pt)
+    output_pt.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(captures, output_pt)
+    print(f"[capture] {len(captures)} captures -> {output_pt}", flush=True)
+    return captures
 
 
 # --------------------------------------------------------------------------------------------------
@@ -562,6 +692,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     cal.add_argument("--output", type=Path, required=True, help="amax JSON file to write")
     cal.add_argument("--output-dir", type=Path, help="directory for generated videos")
 
+    cap_p = sub.add_parser("capture", help="save real-token projection inputs for the weight-scale search")
+    cap_p.add_argument("--checkpoint", type=Path, required=True, help="BF16 source checkpoint")
+    cap_p.add_argument("--requests", type=Path, nargs="+", required=True, help="request JSONL files")
+    cap_p.add_argument("--output", type=Path, required=True, help="capture .pt file to write")
+    cap_p.add_argument("--output-dir", type=Path, help="directory for generated videos")
+    cap_p.add_argument("--max-rows", type=int, default=32)
+    cap_p.add_argument("--extreme-row", action="store_true", help="keep the row with the largest value")
+
     srch = sub.add_parser("search", help="weight-scale search on captured projection inputs")
     srch.add_argument("--source", type=Path, required=True)
     srch.add_argument("--activation-amax", type=Path, nargs="+", required=True)
@@ -592,6 +730,15 @@ def main(argv: Sequence[str] | None = None) -> None:
             calibrate_transfer_auto(args.checkpoint, args.requests, args.output, output_dir=args.output_dir)
         else:
             parser.error("calibrate needs --checkpoint and --requests, or --merge")
+    elif args.command == "capture":
+        capture_projection_inputs(
+            args.checkpoint,
+            args.requests,
+            args.output,
+            output_dir=args.output_dir,
+            max_rows=args.max_rows,
+            include_extreme_row=args.extreme_row,
+        )
     elif args.command == "search":
         search_weight_scales(args.source, args.activation_amax, args.captures, args.output, device=args.device)
     else:

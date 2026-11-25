@@ -9,7 +9,7 @@ That function runs its own single-view denoise loop. Transfer-Auto needs multivi
 videos and LiDAR, so the recipe calibrates through the native `OmniInference.generate` on request JSONL
 files.
 
-The recipe has three steps. Each step runs alone.
+The recipe has three steps. Each step runs alone. Step 2 is optional and has two commands.
 
 | Step      | Function                                  | Result                                                    |
 | --------- | ----------------------------------------- | --------------------------------------------------------- |
@@ -47,6 +47,9 @@ all steps. `hf_quant_config.json` at the root does not carry the policy (the sam
 
 Setup is the one in `quantization-readme.md` (`cu130-train` group, `nvidia-modelopt[torch]==0.44.0`).
 `SRC` is the BF16 checkpoint directory, for example a snapshot of `nvidia/Cosmos3-Nano-Transfer-Auto`.
+`calibrate` and `capture` decode the WSM control videos with `torchcodec`, which needs the FFmpeg shared
+libraries (`libavutil` and others) and the NPP libraries (`libnppicc.so.13`, in the `nvidia/cu13` wheel)
+on `LD_LIBRARY_PATH`. If the host has no FFmpeg, install FFmpeg 4 to 8.
 
 ```bash
 # 1. Calibrate. One run for each shard of requests (GPU needed), then merge the shard files.
@@ -55,9 +58,11 @@ python -m cosmos_framework.quantization.transfer_auto calibrate \
 python -m cosmos_framework.quantization.transfer_auto calibrate \
   --merge amax-shard0.json amax-shard1.json --output amax.json
 
-# 2. (Optional) Weight-scale search on captured projection inputs.
+# 2. (Optional) Capture projection inputs from the BF16 model (GPU needed), then search the weight scales.
+python -m cosmos_framework.quantization.transfer_auto capture \
+  --checkpoint "$SRC" --requests requests/capture.jsonl --output captures.pt
 python -m cosmos_framework.quantization.transfer_auto search \
-  --source "$SRC" --activation-amax amax.json --captures captures/*.pt --output weight_scales.json
+  --source "$SRC" --activation-amax amax.json --captures captures.pt --output weight_scales.json
 
 # 3. Export from the pristine BF16 source. Leave out --weight-scales for the plain max recipe.
 python -m cosmos_framework.quantization.transfer_auto export \
@@ -76,9 +81,14 @@ projection-output MSE on the captured activation rows. Activations are fake-quan
 wins. The released checkpoint (`weight-mse`) changed 451 of 504 weight scales. Its captures came from 8
 sessions, the first, middle and last step, and both CFG branches.
 
-A capture file is a `torch.save` dict: `"<tag>:<weight_key>"` (or `"<weight_key>"`) to a
-`[rows, in_features]` tensor of the projection input, taken from the BF16 model. Each projection needs
-rows.
+`capture` (`capture_projection_inputs`) runs the native generation on the request files, one request at a
+time, with the same eager, uncached runtime as `calibrate`. It keeps 32 evenly spaced real-token rows
+(padding removed) of each projection input at the first, middle and last denoising step, for both CFG
+branches (6 of the 70 network calls for 35 steps). `--extreme-row` also keeps the row with the largest
+value. The file is a `torch.save` dict: `"<request name>/call<N>:<weight_key>"` to a `[rows, in_features]`
+tensor. The function raises if the number of network calls is not `num_steps x 2`. The rows are a
+bounded sample, not a population estimate. For the released checkpoint, the captures came from 8
+sessions. `search` joins the rows of all captures for each projection, and each projection needs rows.
 
 ### Export output
 
