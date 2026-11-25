@@ -39,6 +39,7 @@ from cosmos_framework.posttrain.config.model import (
 )
 from cosmos_framework.posttrain.config.rl import (
     OPTIMIZER_NAMES,
+    QUANTIZED_OPTIMIZER_NAMES,
     GRPOConfig,
     OPDConfig,
     OptimizerConfig,
@@ -544,10 +545,15 @@ def build_optimizer(
     # An explicit partition is complete by construction; the train-key and decay-group paths
     # below see already-populated groups (and validated-empty knobs) and leave them alone.
     params: list = [] if parameter_groups is None else _explicit_parameter_groups(net, opt_cfg, parameter_groups)
+    # The opt-in eight-bit backend accepts only live trainables, so a key-matched parameter that
+    # is already frozen stays out of its groups. Every other optimizer keeps the historical
+    # membership (matched parameters join even when frozen), so group sizes and the resume layout
+    # of existing checkpoints are unchanged.
+    trainables_only = opt_cfg.name in QUANTIZED_OPTIMIZER_NAMES
     if opt_cfg.train_keys:
         keys = tuple(opt_cfg.train_keys)
         for name, p in net.named_parameters():
-            if any(k in name for k in keys):
+            if any(k in name for k in keys) and (p.requires_grad or not trainables_only):
                 params.append(p)
             else:
                 p.requires_grad_(False)
@@ -588,6 +594,10 @@ def build_optimizer(
             },
         ]
     name = getattr(opt_cfg, "name", "adamw")
+    if name in QUANTIZED_OPTIMIZER_NAMES:
+        from cosmos_framework.utils.quantized_optimizer import build_quantized_optimizer
+
+        return build_quantized_optimizer(net, params, opt_cfg)
     if name == "fusedadam":
         # fp32 master weights + fp32 moments (bf16-net correctness — see OptimizerConfig
         # docstring). cosmos-rl reference construction: capturable=True, master_weights=True.
@@ -669,10 +679,38 @@ def refuse_rounding_or_unavailable_optimizer(config: Any, opt_cfg: OptimizerConf
     to zero (84.5 % measured on std-0.02 weights; ``config/rl.py::OptimizerConfig``). ``fusedadam`` (apex)
     keeps fp32 master weights and moments inside the optimizer but imports apex only when the trainer
     builds it, so a runtime without apex is refused here, before any model is built.
+
+    The opt-in eight-bit names update ordinary FP32 trainables on a single device and write the
+    consolidated transaction. This check is pure: it reads the installed package metadata but never
+    imports bitsandbytes or touches CUDA.
     """
     import importlib.util
 
+    quantized = opt_cfg.name in QUANTIZED_OPTIMIZER_NAMES
+    if quantized:
+        # Package presence/version only: no bitsandbytes import and no CUDA work. The CUDA
+        # kernel/allocation probe runs once where the run starts (`preflight_quantized_optimizer`).
+        from cosmos_framework.utils.quantized_optimizer import require_installed
+
+        require_installed()
+    if quantized and getattr(config.rl, "colocated_offload", False):
+        raise ValueError(f"{opt_cfg.name} does not support optimizer offload")
+    if quantized:
+        # The backend updates ordinary single-device FP32 trainables and writes the consolidated
+        # transaction.
+        if int(os.environ.get("WORLD_SIZE", "1")) != 1:
+            raise ValueError("bitsandbytes optimizers require a single CUDA device")
+        if config.rl.checkpoint_format != "consolidated":
+            raise ValueError("bitsandbytes optimizers require consolidated checkpoints")
     selection = select_policy_backend(config)
+    if quantized:
+        parallelism = (
+            getattr(config.model_hf, "parallelism", None)
+            if selection.backend == "hf"
+            else getattr(selection.native_spec, "parallelism", None)
+        )
+        if parallelism is not None and (parallelism.dp_replicate not in (1, -1) or parallelism.dp_shard not in (1, -1)):
+            raise ValueError("bitsandbytes optimizers require single-device parallelism")
     if selection.backend == "hf":
         storage = str(resolve_precision(config).master)
         seat = "the HF seat (rl.master_dtype, else rl.param_dtype, else model_hf.dtype)"
@@ -682,6 +720,8 @@ def refuse_rounding_or_unavailable_optimizer(config: Any, opt_cfg: OptimizerConf
     else:
         return
     name = getattr(opt_cfg, "name", "adamw")
+    if quantized and storage != "float32":
+        raise ValueError(f"{name} requires FP32 trainable storage on {seat}; bitsandbytes has no FP32 master weights")
     if name == "adamw" and storage != "float32":
         raise ValueError(
             f"OptimizerConfig(name='adamw') with parameter storage in {storage} on {seat} keeps its moments and "
@@ -694,6 +734,21 @@ def refuse_rounding_or_unavailable_optimizer(config: Any, opt_cfg: OptimizerConf
             "this runtime has no 'apex' module; use a runtime that carries apex (the RL image's /opt/venv/cosmos_rl does) "
             "or store parameters in float32 and use OptimizerConfig(name='adamw')"
         )
+
+
+def preflight_quantized_optimizer(opt_cfg: Any, context: str) -> None:
+    """Probe the bitsandbytes CUDA kernels once on every rank before the model is allocated.
+
+    No-op for other optimizers. Config validation stays GPU-free (it checks the installed
+    package only); this is the one runtime probe, shared by the SFT, Joint PPO and AlpaGym
+    entries. The probe result is cached per device, so optimizer construction does not repeat it.
+    """
+    if opt_cfg.name not in QUANTIZED_OPTIMIZER_NAMES:
+        return
+    from cosmos_framework.posttrain.utils.dist import run_rank_converged
+    from cosmos_framework.utils.quantized_optimizer import require_backend
+
+    run_rank_converged(lambda: require_backend(paged=opt_cfg.name == QUANTIZED_OPTIMIZER_NAMES[1]), context)
 
 
 @dataclass(frozen=True)
