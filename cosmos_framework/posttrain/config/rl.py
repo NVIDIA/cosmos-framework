@@ -3297,6 +3297,9 @@ class PPOBaseConfig(RunConfig):
 class JointPPOConfig(PPOBaseConfig):
     """Synchronous decision windows with one jointly optimized actor/value model."""
 
+    supports_quantized_optimizer: ClassVar[bool] = True
+    supports_fp32_master_optimizer: ClassVar[bool] = True
+
     num_envs: int = 8
     window_decisions: int = 16
     global_minibatch: int = 32
@@ -3315,6 +3318,10 @@ class JointPPOConfig(PPOBaseConfig):
     checkpoint_format: str = "dcp"
     save_async: bool = False
     keep_optim_last: int | None = 0
+    # Opt-in diagnostics: every update gathers each rank's CUDA caching-allocator counters (and
+    # resets the process-wide peak counters) into the update receipt's ``cuda_allocator``.
+    # Not part of the run identity.
+    cuda_allocator_receipts: bool = False
     optimizer: OptimizerConfig = field(
         default_factory=lambda: OptimizerConfig(
             lr=5e-6,
@@ -3349,6 +3356,8 @@ class JointPPOConfig(PPOBaseConfig):
                 raise ValueError(f"rl.{name} must be a positive integer")
         if type(self.verify_behavior_logprobs) is not bool:
             raise ValueError("rl.verify_behavior_logprobs must be a boolean")
+        if type(self.cuda_allocator_receipts) is not bool:
+            raise ValueError("rl.cuda_allocator_receipts must be a boolean")
         if self.time_limit_bootstrap not in ("value", "zero"):
             raise ValueError("rl.time_limit_bootstrap must be 'value' or 'zero'")
         if self.loss_reduction not in ("decision_mean", "fixed_episode_mean"):
@@ -3365,6 +3374,8 @@ class JointPPOConfig(PPOBaseConfig):
             raise ValueError("joint PPO requires synchronous dcp checkpoints and rl.grad_accum=1")
         if self.optimizer.train_keys or self.optimizer.decay_groups:
             raise ValueError("joint PPO owns the complete actor/value parameter partition")
+        if self.optimizer.name in QUANTIZED_OPTIMIZER_NAMES and self.optimizer.update_policy != "fp32_master":
+            raise ValueError("native Joint PPO quantized optimizers require optimizer.update_policy=fp32_master")
 
     def identity(self) -> dict:
         from dataclasses import asdict

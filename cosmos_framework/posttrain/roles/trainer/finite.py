@@ -85,6 +85,13 @@ def _finite_flags_by_device(tensors: Iterable[torch.Tensor]) -> dict[torch.devic
     for tensor in tensors:
         if not (tensor.is_floating_point() or tensor.is_complex()):
             continue
+        if getattr(tensor, "is_paged", False):
+            # Paged FP32 optimizer moments are CPU tensors over CUDA managed memory: a host scan
+            # would migrate every page to the CPU (and back for the next step). Check them on
+            # their GPU through a zero-copy CUDA view, stream-ordered after the update kernels.
+            from cosmos_framework.utils.quantized_optimizer import device_view
+
+            tensor = device_view(tensor)  # [*]
         finite = torch.isfinite(tensor).all()  # []
         device_flag = flags.get(tensor.device)
         if device_flag is None:

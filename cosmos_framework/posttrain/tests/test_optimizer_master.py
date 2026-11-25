@@ -109,6 +109,36 @@ def test_nonfinite_does_not_advance_master_moments_or_model():
     assert_equal(weights, net.state_dict())
 
 
+def test_native_joint_evaluation_reports_actual_initialized_storage():
+    from cosmos_framework.posttrain.config.rl import JointPPOConfig
+    from cosmos_framework.posttrain.roles.trainer.joint_ppo import JointPPOTrainer
+    from cosmos_framework.posttrain.tests.helpers.ppo_continuous import GaussianPolicy
+
+    policy = GaussianPolicy()
+    recipe = JointPPOConfig()
+    recipe.optimizer = OptimizerConfig(update_policy="fp32_master")
+    learner = JointPPOTrainer(policy, recipe)
+    before = learner.evaluation_state()
+    assert before["optimizer_storage"]["moment_bytes"] == 0
+    for parameter in learner.opt.live:
+        parameter.grad = torch.ones_like(parameter)
+    learner.opt.step()
+    state = learner.evaluation_state()
+    assert state["optimizer_storage"]["moment_bytes"] == 8 * sum(p.numel() for p in learner.opt.live)
+    assert state["optimizer_storage"]["master_bytes"] == 0  # FP32 fixture aliases live parameters.
+    # Counters and a short identity digest only: no identities or per-parameter layouts.
+    assert all(type(value) is int for key, value in state["optimizer_storage"].items() if key != "identity_digest")
+    assert isinstance(state["optimizer_storage"]["identity_digest"], str)
+    assert "master_identity" not in state["optimizer_storage"]
+    assert len(str(state["optimizer_storage"])) < 400
+    assert state == learner.evaluation_state()
+    assert state["parameters"] != before["parameters"]
+    assert learner.opt.state_report()["fp32_gradient_alias_bytes"] > 0
+    learner.opt.zero_grad()
+    assert learner.opt.state_report()["fp32_gradient_alias_bytes"] == 0
+    assert learner.evaluation_state() == state  # Scratch gradients are not durable recovery state.
+
+
 def test_fp32_storage_is_already_the_master_and_rejects_rebinding():
     net = model().float()
     opt = make(net)
