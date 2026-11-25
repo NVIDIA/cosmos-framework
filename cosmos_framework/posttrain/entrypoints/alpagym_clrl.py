@@ -41,6 +41,7 @@ from cosmos_framework.posttrain.roles.reward import reward_state_transaction
 from cosmos_framework.posttrain.workers.worker_group import WorkerGroup
 
 if TYPE_CHECKING:
+    from cosmos_framework.posttrain.config.rl import OptimizerConfig
     from cosmos_framework.posttrain.schema import Trajectory
 
 # One list drives the WorkerGroup shapes and the setup closure, so the roles built cannot drift
@@ -97,6 +98,33 @@ class EntryConfig:
     # framework's, normative on the GPU axis: it says whether policy and rollout
     # occupy the SAME physical GPUs, not how the processes are packed.
     placement: GpuPlacement = "colocated"
+    optimizer: OptimizerConfig | None = None
+
+
+def run_checkpoint_dir(resolved_config_path: str) -> str:
+    """This run's own output directory: the learner's checkpoints (and the run's optimizer record)."""
+    from pathlib import Path
+
+    return str(Path(resolved_config_path).parent / "checkpoints")
+
+
+def record_optimizer_config(checkpoint_dir: str, optimizer: OptimizerConfig) -> None:
+    """Write the run's resolved optimizer settings next to its checkpoints, as plain run metadata.
+
+    This entry never resumes from those checkpoints (it builds the policy from the run config's
+    model and saves once, at the end), so every launch simply records the optimizer it ran.
+    """
+    import json
+    import os
+    from dataclasses import asdict
+
+    from cosmos_framework.posttrain.checkpoint.io import atomic_write_json
+
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    # The record's JSON types (lists, not tuples).
+    atomic_write_json(
+        os.path.join(checkpoint_dir, "optimizer_config_resolved.json"), json.loads(json.dumps(asdict(optimizer)))
+    )
 
 
 def declare_wgs(gpus: int, placement: str = "colocated") -> dict[str, WorkerGroup]:
@@ -277,7 +305,11 @@ class EpisodeScorer:
 
 
 def make_setup(
-    resolved_config_path: str, project_root: str, roles: tuple[str, ...], updates_per_step: int = 1
+    resolved_config_path: str,
+    project_root: str,
+    roles: tuple[str, ...],
+    updates_per_step: int = 1,
+    optimizer: OptimizerConfig | None = None,
 ) -> Callable[[], dict]:
     """Build a closure that constructs ONLY `roles`, inside whichever actor it lands in.
 
@@ -381,13 +413,40 @@ def make_setup(
         if "replay" in roles:
             out["replay"] = ExperienceBuffer()
         if "policy" in roles:
-            out["policy"] = _build_trainer(run_config, updates_per_step)
+            out["policy"] = _build_trainer(run_config, updates_per_step, optimizer=optimizer)
         return out
 
     return _setup
 
 
-def _build_trainer(run_config: Any, updates_per_step: int) -> Any:
+def alpagym_optimizer_config(
+    train_config: Any,
+    *,
+    name="adamw",
+    impl="",
+    update_policy="parameter",
+    bnb_min_8bit_size=4096,
+    bnb_fp32_state_names=(),
+):
+    """AlpaGym defaults: epsilon 1e-6 (not torch/SFT 1e-8), beta2 .999 and decay .01."""
+    from cosmos_framework.posttrain.config.rl import OptimizerConfig
+
+    return OptimizerConfig(
+        name=name,
+        impl=impl,
+        update_policy=update_policy,
+        lr=float(train_config.optm_lr),
+        betas=[0.9, 0.999],
+        eps=1e-6,
+        weight_decay=0.01,
+        warmup_steps=int(train_config.optm_warmup_steps),
+        grad_clip_norm=1.0,
+        bnb_min_8bit_size=bnb_min_8bit_size,
+        bnb_fp32_state_names=list(bnb_fp32_state_names),
+    )
+
+
+def _build_trainer(run_config: Any, updates_per_step: int, *, optimizer: OptimizerConfig | None = None) -> Any:
     """Assemble the learner: AlpaGym's policy model + RL optimizer + AlpaGym's replay objective,
     driven by posttrain's `LLMTrainer` engine.
 
@@ -395,14 +454,16 @@ def _build_trainer(run_config: Any, updates_per_step: int) -> Any:
     result — which is exactly why AlpaGym's forward contract can live in the objective and the
     ~450 lines of cosmos-rl trainer plumbing are replaced rather than ported.
     """
-    from types import SimpleNamespace
-
     import torch
     from alpagym_runtime.policies.registry import get_policy_bundle
     from alpagym_runtime.posttrain.model import AlpamayoTrainModel
     from alpagym_runtime.posttrain.objective import make_alpagym_objective
 
-    from cosmos_framework.posttrain.config.build import build_lr_scheduler
+    from cosmos_framework.posttrain.config.build import (
+        build_lr_scheduler,
+        build_optimizer,
+        preflight_quantized_optimizer,
+    )
     from cosmos_framework.posttrain.roles.trainer import LLMTrainer
 
     grpo = run_config.cosmos.train.train_policy
@@ -413,6 +474,8 @@ def _build_trainer(run_config: Any, updates_per_step: int) -> Any:
     bundle.install_runtime_bridge()
     # The TRAINING model, not the rollout's: `build_inference_engine` yields ExpertModelRL
     # (generation), while training needs the patched ExpertModelCosmos.
+    optimizer_config = optimizer or alpagym_optimizer_config(run_config.cosmos.train)
+    preflight_quantized_optimizer(optimizer_config, "native AlpaGym optimizer preflight", require_fp32_master=True)
     model = AlpamayoTrainModel(str(run_config.policy.model.path), dtype=torch.bfloat16)
     # FSDP width comes from the RANK mesh, not the replica count. This policy is declared
     # (replicas=1, ranks=gpus): `replica_coords()` would report (0, 1) and silently skip the FSDP
@@ -421,38 +484,30 @@ def _build_trainer(run_config: Any, updates_per_step: int) -> Any:
     # for its TP width.
     world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
     model.setup(world_size=world_size)
-    optimizer = torch.optim.AdamW(
-        [p for p in model.net.parameters() if p.requires_grad],
-        lr=float(run_config.cosmos.train.optm_lr),
-        # AlpaGym's config exposes none of these three; each carries the value the cosmos-rl
-        # baseline ran with (its `optm_weight_decay`, `optm_betas` and `epsilon` defaults), stated
-        # explicitly rather than inherited from whatever torch defaults to.
-        #
-        # `eps` is the one that matters and the one torch disagrees on: AdamW's step is
-        # `lr * m / (sqrt(v) + eps)`, so where gradients are small sqrt(v) is small too and eps
-        # sets the scale. Torch's 1e-8 against cosmos-rl's 1e-6 is 100x on exactly those
-        # parameters -- measured as the policy moving FURTHER per step (ratio saturating the
-        # surrogate's exp(-5) clamp) while reporting a SMALLER gradient norm than the baseline.
-        betas=(0.9, 0.999),
-        eps=1e-6,
-        weight_decay=0.01,
+    optimizer = build_optimizer(model, optimizer_config)
+    from dataclasses import asdict
+
+    logging.getLogger(__name__).info(
+        "AlpaGym optimizer=%s backend=%s config=%s",
+        type(optimizer).__name__,
+        type(getattr(optimizer, "backend", optimizer)).__name__,
+        asdict(optimizer_config),
     )
     # `build_lr_scheduler` is cosmos-rl's `optm_warmup_steps` — linear ramp, then constant, on the
     # 1-based convention its docstring pins down (step 0 is lr/warmup, not zero). Reached through a
-    # SimpleNamespace because it reads `warmup_steps` while AlpaGym spells the field
+    # OptimizerConfig because it reads `warmup_steps` while AlpaGym spells the field
     # `optm_warmup_steps`: handed `run_config.cosmos.train` directly, its `getattr(..., 0)` finds no
     # such attribute, reads 0, and returns None -- no warmup, no error. That silence is the bug this
     # replaces, so the value is renamed explicitly rather than left to a lookup that cannot fail.
-    train_cfg = run_config.cosmos.train
     # NOT scaled to the optimizer clock, though `LLMTrainer` advances the scheduler with it while
     # cosmos-rl steps once per closed-loop step. The two agree anyway at this setting: the ramp is
     # `lr * (step + 1) / warmup`, so `warmup_steps=1` is full LR from the very first update -- and
     # the baseline measurably runs at full LR from its first minibatch too (`lr=0.0001` on every
     # one of them). Scaling it by `updates_per_step` was tried and is wrong in the other direction:
     # it invents a 66-update ramp across the first closed-loop step that the baseline never has.
-    lr_scheduler = build_lr_scheduler(optimizer, SimpleNamespace(warmup_steps=int(train_cfg.optm_warmup_steps)))
+    lr_scheduler = build_lr_scheduler(optimizer, optimizer_config)
     logging.getLogger(__name__).info(
-        "[alpagym] lr=%g, %d-step linear warmup", float(train_cfg.optm_lr), int(train_cfg.optm_warmup_steps)
+        "[alpagym] lr=%g, %d-step linear warmup", optimizer_config.lr, optimizer_config.warmup_steps
     )
     objective = make_alpagym_objective(
         bundle.build_model_inputs(run_config),
@@ -469,7 +524,7 @@ def _build_trainer(run_config: Any, updates_per_step: int) -> Any:
         # actually ran with (its `optm_grad_norm_clip` default of 1.0, visible as grad_norm=1.04 in
         # that run's log). LLMTrainer defaults max_grad_norm to 0.0, i.e. NO clipping -- inheriting
         # that default would silently change the update rule rather than preserve it.
-        max_grad_norm=1.0,
+        max_grad_norm=optimizer_config.grad_clip_norm,
         # cosmos-rl treats an all-zero GRPO gradient as no update. This is intentionally not an
         # LLMTrainer default: AdamW normally applies weight decay and advances moments when a zero
         # gradient tensor is present, so changing it for existing entries would change training.
@@ -524,8 +579,6 @@ def _updates_per_step(config: EntryConfig) -> int:
 
 def loop(units: dict, config: EntryConfig) -> dict:
     """The closed-loop RL step: scenes → episodes → advantage → buffer → train → weight sync."""
-    from pathlib import Path
-
     from cosmos_framework.posttrain.control.loop.weight_sync import weight_sync
     from cosmos_framework.posttrain.utils.entry import resolve, resolve_all, resolve_identical
     from cosmos_framework.posttrain.utils.report import (
@@ -726,7 +779,7 @@ def loop(units: dict, config: EntryConfig) -> dict:
     # Save once, at the end. `LLMTrainer.save` owns the layout
     # (`iter_*/{model,optim,trainer}.pt` + an atomic `latest_checkpoint.txt`); the run's acceptance
     # check looks for it, and a training run that leaves nothing behind has produced nothing.
-    checkpoint_dir = str(Path(config.alpagym.resolved_config_path).parent / "checkpoints")
+    checkpoint_dir = run_checkpoint_dir(config.alpagym.resolved_config_path)
     # `resolve_all`, not `resolve`: the policy is (1, gpus), so `save` runs on every rank and
     # `resolve` would wait on rank 0 alone -- discarding whatever a peer rank raised while writing.
     resolve_all(policy.save(checkpoint_dir))
@@ -769,6 +822,7 @@ def run(config: EntryConfig) -> dict:
             # The SAME expression the loop draws with, so the trainer's collected-batch
             # clock and the loop's chunking cannot disagree about how long a batch is.
             updates_per_step=updates_per_step,
+            optimizer=config.optimizer,
         ),
         name="alpagym_learner",
     )
@@ -796,11 +850,30 @@ def run(config: EntryConfig) -> dict:
 
 def main() -> None:
     """CLI. AlpaGym's host CLI invokes this in place of `cosmos_rl.launcher.launch_all`."""
+    from cosmos_framework.posttrain.config.rl import OPTIMIZER_IMPLS, QUANTIZED_OPTIMIZER_NAMES
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resolved-config", required=True, help="AlpaGym's resolved_config.yaml")
     parser.add_argument("--gpus", type=int, required=True, help="GPUs for the cosmos half")
     parser.add_argument("--steps", type=int, required=True)
     parser.add_argument("--group-size", type=int, required=True)
+    parser.add_argument("--optimizer", choices=("adamw", *QUANTIZED_OPTIMIZER_NAMES), default="adamw")
+    parser.add_argument(
+        "--optimizer-impl", choices=OPTIMIZER_IMPLS, default="", help="Explicit torch AdamW implementation."
+    )
+    parser.add_argument(
+        "--optimizer-update-policy",
+        choices=("parameter", "fp32_master"),
+        default=None,
+        help="Default: fp32_master for the eight-bit optimizers (the only policy they support here), else parameter.",
+    )
+    parser.add_argument("--optimizer-bnb-min-8bit-size", type=int, default=4096)
+    parser.add_argument(
+        "--optimizer-bnb-fp32-state-name",
+        action="append",
+        default=[],
+        help="Exact logical trainable parameter name retaining FP32 moments; repeat for multiple names.",
+    )
     parser.add_argument(
         "--placement",
         choices=("colocated", "disaggregated"),
@@ -810,6 +883,13 @@ def main() -> None:
         "cosmos-rl ran.",
     )
     args = parser.parse_args()
+    # Resolve and check the update policy here, before any worker is allocated: the eight-bit
+    # optimizers run only under fp32_master in this entry, so that is their default, and an
+    # explicit `parameter` is a usage error rather than a late failure inside the Ray actor.
+    if args.optimizer_update_policy is None:
+        args.optimizer_update_policy = "fp32_master" if args.optimizer in QUANTIZED_OPTIMIZER_NAMES else "parameter"
+    elif args.optimizer in QUANTIZED_OPTIMIZER_NAMES and args.optimizer_update_policy != "fp32_master":
+        parser.error(f"--optimizer {args.optimizer} requires --optimizer-update-policy fp32_master")
 
     # Configure logging FIRST. Without a handler every `logger.info` in this entry, in the AlpaGym
     # bodies and in the model wrapper is silently dropped, leaving stack traces as the only
@@ -863,6 +943,19 @@ def main() -> None:
         )
     prompts_per_step = declared // args.group_size
 
+    selected_optimizer = alpagym_optimizer_config(
+        run_config.cosmos.train,
+        name=args.optimizer,
+        impl=args.optimizer_impl,
+        update_policy=args.optimizer_update_policy,
+        bnb_min_8bit_size=args.optimizer_bnb_min_8bit_size,
+        bnb_fp32_state_names=args.optimizer_bnb_fp32_state_name,
+    )
+    # These CLI overrides are outside AlpaGym's already-resolved host config. Persist their
+    # canonical typed values before allocating workers, in this run's own output directory (the
+    # checkpoint root), never in the host-owned directory of the resolved config itself. The actor
+    # log records the constructed backend class.
+    record_optimizer_config(run_checkpoint_dir(resolved_config), selected_optimizer)
     run(
         EntryConfig(
             alpagym=AlpagymSection(resolved_config_path=resolved_config, project_root=project_root),
@@ -872,6 +965,7 @@ def main() -> None:
             group_size=args.group_size,
             ticks_per_episode=ticks_per_episode,
             placement=normalize_gpu_placement(args.placement, field_name="--placement"),
+            optimizer=selected_optimizer,
         )
     )
 
