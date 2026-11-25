@@ -13,9 +13,12 @@ description: >
   route of cosmos3-inference-generate-media and of the Reasoner / Action / Transfer cookbook
   notebooks (their skills follow in later rows) — nor for the framework's load-time
   --quantization-method flags.
+  Also use for local NVFP4 export of Nano and Super video checkpoints with a configurable FP8 generator tail.
 ---
 
-# Cosmos3 FP8 Quantization
+# Cosmos3 FP8 and NVFP4 Quantization
+
+For NVFP4 export, start with the [NVFP4 recipes](references/nvfp4.md). Choose Nano (six FP8 generator blocks by default) or Super (zero). Both use an FP8 reasoner and three A16 generator iterations at each end. Set `fp8_last_k_layers` to override the tail. The remaining sections describe FP8 export.
 
 One skill for part 2 of the retired quantization cookbook — making your own FP8 checkpoint: three variants (= the
 three notebooks) that share one API call and one output layout. The README (`references/quantization-readme.md`):
