@@ -26,6 +26,8 @@ def test_legacy_identity_and_explicit_buffer_mode_are_distinct():
     legacy = make_model_config("test-checkpoint", 8)
     payload = asdict(legacy)
     payload.pop("backbone_buffer_dtype")
+    # Unset optional fields are omitted from the identity, so existing hashes are unchanged.
+    payload.pop("backbone_adaptation")
     assert legacy.identity_hash() == canonical_json_sha256(payload, context="legacy config")
     restored = Gr00tN1d7ModelConfig(**payload)
     assert restored.identity() == legacy.identity()
