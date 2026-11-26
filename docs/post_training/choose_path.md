@@ -24,8 +24,9 @@ python -m cosmos_framework.scripts.train --sft-toml=examples/toml/sft_config/<re
 - Robot actions from Cosmos3-Nano: [DROID policy](../action_policy_droid_posttrain.md) (reproduces Cosmos3-Nano-Policy-DROID), [DROID forward dynamics](../action_fd_droid_posttrain.md) and [LIBERO-10 policy](../action_policy_libero_posttrain.md).
 - [Transfer-Auto](../training_transfer_auto.md): a four-phase RGB/LiDAR curriculum from Cosmos3-Nano, run with `cosmos_framework.scripts.train_experiment` instead.
 - Qwen text and supported VLM families: use the separate [Posttrain conversation-SFT guide](../posttrain/guides/sft.md).
+- Lower-memory adapter training: the experimental [native QLoRA guide](native_qlora.md) trains LoRA on a frozen NF4 base for Qwen3-VL-8B, Alpamayo-R1-10B and GR00T N1.7 on one A100 80GB.
 - Other compatible HF text/dense-VLM models can reuse the SFT core with tokenizer/template/media shaping and launcher wiring; see [support and recipe availability](model_algorithm_support.md#support-matrix).
-- GR00T-N1.7: CF has an action-head flow-BC implementation but no public end-to-end offline SFT recipe. For customer demonstrations, start with [Isaac-GR00T fine-tuning](https://github.com/NVIDIA/Isaac-GR00T#fine-tuning); see [GR00T workflow boundaries](model_algorithm_support.md#gr00t-choosing-a-repository-and-handing-off-a-checkpoint).
+- GR00T-N1.7: CF has an action-head flow-BC implementation; apart from the experimental [native QLoRA LIBERO recipe](native_qlora.md#gr00t-n17-libero), it has no public end-to-end offline SFT recipe. For customer demonstrations, start with [Isaac-GR00T fine-tuning](https://github.com/NVIDIA/Isaac-GR00T#fine-tuning); see [GR00T workflow boundaries](model_algorithm_support.md#gr00t-choosing-a-repository-and-handing-off-a-checkpoint).
 
 ## Distillation
 
