@@ -306,6 +306,7 @@ _WHITELIST_ENV_VARS = {
     "QT_QPA_PLATFORM_PLUGIN_PATH",
     "TORCHINDUCTOR_CACHE_DIR",
     "TRITON_CACHE_DIR",  # set by Triton during flex-attention compilation
+    "_TORCHINDUCTOR_PYOBJECT_TENSOR_DATA_PTR",  # set process-wide by the first torch.compile (Inductor) call
     "NVTE_CUDA_INCLUDE_DIR",  # set by Transformer Engine during its CUDA extension setup
 }
 
