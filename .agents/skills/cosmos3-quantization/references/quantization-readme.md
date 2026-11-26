@@ -20,6 +20,7 @@ These notebooks are walkthroughs of that API.
 | [quantize_cosmos3.ipynb](quantize-cosmos3.md)                     | Edge, Nano, and Super video-model quantization. |
 | [quantize_super_text2image.ipynb](quantize-super-text2image.md)   | Base and distilled Text-to-Image quantization.  |
 | [quantize_super_image2video.ipynb](quantize-super-image2video.md) | Base and distilled Image-to-Video quantization. |
+| [quantize-transfer-auto-int8.md](quantize-transfer-auto-int8.md)  | Nano Transfer-Auto INT8 W8A8 recipe (SmoothQuant, MAPS). |
 
 The whole pipeline for one checkpoint is a single call:
 
