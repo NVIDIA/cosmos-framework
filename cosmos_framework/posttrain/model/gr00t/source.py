@@ -30,7 +30,7 @@ def _json(path: Path) -> dict:
     return parse_json_object(path.read_bytes(), context=f"GR00T source {path}")
 
 
-def _resolve(name: str, revision: str = "", *, dependency: bool = False) -> tuple[Path, str]:
+def resolve_source(name: str, revision: str = "", *, dependency: bool = False) -> tuple[Path, str]:
     directory = Path(name)
     if directory.is_dir():
         if revision:
@@ -58,7 +58,7 @@ def _dependency_name(config: dict, *, context: str) -> str:
     return name
 
 
-def _metadata(directory: Path, *, gr00t: bool = False) -> dict[str, str]:
+def metadata_files(directory: Path, *, gr00t: bool = False) -> dict[str, str]:
     required = ("config.json", "processor_config.json", "statistics.json") if gr00t else ("config.json",)
     for name in required:
         if not (directory / name).is_file():
@@ -75,7 +75,7 @@ def _metadata(directory: Path, *, gr00t: bool = False) -> dict[str, str]:
     return files
 
 
-def _weights(directory: Path) -> dict[str, str]:
+def weight_files(directory: Path) -> dict[str, str]:
     # HF selects the single safetensors file before an index when both exist.
     if (directory / "model.safetensors").is_file():
         shards = {"model.safetensors": None}
@@ -113,15 +113,15 @@ class Gr00tPPOSource:
     processor_config_sha256: str
 
     def identity(self) -> CheckpointProvenance:
-        root = _metadata(self.checkpoint, gr00t=True)
+        root = metadata_files(self.checkpoint, gr00t=True)
         if (root["config.json"], root["processor_config.json"]) != (
             self.config_sha256,
             self.processor_config_sha256,
         ):
             raise RuntimeError("GR00T configuration changed after source resolution")
-        metadata = {path: _metadata(path) for path in {self.backbone, self.processor}}
+        metadata = {path: metadata_files(path) for path in {self.backbone, self.processor}}
         manifest = {
-            "checkpoint": {**root, **_weights(self.checkpoint)},
+            "checkpoint": {**root, **weight_files(self.checkpoint)},
             "backbone": metadata[self.backbone],
             "backbone_revision": self.backbone_revision,
             "processor": metadata[self.processor],
@@ -132,7 +132,7 @@ class Gr00tPPOSource:
 
 def resolve_ppo_source(checkpoint_path: str, revision: str = "") -> Gr00tPPOSource:
     """Resolve the same root and nested dependencies that the official loaders consume."""
-    checkpoint, _ = _resolve(checkpoint_path, revision)
+    checkpoint, _ = resolve_source(checkpoint_path, revision)
     model_payload = (checkpoint / "config.json").read_bytes()
     processor_payload = (checkpoint / "processor_config.json").read_bytes()
     model_config = parse_json_object(model_payload, context=str(checkpoint / "config.json"))
@@ -142,9 +142,11 @@ def resolve_ppo_source(checkpoint_path: str, revision: str = "") -> Gr00tPPOSour
         raise ValueError(f"{checkpoint / 'processor_config.json'}.processor_kwargs must be an object")
     backbone_name = _dependency_name(model_config, context=str(checkpoint / "config.json"))
     processor_name = _dependency_name(processor_kwargs, context=str(checkpoint / "processor_config.json"))
-    backbone, backbone_revision = _resolve(backbone_name, dependency=True)
+    backbone, backbone_revision = resolve_source(backbone_name, dependency=True)
     processor, processor_revision = (
-        (backbone, backbone_revision) if processor_name == backbone_name else _resolve(processor_name, dependency=True)
+        (backbone, backbone_revision)
+        if processor_name == backbone_name
+        else resolve_source(processor_name, dependency=True)
     )
     return Gr00tPPOSource(
         checkpoint,

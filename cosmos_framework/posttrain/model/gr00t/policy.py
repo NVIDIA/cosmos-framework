@@ -203,6 +203,9 @@ class Gr00tN1d7TrainPolicy:
     """Duck-typed into `LLMTrainer` like `model/cosmos3.py::Cosmos3FlowPolicy`: the trainer uses `.net`,
     the objective calls `flow_matching_loss`."""
 
+    # Opt-in evaluation-only backbone output reuse, installed by `utils/gr00t_evaluation_backbone.py`.
+    evaluation_backbone_reuse: Any = None
+
     def __init__(
         self,
         config: Gr00tN1d7ModelConfig,
@@ -216,6 +219,32 @@ class Gr00tN1d7TrainPolicy:
         self.config = config
         self._ppo_enabled = ppo
         self.precision = precision or (BF16_PRECISION if ppo else OFFICIAL_PRECISION)
+        if config.backbone_adaptation is not None:
+            if config.backbone_buffer_dtype is not None:
+                raise ValueError("GR00T backbone adaptation does not support backbone_buffer_dtype")
+            if ppo:
+                raise ValueError(
+                    "GR00T backbone adaptation requires native action SFT; cached-feature PPO bypasses adapters"
+                )
+            import torch.distributed as dist
+
+            if (dist.is_initialized() and dist.get_world_size() != 1) or (
+                parallel_dims is not None and parallel_dims.world_size != 1
+            ):
+                raise ValueError("GR00T backbone adaptation currently requires one native torchrun process")
+            if precision is not None and precision != OFFICIAL_PRECISION:
+                raise ValueError(
+                    "GR00T backbone adaptation requires OFFICIAL_PRECISION (FP32 action head, BF16 autocast)"
+                )
+            from cosmos_framework.posttrain.model.gr00t.adaptation import build_adapted_gr00t
+
+            self.gr00t, self.processor, self.family_state = build_adapted_gr00t(
+                config, device=device, save_cfg_dir=save_cfg_dir
+            )
+            self.net = self.gr00t
+            self.backbone = self.gr00t.backbone
+            self.compute_ctx = compute_context("autocast", torch.bfloat16, torch.device(device).type)
+            return
         if ppo and self.precision != BF16_PRECISION:
             raise ValueError("GR00T PPO requires BF16_PRECISION; other PPO precision settings are unsupported")
         if ppo and os.environ.get("GR00T_DIT_SDPA_MODE") != "math":
@@ -341,8 +370,27 @@ class Gr00tN1d7TrainPolicy:
             dtype = getattr(torch, self.precision.param)
             inputs = {k: v.to(dtype) if torch.is_tensor(v) and v.is_floating_point() else v for k, v in inputs.items()}
         with self.compute_ctx:
-            out = self.gr00t(inputs)
+            reuse = self.evaluation_backbone_reuse
+            if reuse is not None and reuse.active:
+                backbone_inputs, action_inputs = self.gr00t.prepare_input(dict(inputs))
+                reuse.begin_loss(backbone_inputs)
+                raw = self.backbone(backbone_inputs)
+                out = self.gr00t.action_head(reuse.finish_loss(backbone_inputs, raw), action_inputs)
+            else:
+                out = self.gr00t(inputs)
         return FlowMatchingLossOutput(loss=out["loss"], action_mask=out["action_mask"])
+
+    def predict_actions(self, inputs: dict) -> Any:
+        """Native sampler; optional evaluation scope reuses only pre-head backbone output."""
+        # Upstream treats an action input as RTC conditioning; predictions must be observation-only.
+        if "action" in inputs or "action_mask" in inputs:
+            raise ValueError("GR00T prediction must not receive action conditioning")
+        with self.compute_ctx:
+            reuse = self.evaluation_backbone_reuse
+            if reuse is None or not reuse.active:
+                return self.gr00t.get_action(inputs)
+            backbone_inputs, action_inputs = self.gr00t.prepare_input(dict(inputs))
+            return self.gr00t.action_head.get_action(reuse.prediction(backbone_inputs), action_inputs)
 
     def ppo_condition(self, inputs: dict, *, native_ode: bool = False) -> Gr00tPPOCondition:
         """Prepare only frozen backbone outputs; the action/value forward owns trainable features."""

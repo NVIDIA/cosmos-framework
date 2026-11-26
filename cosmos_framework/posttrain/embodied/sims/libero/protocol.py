@@ -48,7 +48,19 @@ LIBERO_PROTOCOLS = {
 LIBERO_SUITES = tuple(LIBERO_PROTOCOLS)
 DEFAULT_EXECUTION_PROFILE = "default"
 PI05_SPATIAL_EXECUTION_PROFILE = "rlinf_pi05_spatial_v2"
+SPATIAL_H8_EXECUTION_PROFILE = "spatial_h8"
 HASH_POLICY_REPLICA_ENV_SEEDS = "libero-sha256-policy-rlinf-replica-env-v1"
+# LIBERO Spatial replanning every eight actions (the default spatial profile executes sixteen).
+_SPATIAL_H8_PROTOCOL = LiberoProtocol(
+    execution_horizon=8,
+    max_episode_steps=256,
+    reset_steps=15,
+    reset_gripper=-1.0,
+    stop_on_success=False,
+    reward="relative",
+    reset_action="open-gripper-zero",
+    seed_derivation=HASH_POLICY_REPLICA_ENV_SEEDS,
+)
 _PI05_SPATIAL_PROTOCOL = LiberoProtocol(
     5,
     240,
@@ -70,6 +82,8 @@ def execution_protocol(suite: str, profile: str = DEFAULT_EXECUTION_PROFILE) -> 
         raise ValueError(f"unsupported LIBERO suite {suite!r}")
     if profile == DEFAULT_EXECUTION_PROFILE:
         return LIBERO_PROTOCOLS[suite]
+    if profile == SPATIAL_H8_EXECUTION_PROFILE and suite == "libero_spatial":
+        return _SPATIAL_H8_PROTOCOL
     if profile == PI05_SPATIAL_EXECUTION_PROFILE and suite == "libero_spatial":
         return _PI05_SPATIAL_PROTOCOL
     raise ValueError(f"unsupported LIBERO execution_profile {profile!r} for suite {suite!r}")
