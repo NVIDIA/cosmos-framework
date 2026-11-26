@@ -15,6 +15,7 @@ import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 import torch
@@ -23,7 +24,7 @@ from transformers.cache_utils import Cache
 from transformers.utils.import_utils import is_torchdynamo_compiling
 
 from cosmos_framework.posttrain.comm.weight_transfer import WeightWitnessSpec
-from cosmos_framework.posttrain.model.protocol import VLMPolicyOutput
+from cosmos_framework.posttrain.model.protocol import SelectedSFTPolicyOutput, VLMPolicyOutput
 from cosmos_framework.posttrain.model.sft_source import register_native_sft_source
 
 if TYPE_CHECKING:
@@ -308,6 +309,7 @@ class Qwen3VLBuildHooks:
     parallelize: Callable[[nn.Module, Any], None] | None = None
     materialize: Callable[[nn.Module], None] | None = None
     load_weights: Callable[[nn.Module, str, str | None, Any], None] | None = None
+    finalize_model: Callable[[nn.Module], None] | None = None
 
 
 def validate_qwen3_vl_parallelism(parallel_dims: Any | None) -> None:
@@ -550,10 +552,15 @@ def _move_to_device(value: Any, device: torch.device) -> Any:
 class Qwen3VLPolicy:
     """Posttrain capability adapter over a native Qwen3-VL family module."""
 
-    def __init__(self, net: nn.Module, model_type: str) -> None:
+    def __init__(self, net: nn.Module, model_type: str, *, sft_logits_mode: str = "full") -> None:
         if model_type not in _SUPPORTED_MODEL_TYPES:
             raise ValueError(f"unsupported Qwen3-VL model_type {model_type!r}")
+        if sft_logits_mode not in {"full", "supervised"}:
+            raise ValueError(f"unsupported SFT logits mode {sft_logits_mode!r}")
+        if sft_logits_mode == "supervised" and model_type != "qwen3_vl":
+            raise ValueError("supervised-position SFT logits require the native dense Qwen3-VL")
         self.net = net
+        self.sft_logits_mode = sft_logits_mode
         config = getattr(net, "config", None)
         self.weight_mapper = Qwen3VLWeightMapper(
             model_type,
@@ -608,6 +615,38 @@ class Qwen3VLPolicy:
         logits = cast(torch.Tensor, raw_logits)  # [B,T,V] (validated by the objective)
         return VLMPolicyOutput(logits=logits)
 
+    def forward_sft_batch(self, batch: dict[str, Any], valid: torch.Tensor) -> SelectedSFTPolicyOutput:
+        """Run the complete native VLM, projecting only shifted supervised positions.
+
+        ``valid`` is owned by the objective: labels, both attention-mask positions,
+        and validation weights have already been combined. No second label shift
+        or independent mask computation is permitted here. Only the single-device
+        frozen-base adapter builder enables this capability.
+        """
+        if self.sft_logits_mode != "supervised":
+            raise ValueError("forward_sft_batch requires sft_logits_mode='supervised'")
+        self.validate_policy_batch(batch)
+        input_ids = batch["input_ids"]
+        if (
+            not isinstance(valid, torch.Tensor)
+            or valid.dtype != torch.bool
+            or tuple(valid.shape) != (input_ids.shape[0], input_ids.shape[1] - 1)
+            or valid.device != input_ids.device
+        ):
+            raise ValueError("supervised-position SFT requires a bool [B,T-1] mask on the input device")
+        backbone, head = getattr(self.net, "model", None), getattr(self.net, "lm_head", None)
+        if not isinstance(backbone, nn.Module) or not isinstance(head, nn.Linear):
+            raise TypeError("supervised-position SFT requires the native VLM backbone and linear lm_head")
+        if any(parameter.requires_grad for parameter in head.parameters()):
+            raise ValueError("supervised-position SFT requires a frozen output head")
+        model_batch = {key: value for key, value in batch.items() if key not in _NON_MODEL_BATCH_KEYS}
+        output = backbone(**model_batch, use_cache=False, return_dict=True)
+        hidden = output.last_hidden_state  # [B,T,H]; all context/media remain in the backward graph
+        if hidden.ndim != 3 or tuple(hidden.shape[:2]) != tuple(input_ids.shape):
+            raise ValueError("native VLM backbone must return hidden states aligned with input_ids")
+        selected = hidden[:, :-1][valid]  # [N,H], including a graph-connected empty [0,H] lane
+        return SelectedSFTPolicyOutput(logits=head(selected))  # [N,V]
+
 
 def build_qwen3_vl_policy(
     *,
@@ -620,6 +659,7 @@ def build_qwen3_vl_policy(
     attn_implementation: str = "eager",
     hooks: Qwen3VLBuildHooks | None = None,
     initialize_on_meta: bool = True,
+    sft_logits_mode: str = "full",
 ) -> Qwen3VLPolicy:
     """Build a native Qwen3-VL in explicit lifecycle order.
 
@@ -629,6 +669,10 @@ def build_qwen3_vl_policy(
     rank is forbidden.
     """
     validate_qwen3_vl_parallelism(parallel_dims)
+    if sft_logits_mode not in {"full", "supervised"}:
+        raise ValueError(f"unsupported SFT logits mode {sft_logits_mode!r}")
+    if sft_logits_mode == "supervised" and (model_type != "qwen3_vl" or parallel_dims is not None):
+        raise ValueError("supervised-position SFT requires a dense native model without distributed wrapping")
     hooks = hooks or Qwen3VLBuildHooks()
     config_cls, model_cls = _native_qwen3_vl_classes(model_type)
     _override_native_attention_mask_compatibility(model_type)
@@ -661,11 +705,13 @@ def build_qwen3_vl_policy(
         (hooks.load_weights or _default_load_weights)(net, checkpoint_path, credential_path, parallel_dims)
     elif hooks.load_weights is not None:
         hooks.load_weights(net, "", credential_path, parallel_dims)
+    if hooks.finalize_model is not None:
+        hooks.finalize_model(net)
     if model_type == "qwen3_vl_moe":
         from cosmos_framework.posttrain.model.qwen3_vl_moe import Qwen3VLMoePolicy
 
         return Qwen3VLMoePolicy(net)
-    return Qwen3VLPolicy(net, model_type)
+    return Qwen3VLPolicy(net, model_type, sft_logits_mode=sft_logits_mode)
 
 
 def build_qwen3_vl_native_policy(
@@ -715,6 +761,8 @@ def build_qwen3_vl_native_value_model(
     pdims: Any = None,
 ) -> nn.Module:
     """Build a Qwen3-VL backbone and attach the shared scalar value head."""
+    if getattr(cfg, "adapter", None) is not None or getattr(cfg, "quantized_base", None) is not None:
+        raise ValueError("native adapter training currently supports the SFT policy only, not a value model")
     from cosmos_framework.posttrain.model.value import DenseValueModel
 
     return DenseValueModel(build_qwen3_vl_native_policy(model_id, cfg, pdims), pdims=pdims)
@@ -731,18 +779,31 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
     from cosmos_framework.configs.base.defaults.activation_checkpointing import (
         ActivationCheckpointingConfig,
     )
+    from cosmos_framework.configs.base.defaults.compile import CompileConfig
     from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-    from cosmos_framework.model.generator.parallelize_vlm import apply_ac, apply_fsdp
+    from cosmos_framework.model.generator.parallelize_vlm import apply_ac, apply_compile, apply_fsdp
+    from cosmos_framework.posttrain.config.model import NATIVE_ADAPTER_SAC_SAVE_OPS
 
     # One artifact owns both architecture semantics and rollout identity. A separate config path
     # would let RoPE/vision defaults drift while parameter names and shapes still appeared valid.
-    model_config = AutoConfig.from_pretrained(cfg.name_or_path)
+    adapter_enabled = getattr(cfg, "adapter", None) is not None
+    if getattr(cfg, "quantized_base", None) is not None and not adapter_enabled:
+        raise ValueError("a frozen quantized base requires an explicit ordinary native LoRA configuration")
+    model_config = (
+        AutoConfig.from_pretrained(cfg.name_or_path, trust_remote_code=False, local_files_only=True)
+        if adapter_enabled
+        else AutoConfig.from_pretrained(cfg.name_or_path)
+    )
     resolved_model_type = getattr(model_config, "model_type", None)
     if resolved_model_type not in _SUPPORTED_MODEL_TYPES:
         raise ValueError(
             "Qwen3VLModelConfig.name_or_path must resolve to model_type qwen3_vl|qwen3_vl_moe before "
             f"meta/FSDP construction, got {resolved_model_type!r}"
         )
+    if getattr(cfg, "sft_logits_mode", "full") == "supervised" and (
+        not adapter_enabled or resolved_model_type != "qwen3_vl" or pdims is not None
+    ):
+        raise ValueError("supervised-position SFT requires the native dense single-device adapter path")
     if resolved_model_type == "qwen3_vl_moe" and cfg.dtype != "bfloat16":
         raise ValueError(
             "Qwen3VLModelConfig.dtype must be 'bfloat16' for qwen3_vl_moe; the native grouped-mm "
@@ -753,7 +814,20 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
             "native Qwen3-VL OPD requires tie_word_embeddings=False: publishing one tied policy tensor "
             "into the rollout engine's live embedding/head namespace is not supported"
         )
+    adapter_lifecycle = None
+    if adapter_enabled:
+        from cosmos_framework.posttrain.model.quantization.loader import NativeAdapterLifecycle
+
+        adapter_lifecycle = NativeAdapterLifecycle(cfg, model_config, pdims)
     activation_checkpointing = ActivationCheckpointingConfig(mode=cfg.activation_checkpointing)
+    if adapter_enabled and cfg.activation_checkpointing == "selective":
+        activation_checkpointing.save_ops_regex = list(NATIVE_ADAPTER_SAC_SAVE_OPS)
+    compile_language = getattr(cfg, "compile_language_model", False)
+    if compile_language:
+        if not adapter_enabled or resolved_model_type != "qwen3_vl" or pdims is not None:
+            raise ValueError("language compilation currently requires a single-device native dense Qwen3-VL adapter")
+        if torch._dynamo.config.suppress_errors:
+            raise ValueError("native adapter language compilation requires torch._dynamo.config.suppress_errors=False")
     parallelism_config = ParallelismConfig(
         data_parallel_shard_degree=1 if pdims is None else int(pdims.dp_shard),
         data_parallel_replicate_degree=1 if pdims is None else int(pdims.dp_replicate),
@@ -776,6 +850,8 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
             overridden = override_qwen3_vl_moe_for_padded_batches(net)
             if overridden < 1:
                 raise ValueError("qwen3_vl_moe model contains no native sparse-MoE block to adapt")
+        if adapter_lifecycle is not None:
+            adapter_lifecycle.prepare(net)
 
     def parallelize_native(net: nn.Module, parallel_dims: Any) -> None:
         # `parallelize_vlm` reads `.model`, the disabled audio flag and (since an upstream change, the
@@ -790,6 +866,39 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
 
         shim = NativeVLMShim()
         slots = apply_ac(shim, activation_checkpointing)
+        if getattr(cfg, "quantized_linear_execution", "bnb") == "checkpointed_dequant":
+            if adapter_lifecycle is None or parallel_dims is not None or compile_language:
+                raise ValueError("checkpointed dequantization requires the eager single-device adapter lifecycle")
+            _bind_checkpointed_dequant_contexts(net, slots, activation_checkpointing, adapter_lifecycle.targets)
+        if compile_language:
+            layers = net.model.language_model.layers
+            language_slots = [slot for slot in slots if slot[0] is layers]
+            if not language_slots or len(language_slots) != len(layers):
+                raise ValueError("language compilation requires every native language layer to have one block slot")
+            # Compilation wraps the AC wrapper, never its inner block. It may
+            # not replace/move Parameters or touch packed quantization storage.
+            parameter_contract = {
+                id(p): (type(p), tuple(p.shape), p.dtype, p.device, p.requires_grad) for p in net.parameters()
+            }
+            compiled = apply_compile(language_slots, CompileConfig(enabled=True, compile_dynamic=True))
+            from cosmos_framework.posttrain.utils.native_compile import (
+                guard_native_compiled_call,
+                native_compile_diagnostics,
+            )
+
+            for _, _, block in compiled:
+                guard_native_compiled_call(block)
+            replacements = {(id(parent), attribute): block for parent, attribute, block in compiled}
+            slots = [
+                (parent, attribute, replacements.get((id(parent), attribute), block))
+                for parent, attribute, block in slots
+            ]
+            if parameter_contract != {
+                id(p): (type(p), tuple(p.shape), p.dtype, p.device, p.requires_grad) for p in net.parameters()
+            }:
+                raise RuntimeError("language compilation changed native model parameter identity or representation")
+            net._cosmos_compiled_language_blocks = len(compiled)
+            net._cosmos_compile_diagnostics = lambda: native_compile_diagnostics(block for _, _, block in compiled)
         if parallel_dims is not None:
             apply_fsdp(shim, slots, parallel_dims, parallelism_config, cfg.dtype)
 
@@ -801,9 +910,107 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
         parallel_dims=pdims,
         dtype=getattr(torch, cfg.dtype),
         attn_implementation=cfg.attn_impl,
-        hooks=Qwen3VLBuildHooks(prepare_model=prepare_native, parallelize=parallelize_native),
+        hooks=Qwen3VLBuildHooks(
+            prepare_model=prepare_native,
+            parallelize=parallelize_native,
+            materialize=adapter_lifecycle.materialize if adapter_lifecycle is not None else None,
+            load_weights=adapter_lifecycle.load if adapter_lifecycle is not None else None,
+            finalize_model=adapter_lifecycle.finalize if adapter_lifecycle is not None else None,
+        ),
         initialize_on_meta=True,
+        sft_logits_mode=getattr(cfg, "sft_logits_mode", "full"),
     )
+
+
+def _bind_checkpointed_dequant_contexts(
+    net: nn.Module,
+    slots: list[tuple[nn.Module, str, nn.Module]],
+    ac: Any,
+    targets: Mapping[str, nn.Module],
+) -> None:
+    """Bind exact per-block ownership to the native full-checkpoint contexts.
+
+    A context around the outer model would neither prove checkpoint coverage nor
+    reliably reach autograd recomputation. Instead, torch enters these contexts
+    inside each original forward and recompute. No module/parameter is replaced,
+    and the context captures only the already-owned packed linears, never their
+    temporary dense weights. Validate the entire graph before changing a wrapper.
+    """
+    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import CheckpointImpl, CheckpointWrapper
+    from torch.utils.checkpoint import checkpoint
+
+    from cosmos_framework.posttrain.model.quantization.bnb import (
+        NativeLoraLinear4bit,
+        checkpointed_dequant_contexts,
+    )
+    from cosmos_framework.posttrain.model.quantization.loader import canonical_targets
+
+    if ac.mode != "full":
+        raise ValueError("checkpointed dequantization requires full nonreentrant activation checkpointing")
+    if ac.preserve_rng_state is not True or ac.determinism_check != "default":
+        raise ValueError("checkpointed dequantization requires the recorded RNG and determinism settings")
+    expected = canonical_targets()
+    if set(targets) != set(expected) or len({id(module) for module in targets.values()}) != len(expected):
+        raise ValueError("checkpointed dequantization requires every distinct canonical target")
+    layers = net.model.language_model.layers
+    language_slots = [(attribute, block) for parent, attribute, block in slots if parent is layers]
+    if len(language_slots) != len(layers) or {key for key, _ in language_slots} != {
+        str(index) for index in range(len(layers))
+    }:
+        raise ValueError("checkpointed dequantization requires every distinct language block slot")
+    expected_kwargs = {
+        "use_reentrant": False,
+        "preserve_rng_state": ac.preserve_rng_state,
+        "determinism_check": ac.determinism_check,
+    }
+    updates = []
+    for attribute, block in language_slots:
+        if (
+            getattr(layers, attribute) is not block
+            or type(block) is not CheckpointWrapper
+            or block.checkpoint_impl is not CheckpointImpl.NO_REENTRANT
+            or type(block.checkpoint_fn) is not partial
+            or block.checkpoint_fn.func is not checkpoint
+            or block.checkpoint_fn.args
+            or block.checkpoint_fn.keywords != expected_kwargs
+        ):
+            raise ValueError("checkpointed dequantization requires the unchanged native nonreentrant wrapper")
+        inner = block._checkpoint_wrapped_module
+        if any(isinstance(module, CheckpointWrapper) for module in inner.modules()):
+            raise ValueError("checkpointed dequantization forbids nested checkpoint wrappers")
+        prefix = f"model.language_model.layers.{attribute}."
+        members = tuple(targets[name] for name in sorted(expected) if name.startswith(prefix))
+        for name in (name for name in expected if name.startswith(prefix)):
+            module = targets[name]
+            if (
+                type(module) is not NativeLoraLinear4bit
+                or module.quantized_linear_execution != "checkpointed_dequant"
+                or module.logical_shape != expected[name]
+                or inner.get_submodule(name.removeprefix(prefix)) is not module
+            ):
+                raise ValueError("checkpointed dequantization target ownership or execution differs")
+        occurrences = [
+            module
+            for _, module in inner.named_modules(remove_duplicate=False)
+            if isinstance(module, NativeLoraLinear4bit)
+        ]
+        if len(occurrences) != len(members) or {id(module) for module in occurrences} != {
+            id(module) for module in members
+        }:
+            raise ValueError("checkpointed dequantization block has an extra or misplaced target")
+        updates.append(
+            (block, partial(checkpoint, **expected_kwargs, context_fn=partial(checkpointed_dequant_contexts, members)))
+        )
+    occurrences = [
+        module for _, module in net.named_modules(remove_duplicate=False) if isinstance(module, NativeLoraLinear4bit)
+    ]
+    if len(occurrences) != len(expected) or {id(module) for module in occurrences} != {
+        id(module) for module in targets.values()
+    }:
+        raise ValueError("checkpointed dequantization found a target outside the verified language blocks")
+    # Assignment cannot invoke user code: every destination is the exact torch wrapper.
+    for block, checkpoint_fn in updates:
+        block.checkpoint_fn = checkpoint_fn
 
 
 _WRAPPER_PREFIXES: tuple[str, ...] = ("_orig_mod.", "_checkpoint_wrapped_module.")
@@ -959,6 +1166,11 @@ class Qwen3VLWeightMapper:
         CPU garbage collections while other ranks wait in all-gather. Full tensors remain
         bucket-scoped; these references only retain the model's existing shard storage.
         """
+        if getattr(_net(model), "_cosmos_adapter_metadata", None) is not None:
+            raise ValueError(
+                "native adapter models do not support serving weight publication; "
+                "export them with cosmos_framework.posttrain.checkpoint.tools.export_adapter_dense"
+            )
         state = _net(model).state_dict()  # values: local tensors or sharded DTensors, no gather
         self._export_state = state
         try:
@@ -971,6 +1183,11 @@ class Qwen3VLWeightMapper:
     def manifest(self, model: Any) -> list[WeightTensorSpec]:
         """Return a sorted metadata-only manifest without materializing FSDP tensors."""
         net = _net(model)
+        if getattr(net, "_cosmos_adapter_metadata", None) is not None:
+            raise ValueError(
+                "native adapter models do not support serving weight publication; "
+                "export them with cosmos_framework.posttrain.checkpoint.tools.export_adapter_dense"
+            )
         cached_owner = self._manifest_owner_ref() if self._manifest_owner_ref is not None else None
         if cached_owner is net:
             return list(self._manifest_cache)

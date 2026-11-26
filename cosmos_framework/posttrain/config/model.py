@@ -13,9 +13,14 @@ shape. ``tests/test_config_model_gr00t.py`` asserts this in a subprocess.
 
 from __future__ import annotations
 
+import math
 import os
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
+
+from cosmos_framework.posttrain.config.gr00t_bc import Gr00tBackboneAdaptation
 
 # Model backend identifiers used by the top-level selector and its thin dispatch.
 NATIVE = "native"
@@ -152,6 +157,200 @@ class HFModelConfig:
 # ---------------------------------------------------------------------------
 
 
+# The one supported native adapter profile: the seven attention/MLP projections of every
+# dense Qwen3-VL-8B language block.
+NATIVE_ADAPTER_TARGET_PROFILE = "qwen3_vl_8b_language_v1"
+# The pinned Qwen3-VL-8B ``text_config``; the adapter target shapes are derived from it.
+QWEN3_VL_8B_TEXT_ARCHITECTURE: dict[str, int] = {
+    "num_hidden_layers": 36,
+    "hidden_size": 4096,
+    "intermediate_size": 12288,
+    "num_attention_heads": 32,
+    "num_key_value_heads": 8,
+    "head_dim": 128,
+}
+NATIVE_ADAPTER_LANGUAGE_LAYERS = QWEN3_VL_8B_TEXT_ARCHITECTURE["num_hidden_layers"]
+NF4_BLOCK_SIZE = 64
+# Fixed parts of the native LoRA and NF4 representations. They are recorded in model identity.
+NATIVE_LORA_CONSTANTS: dict[str, Any] = {
+    "method": "lora",
+    "parameter_dtype": "float32",
+    "target_profile": NATIVE_ADAPTER_TARGET_PROFILE,
+    "bias": "none",
+    "modules_to_save": [],
+}
+NF4_CONSTANTS: dict[str, Any] = {
+    "backend": "bitsandbytes",
+    "format": "nf4",
+    "block_size": NF4_BLOCK_SIZE,
+    "nested": True,
+    "source_dtype": "bfloat16",
+    "storage_dtype": "uint8",
+    "compute_dtype": "bfloat16",
+    "target_profile": NATIVE_ADAPTER_TARGET_PROFILE,
+    "offload": "none",
+}
+
+
+@dataclass
+class NativeLoRAConfig:
+    """Native language-only LoRA; no PEFT preparation or implicit trainable modules.
+
+    Targets the seven attention/MLP projections of every dense Qwen3-VL-8B language block;
+    the builder verifies that complete set before loading. Adapter storage and optimizer
+    moments are FP32, independently of the BF16 base, and only the adapters are trained.
+    """
+
+    rank: int = 16
+    alpha: float = 32.0
+    dropout: float = 0.0
+    initialization: str = "kaiming_A_zero_B"
+    initialization_seed: int = 42
+    # The explicit preparation command publishes this immutable factor bundle.
+    # Its location is operational; only its content hash belongs in model identity.
+    initialization_artifact: str = ""
+    initialization_artifact_sha256: str = ""
+
+    def __post_init__(self) -> None:
+        if type(self.rank) is not int or self.rank <= 0:
+            raise ValueError("NativeLoRAConfig.rank must be a positive integer")
+        if type(self.alpha) not in (int, float) or not math.isfinite(self.alpha) or self.alpha <= 0:
+            raise ValueError("NativeLoRAConfig.alpha must be finite and positive")
+        if type(self.dropout) not in (int, float) or not math.isfinite(self.dropout) or not 0 <= self.dropout < 1:
+            raise ValueError("NativeLoRAConfig.dropout must be finite and in [0, 1)")
+        if type(self.initialization_seed) is not int or not 0 <= self.initialization_seed < 2**63:
+            raise ValueError("NativeLoRAConfig.initialization_seed must be an integer in [0, 2**63)")
+        if self.initialization not in ("kaiming_A_zero_B", "nf4_residual_svd"):
+            raise ValueError("NativeLoRAConfig.initialization supports kaiming_A_zero_B|nf4_residual_svd")
+        if not isinstance(self.initialization_artifact, str) or not isinstance(
+            self.initialization_artifact_sha256, str
+        ):
+            raise ValueError("NativeLoRAConfig initialization artifact path and SHA256 must be strings")
+        if self.initialization == "kaiming_A_zero_B":
+            if self.initialization_artifact or self.initialization_artifact_sha256:
+                raise ValueError("NativeLoRAConfig zero-B initialization forbids a residual factor artifact")
+        elif (
+            not os.path.isabs(self.initialization_artifact)
+            or re.fullmatch(r"[0-9a-f]{64}", self.initialization_artifact_sha256) is None
+        ):
+            raise ValueError("NativeLoRAConfig residual initialization requires an absolute artifact path and SHA256")
+
+
+def native_adapter_config_identity(adapter: NativeLoRAConfig) -> dict[str, Any]:
+    """Bind the adapter configuration, and a residual initializer by content rather than location."""
+    adapter.__post_init__()
+    identity = {**NATIVE_LORA_CONSTANTS, **asdict(adapter)}
+    identity.pop("initialization_artifact")
+    if adapter.initialization == "kaiming_A_zero_B":
+        identity.pop("initialization_artifact_sha256")
+    return identity
+
+
+@dataclass
+class QuantizedBaseTrainingConfig:
+    """Frozen NF4 base for native adapter training, separate from adapter configuration.
+
+    Packed NF4 values are stored as uint8 with nested (double) quantization; BF16 describes
+    the source and dequantized compute. Packed weights and their quantization state are
+    immutable during training and never optimizer members.
+    """
+
+    # Keep at most two complete language blocks dense; their LoRA targets remain.
+    excluded_language_layers: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        layers = self.excluded_language_layers
+        if (
+            not isinstance(layers, Sequence)
+            or isinstance(layers, (str, bytes))
+            or len(layers) > 2
+            or any(type(layer) is not int or not 0 <= layer < NATIVE_ADAPTER_LANGUAGE_LAYERS for layer in layers)
+            or len(set(layers)) != len(layers)
+        ):
+            raise ValueError(
+                "excluded_language_layers requires at most two distinct integer block IDs in "
+                f"[0, {NATIVE_ADAPTER_LANGUAGE_LAYERS - 1}]"
+            )
+        self.excluded_language_layers = tuple(sorted(layers))
+
+
+def quantization_config_identity(quantization: QuantizedBaseTrainingConfig | None) -> dict[str, Any] | None:
+    """Bind the NF4 representation and any nonempty dense-block choice."""
+    if quantization is None:
+        return None
+    quantization.__post_init__()
+    identity = {**NF4_CONSTANTS, **asdict(quantization)}
+    if not quantization.excluded_language_layers:
+        identity.pop("excluded_language_layers")
+    return identity
+
+
+# Native adapter SAC must match the names dispatched by torch's SDPA backend,
+# rather than the custom flash-attn names used by other model families. Keep this
+# policy dependency-light and versioned in checkpoint execution identities.
+NATIVE_ADAPTER_SAC_SAVE_OPS: tuple[str, ...] = (
+    r"^_scaled_dot_product_(?:flash_attention|efficient_attention|cudnn_attention|attention_math)(?:\.|$)",
+    r"^(?:mm|addmm|bmm)(?:\.|$)",
+)
+
+
+def validate_quantized_linear_execution(cfg: Any) -> None:
+    """Reject unsupported dense-weight lifetimes before loading a native base."""
+    execution = getattr(cfg, "quantized_linear_execution", "bnb")
+    if execution not in ("bnb", "checkpointed_dequant"):
+        raise ValueError("model_qwen3_vl.quantized_linear_execution must be bnb|checkpointed_dequant")
+    if execution == "bnb":
+        return
+    adapter = getattr(cfg, "adapter", None)
+    quantization = getattr(cfg, "quantized_base", None)
+    if adapter is None or quantization is None:
+        raise ValueError("checkpointed_dequant requires an explicit native LoRA adapter and frozen NF4 base")
+    if (
+        cfg.activation_checkpointing != "full"
+        or getattr(cfg, "adapter_compute_dtype", "float32") != "float32"
+        or getattr(cfg, "sft_logits_mode", "full") not in ("full", "supervised")
+        or getattr(cfg, "compile_language_model", False) is not False
+    ):
+        raise ValueError(
+            "checkpointed_dequant requires full nonreentrant activation checkpointing, "
+            "FP32 adapter compute, full or supervised logits and no language compilation"
+        )
+    if getattr(quantization, "excluded_language_layers", ()):
+        raise ValueError("checkpointed_dequant with excluded language layers is not supported")
+    if getattr(adapter, "initialization", None) != "kaiming_A_zero_B":
+        raise ValueError("checkpointed_dequant requires kaiming_A_zero_B; residual initialization is not supported")
+
+
+def native_adapter_execution_policy(cfg: Any) -> dict[str, Any]:
+    """Describe the execution settings that change native adapter numerics."""
+    mode = cfg.activation_checkpointing
+    quantized_execution = getattr(cfg, "quantized_linear_execution", "bnb")
+    if quantized_execution not in ("bnb", "checkpointed_dequant"):
+        raise ValueError("model_qwen3_vl.quantized_linear_execution must be bnb|checkpointed_dequant")
+    return {
+        "protocol": "cosmos.native-adapter-execution.v1",
+        "activation_checkpointing": {
+            "mode": mode,
+            "implementation": "none" if mode == "none" else "nonreentrant",
+            "preserve_rng_state": True,
+            "determinism_check": "default",
+            "save_ops_regex": list(NATIVE_ADAPTER_SAC_SAVE_OPS) if mode == "selective" else [],
+        },
+        "adapter_compute_dtype": getattr(cfg, "adapter_compute_dtype", "float32"),
+        "sft_logits_mode": getattr(cfg, "sft_logits_mode", "full"),
+        "language_compile": {
+            "enabled": getattr(cfg, "compile_language_model", False),
+            "dynamic": True,
+            "fullgraph": False,
+            "backend": "inductor",
+            "fail_on_recompile_limit_hit": True,
+        },
+        # checkpointed_dequant dequantizes each NF4 weight inside its full nonreentrant
+        # language-block checkpoint; inference always uses the bitsandbytes kernel.
+        "quantized_linear_execution": quantized_execution,
+    }
+
+
 @dataclass
 class Qwen3VLModelConfig:
     """Model-family config carried by a Qwen3-VL ``NativePolicyBuildSpec``.
@@ -170,7 +369,18 @@ class Qwen3VLModelConfig:
     dtype: str = "bfloat16"
     attn_impl: str = "eager"
     activation_checkpointing: str = "full"
+    # Parameters and optimizer moments stay FP32; only adapter GEMM arithmetic changes.
+    # OmegaConf structured configs do not support Literal annotations. Keep the
+    # accepted values explicit in __post_init__, as for the other model enums.
+    adapter_compute_dtype: str = "float32"
+    sft_logits_mode: str = "full"
+    compile_language_model: bool = False
+    quantized_linear_execution: str = "bnb"
     fsdp_reduce_dtype: str = "float32"
+    adapter: NativeLoRAConfig | None = None
+    quantized_base: QuantizedBaseTrainingConfig | None = None
+    # Declared repository/revision are verified and enriched with file hashes before loading.
+    source_identity: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.revision is not None and not isinstance(self.revision, str):
@@ -188,6 +398,55 @@ class Qwen3VLModelConfig:
                 "model_qwen3_vl.activation_checkpointing must be none|full|selective, got "
                 f"{self.activation_checkpointing!r}"
             )
+        if self.adapter_compute_dtype not in ("float32", "bfloat16"):
+            raise ValueError("model_qwen3_vl.adapter_compute_dtype must be float32|bfloat16")
+        if self.sft_logits_mode not in ("full", "supervised"):
+            raise ValueError("model_qwen3_vl.sft_logits_mode must be full|supervised")
+        if type(self.compile_language_model) is not bool:
+            raise TypeError("model_qwen3_vl.compile_language_model must be a bool")
+        if self.adapter is None and (
+            self.adapter_compute_dtype != "float32" or self.sft_logits_mode != "full" or self.compile_language_model
+        ):
+            raise ValueError("native adapter execution optimizations require an explicit adapter")
+        if not isinstance(self.source_identity, Mapping):
+            raise TypeError("model_qwen3_vl.source_identity must be a dictionary")
+        self.source_identity = dict(self.source_identity)
+        if self.adapter is not None:
+            if not isinstance(self.adapter, NativeLoRAConfig):
+                raise TypeError("model_qwen3_vl.adapter must be NativeLoRAConfig or None")
+            self.adapter.__post_init__()
+            if self.dtype != "bfloat16" or self.fsdp_reduce_dtype != "float32":
+                raise ValueError("native LoRA requires BF16 base dtype and FP32 reduce dtype")
+            if self.attn_impl != "sdpa":
+                raise ValueError("native LoRA requires attn_impl='sdpa'")
+            if self.trust_remote_code:
+                raise ValueError("native LoRA does not support trust_remote_code")
+        if self.quantized_base is not None:
+            if not isinstance(self.quantized_base, QuantizedBaseTrainingConfig):
+                raise TypeError("model_qwen3_vl.quantized_base must be QuantizedBaseTrainingConfig or None")
+            self.quantized_base.__post_init__()
+            if self.adapter is None:
+                raise ValueError("quantized_base requires an adapter; frozen-base full fine-tuning is unsupported")
+        if (
+            self.adapter is not None
+            and self.adapter.initialization == "nf4_residual_svd"
+            and self.quantized_base is None
+        ):
+            raise ValueError("native residual initialization requires its frozen NF4 base")
+        if (
+            self.adapter is not None
+            and self.adapter.initialization == "nf4_residual_svd"
+            and self.quantized_base is not None
+            and self.quantized_base.excluded_language_layers
+        ):
+            raise ValueError("residual initialization with excluded language layers is not supported")
+        if (
+            self.adapter is not None
+            and self.adapter.initialization == "nf4_residual_svd"
+            and self.adapter_compute_dtype != "float32"
+        ):
+            raise ValueError("native residual initialization currently requires FP32 adapter computation")
+        validate_quantized_linear_execution(self)
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +493,8 @@ class Gr00tN1d7ModelConfig:
 
     # None preserves the loader's buffer precision and historical policy identity.
     backbone_buffer_dtype: str | None = None
+    # Opt-in native flow-BC adaptation. None keeps the existing head-only/PPO identity.
+    backbone_adaptation: Gr00tBackboneAdaptation | None = None
 
     # Observation adaptation: GR00T MODALITY KEY -> env observation key. The left side is fixed by the
     # checkpoint's `processor_config.json` and is verified against the loaded checkpoint at startup;
@@ -245,6 +506,10 @@ class Gr00tN1d7ModelConfig:
     language_key: str = "annotation.language.language_instruction"
 
     def __post_init__(self) -> None:
+        if self.backbone_adaptation is not None:
+            if not isinstance(self.backbone_adaptation, Gr00tBackboneAdaptation):
+                raise TypeError("gr00t.backbone_adaptation must be Gr00tBackboneAdaptation or None")
+            self.backbone_adaptation.__post_init__()
         if self.backbone_buffer_dtype not in (None, "bfloat16"):
             raise ValueError("gr00t.backbone_buffer_dtype must be None or bfloat16")
         for name in ("model_action_horizon", "training_prefix", "execution_horizon", "denoising_steps"):
@@ -305,6 +570,10 @@ class Gr00tN1d7ModelConfig:
         result = {k: (list(v) if isinstance(v, tuple) else v) for k, v in asdict(self).items()}
         if self.backbone_buffer_dtype is None:
             result.pop("backbone_buffer_dtype")
+        if self.backbone_adaptation is None:
+            result.pop("backbone_adaptation")
+        elif self.backbone_adaptation.action_head_adapter_profile is None:
+            result["backbone_adaptation"].pop("action_head_adapter_profile")
         return result
 
     def identity_hash(self) -> str:

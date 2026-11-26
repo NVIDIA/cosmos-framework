@@ -63,6 +63,8 @@ dev = [
 # Preserve the existing RL default; opt in with --no-group transformers4 --group sft.
 transformers4 = ["transformers==4.57.6"]
 sft = ["transformers==5.8.1", "torchcodec==0.11.0", "torchvision==0.26.0", "trimesh"]
+# Native frozen-base adapter training; select alongside sft and cu128-runtime.
+qlora = ["bitsandbytes==0.49.2"]
 # Each Docker runtime group selects its exact vLLM wheel here so uv locks the
 # matching CUDA dependency metadata even though Docker installs the verified
 # wheel separately. vLLM 0.23.0 pins Torch 2.11 and remains compatible with the

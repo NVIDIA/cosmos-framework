@@ -3,7 +3,8 @@
 
 # Cosmos3-Nano GPU test suite on a self-hosted H200 runner.
 #
-# Every job is 4-GPU: each sets ``TEST_MAX_GPUS: "4"``, which is what
+# Every Cosmos3 job is 4-GPU (native-qlora-tests uses one GPU and its own
+# Posttrain environment): each sets ``TEST_MAX_GPUS: "4"``, which is what
 # ``cosmos_framework/inference/fixtures/args.py`` reads to build
 # ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)`` -- the set of widths ``--num-gpus`` and the
 # ``gpus(N)`` markers may name. The env var and the ``--num-gpus`` flag must
@@ -14,13 +15,14 @@
 # jobs wait on both, so the self-hosted runner is never spent on a lint-failing
 # commit or on a change limited to ``.agents/**`` and Markdown files. The
 # relevant docs, cookbook, and WSM workflows still validate those changes.
-# The six GPU jobs then run (one at a time on the single runner):
+# The GPU jobs then run (one at a time on the single runner):
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
 #   * generator-training-regression — vision_sft_nano loss vs goldens
 #   * generator-inference-smoke     — Nano + Edge multi-modality inference (t2vs/t2v + policy + forward_dynamics) + Nano ModelOpt FP8
 #   * distilled-inference-smoke     — Super 4-step T2I + I2V inference
 #   * reasoner-inference-smoke      — Nano reasoner golden + Edge reasoner smoke + Qwen conversion coverage
 #   * reasoner-training-regression  — llava_ov loss vs goldens
+#   * native-qlora-tests            — Posttrain native QLoRA unit tests (locked Posttrain env, 1 GPU)
 #
 # Requires:
 #   * a self-hosted runner labelled [self-hosted, gpu, h200] with at least 4
@@ -55,6 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       run_gpu: ${{ steps.filter.outputs.run_gpu }}
+      run_qlora: ${{ steps.filter.outputs.run_qlora }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -77,7 +80,14 @@ jobs:
           done
 
           run_gpu=true
+          run_qlora=true
           if git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_files"; then
+            # Native QLoRA tests need the separate Posttrain environment; run them only
+            # when code they exercise or the workflow itself changes.
+            run_qlora=false
+            if grep -qE '^(cosmos_framework/posttrain/|cosmos_framework/utils/|cosmos_framework/model/generator/reasoner/|cosmos_framework/configs/|docker/posttrain/|conftest\.py$|\.pytest\.toml$|\.github/workflows/gpu-tests\.yml$)' "$changed_files"; then
+              run_qlora=true
+            fi
             run_gpu=false
             while IFS= read -r path; do
               case "$path" in
@@ -93,6 +103,7 @@ jobs:
           fi
 
           echo "run_gpu=$run_gpu" >> "$GITHUB_OUTPUT"
+          echo "run_qlora=$run_qlora" >> "$GITHUB_OUTPUT"
           echo "Run GPU tests: \`$run_gpu\`" >> "$GITHUB_STEP_SUMMARY"
 
   training-smoke:
@@ -570,3 +581,54 @@ jobs:
         if: always()
         run: |
           rm -rf "$PYTEST_DEBUG_TEMPROOT" outputs examples/checkpoints schemas || true
+
+  # Native QLoRA lives under the upstream-mapped cosmos_framework/posttrain tree, which the
+  # unittest job above leaves to upstream CI. Run its tests here in the locked Posttrain
+  # environment with the optional `qlora` (bitsandbytes) group, so the real NF4 CUDA kernels
+  # are exercised. Posttrain tests follow upstream's test_*.py naming. Tests that need the
+  # optional Isaac-GR00T or Alpamayo-R1 packages (docker/posttrain/native_action) skip here.
+  native-qlora-tests:
+    needs: [pre-commit, changes]
+    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_qlora != 'false') }}
+    runs-on: [self-hosted, gpu, h200]
+    timeout-minutes: 45
+    env:
+      PYTEST_DEBUG_TEMPROOT: /tmp/pytest-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+      QLORA_VENV: ${{ github.workspace }}/.venv-posttrain-qlora
+      CUBLAS_WORKSPACE_CONFIG: ":4096:8"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Isolate the pytest temp root
+        run: mkdir -p "$PYTEST_DEBUG_TEMPROOT"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          # Keep in step with [tool.uv].constraint-dependencies in pyproject.toml.
+          version: "0.11.29"
+
+      - name: Sync Posttrain environment (dev, sft, cu128-runtime, qlora)
+        run: |
+          UV_PROJECT_ENVIRONMENT="$QLORA_VENV" uv sync --project docker/posttrain/environment \
+            --frozen --python 3.12 --no-default-groups \
+            --group dev --group sft --group cu128-runtime --group qlora
+
+      # The GPU tests skip without CUDA; fail here instead of passing without kernel coverage.
+      - name: Check CUDA and bitsandbytes
+        run: |
+          # As in the unittest job: use the venv's CUDA libraries, not the runner's.
+          export LD_LIBRARY_PATH=
+          "$QLORA_VENV/bin/python" -c "import torch, bitsandbytes; assert torch.cuda.is_available(), 'CUDA is not available'; print(torch.cuda.get_device_name(0), bitsandbytes.__version__)"
+
+      - name: Native QLoRA unit tests
+        run: |
+          export LD_LIBRARY_PATH=
+          "$QLORA_VENV/bin/python" -m pytest -q -rs -p no:cacheprovider -o addopts= -o 'python_files=test_*.py' \
+            cosmos_framework/posttrain/tests/qlora \
+            cosmos_framework/posttrain/tests/test_utils_determinism.py \
+            cosmos_framework/posttrain/tests/test_control_checkpointing.py \
+            cosmos_framework/posttrain/tests/test_model_gr00t_calibrated_ppo.py
+
+      - name: Clean up run outputs
+        if: always()
+        run: rm -rf "$PYTEST_DEBUG_TEMPROOT" "$QLORA_VENV" || true

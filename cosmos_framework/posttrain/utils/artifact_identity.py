@@ -45,7 +45,7 @@ def _is_weight_file(name: str) -> bool:
     return name.endswith(WEIGHT_SUFFIXES)
 
 
-def _sha256(path: Path) -> tuple[int, str]:
+def sha256_file(path: Path) -> tuple[int, str]:
     """Size and SHA-256 of one stable complete file, read in bounded-memory chunks."""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -86,10 +86,10 @@ def model_artifact_identity(model_dir: str | os.PathLike[str]) -> dict[str, Any]
                 continue
             relative = path.relative_to(root).as_posix()
             if _is_metadata_file(filename):
-                _size, file_sha256 = _sha256(path)
+                _size, file_sha256 = sha256_file(path)
                 metadata.append((relative, file_sha256))
             elif _is_weight_file(filename):
-                size, file_sha256 = _sha256(path)
+                size, file_sha256 = sha256_file(path)
                 weights.append((relative, size, file_sha256))
     if not weights:
         raise ValueError(

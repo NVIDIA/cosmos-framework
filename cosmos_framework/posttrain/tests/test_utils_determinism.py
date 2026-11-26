@@ -29,10 +29,11 @@ def _restore_determinism_state(monkeypatch):
     prev_cudnn_deterministic = torch.backends.cudnn.deterministic
     prev_cudnn_benchmark = torch.backends.cudnn.benchmark
     prev_deterministic_algorithms = torch.are_deterministic_algorithms_enabled()
+    prev_warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
     yield
     torch.backends.cudnn.deterministic = prev_cudnn_deterministic
     torch.backends.cudnn.benchmark = prev_cudnn_benchmark
-    torch.use_deterministic_algorithms(prev_deterministic_algorithms, warn_only=True)
+    torch.use_deterministic_algorithms(prev_deterministic_algorithms, warn_only=prev_warn_only)
 
 
 @pytest.mark.L0
@@ -43,13 +44,29 @@ def test_enable_determinism_sets_every_knob(monkeypatch):
     # initializes CUDA before every test — including CPU-marked ones — so without this the guard
     # correctly fires and this test fails for a reason that has nothing to do with what it asserts.
     monkeypatch.setattr(torch.cuda, "is_initialized", lambda: False)
-    monkeypatch.delenv("CUBLAS_WORKSPACE_CONFIG", raising=False)
-    monkeypatch.delenv("FLASH_ATTENTION_DETERMINISTIC", raising=False)
+    # setenv first so monkeypatch restores the variables enable_determinism() sets.
+    for name in ("CUBLAS_WORKSPACE_CONFIG", "FLASH_ATTENTION_DETERMINISTIC"):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
     enable_determinism()
     assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
     assert os.environ["FLASH_ATTENTION_DETERMINISTIC"] == "1"
     assert torch.backends.cudnn.deterministic is True
     assert torch.backends.cudnn.benchmark is False
+    assert torch.are_deterministic_algorithms_enabled() is True
+    assert torch.is_deterministic_algorithms_warn_only_enabled() is True
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("strict", [False, True])
+def test_explicit_strict_mode_controls_pytorch_enforcement(monkeypatch, strict):
+    monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    monkeypatch.setenv("FLASH_ATTENTION_DETERMINISTIC", "0")
+    enable_determinism(strict=strict)
+    assert torch.are_deterministic_algorithms_enabled() is True
+    assert torch.is_deterministic_algorithms_warn_only_enabled() is not strict
+    assert os.environ["FLASH_ATTENTION_DETERMINISTIC"] == "1"
 
 
 @pytest.mark.L0

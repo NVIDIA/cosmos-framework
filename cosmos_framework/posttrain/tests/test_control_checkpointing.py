@@ -96,7 +96,7 @@ def test_lifecycle_builds_direct_primary_with_the_canonical_default_prefix(
 def test_lifecycle_delegates_cross_option_policy_to_the_manager() -> None:
     rl = _rl(
         checkpoint_format="consolidated",
-        checkpoint_store=CheckpointStoreConfig(backend="object_store"),
+        checkpoint_store=CheckpointStoreConfig(backend="object_store", bucket="test-checkpoints"),
     )
 
     with pytest.raises(ValueError, match="requires checkpoint_format='dcp'"):
