@@ -37,7 +37,7 @@ from dataclasses import asdict, dataclass, field
 from fractions import Fraction
 from numbers import Real
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from cosmos_framework.posttrain.algorithm.reward import RULE_REWARDS
 from cosmos_framework.posttrain.config.placement import normalize_gpu_placement
@@ -46,6 +46,7 @@ from cosmos_framework.posttrain.schema.checkpoint import (
     FULL_CHECKPOINT_COMPONENTS,
     CheckpointComponentPlan,
 )
+from cosmos_framework.utils.quantized_optimizer_names import QUANTIZED_OPTIMIZER_NAMES, validate_quantized_options
 
 
 def _normalize_checkpoint_components(
@@ -63,8 +64,12 @@ def _normalize_checkpoint_components(
 OPTIMIZER_IMPLS: tuple[str, ...] = ("fused", "foreach", "for-loop")
 """torch kernel choices for `OptimizerConfig.impl` — cosmos-rl's `optm_impl` values verbatim."""
 
-OPTIMIZER_NAMES: tuple[str, ...] = ("adamw", "fusedadam", "muon")
+
+OPTIMIZER_NAMES: tuple[str, ...] = ("adamw", "fusedadam", "muon", *QUANTIZED_OPTIMIZER_NAMES)
 """Optimizer CLASSES `OptimizerConfig.name` selects (its docstring describes each); `build_optimizer` dispatches on them."""
+
+OPTIMIZER_IDENTITY_OPT_IN_FIELDS: tuple[str, ...] = ("bnb_min_8bit_size", "bnb_fp32_state_names", "update_policy")
+"""`OptimizerConfig` fields omitted from run identities while at their defaults (pre-existing identities unchanged)."""
 
 FIXED_NORMALISER_OPTIMIZER_EPS_CEILING: float = 1e-7
 """Largest `OptimizerConfig.eps` that `GRPOConfig` accepts silently under
@@ -208,6 +213,15 @@ class OptimizerConfig:
       Fine for fp32 nets (toys/tests); do NOT use for real bf16 posttraining.
     - "fusedadam" — apex-fused AdamW with fp32 master weights + fp32 moments
       (`utils/fused_adam.py`). Requires apex + GPU (training containers ship it).
+    - "adamw_bnb_8bit" / "paged_adamw_8bit" — bitsandbytes 0.49.2 blockwise
+      eight-bit moments, with managed memory only for the paged name. The default
+      parameter-update policy uses ordinary FP32 trainables on one CUDA device
+      with consolidated checkpoints. The explicit `fp32_master` policy bridges
+      BF16 storage and one-dimensional native FSDP2 shards to local FP32 updates
+      with same-topology recovery; model/workflow qualification remains separate. Small
+      tensors and exact-name `bnb_fp32_state_names` exceptions retain FP32 moments.
+      The bitsandbytes backends alone keep no master weights for BF16-stored trainables;
+      `update_policy="fp32_master"` supplies them.
     - "muon" — the shared `MuonWithAuxAdamW`: Muon for hidden `nn.Linear` weights and explicitly
       declared stacked MoE expert matrices, with its auxiliary fused AdamW route for embeddings,
       output heads, routers, norms, biases, convolutions and other parameters. Fused expert gate/up
@@ -287,7 +301,37 @@ class OptimizerConfig:
     muon_ns_steps: int = 5
     muon_rms_match: float = 0.2
 
+    # Append backend fields to preserve the existing dataclass positional API.
+    bnb_min_8bit_size: int = 4096
+    bnb_fp32_state_names: list[str] = field(default_factory=list)
+    # Explicit update policy: preserve BF16 model storage with optimizer-owned FP32
+    # local masters. Also usable with AdamW as the matched high-precision control.
+    update_policy: str = "parameter"
+
     def __post_init__(self) -> None:
+        if self.update_policy not in ("parameter", "fp32_master"):
+            raise ValueError("optimizer.update_policy must be parameter or fp32_master")
+        if self.update_policy == "fp32_master" and self.name not in ("adamw", *QUANTIZED_OPTIMIZER_NAMES):
+            raise ValueError("fp32_master supports AdamW and bitsandbytes AdamW only")
+        if self.update_policy == "fp32_master" and not self.force_finite_grads:
+            # The master owner relies on the trainer's rank-consistent finite check: without it a
+            # NaN window would abort the run (posttrain policy "raise") and every step would pay a
+            # second collective and host sync to decide finiteness inside the optimizer.
+            raise ValueError("optimizer.update_policy=fp32_master requires force_finite_grads=True")
+        if self.name not in QUANTIZED_OPTIMIZER_NAMES and (self.bnb_min_8bit_size != 4096 or self.bnb_fp32_state_names):
+            raise ValueError("bnb state options require a bitsandbytes optimizer")
+        if self.name in QUANTIZED_OPTIMIZER_NAMES and not self.force_finite_grads:
+            raise ValueError("bitsandbytes optimizers require force_finite_grads=True")
+        if self.name in QUANTIZED_OPTIMIZER_NAMES:
+            # Refuse invalid backend options before allocating a large model.
+            validate_quantized_options(
+                lr=self.lr,
+                eps=self.eps,
+                weight_decay=self.weight_decay,
+                betas=self.betas,
+                bnb_min_8bit_size=self.bnb_min_8bit_size,
+                bnb_fp32_state_names=self.bnb_fp32_state_names,
+            )
         if self.name not in OPTIMIZER_NAMES:
             raise ValueError(f"OptimizerConfig.name={self.name!r} must be one of {OPTIMIZER_NAMES}")
         if self.name == "muon":
@@ -1304,7 +1348,28 @@ class RunConfig:
     # into the shared default.
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
 
+    # Opt-in capabilities. Only workflows whose trainer save/load understands the
+    # backend's checkpoint schema enable these; every other RunConfig rejects them here.
+    supports_quantized_optimizer: ClassVar[bool] = False
+    # ``update_policy="fp32_master"`` checkpoints use MasterWeightOptimizer's rank-local
+    # schema, which only LLMTrainer's save/load (SFT, Joint PPO) understands.
+    supports_fp32_master_optimizer: ClassVar[bool] = False
+
     def __post_init__(self) -> None:
+        for optimizer in (self.optimizer, getattr(self, "critic_optimizer", None)):
+            if getattr(optimizer, "name", None) in QUANTIZED_OPTIMIZER_NAMES and not self.supports_quantized_optimizer:
+                raise ValueError(
+                    f"quantized optimizers are not supported by {type(self).__name__}; "
+                    "supported: native SFT and GR00T Joint PPO"
+                )
+            if (
+                getattr(optimizer, "update_policy", "parameter") == "fp32_master"
+                and not self.supports_fp32_master_optimizer
+            ):
+                raise ValueError(
+                    f"optimizer.update_policy=fp32_master is not supported by {type(self).__name__}; "
+                    "its trainer cannot save/restore the rank-local master schema (supported: native SFT, Joint PPO)"
+                )
         if isinstance(self.max_steps, bool) or not isinstance(self.max_steps, int) or self.max_steps < 0:
             raise ValueError(f"max_steps must be a non-negative integer, got {self.max_steps!r}")
         if isinstance(self.save_every, bool) or not isinstance(self.save_every, int) or self.save_every < 0:
@@ -3232,6 +3297,9 @@ class PPOBaseConfig(RunConfig):
 class JointPPOConfig(PPOBaseConfig):
     """Synchronous decision windows with one jointly optimized actor/value model."""
 
+    supports_quantized_optimizer: ClassVar[bool] = True
+    supports_fp32_master_optimizer: ClassVar[bool] = True
+
     num_envs: int = 8
     window_decisions: int = 16
     global_minibatch: int = 32
@@ -3250,6 +3318,10 @@ class JointPPOConfig(PPOBaseConfig):
     checkpoint_format: str = "dcp"
     save_async: bool = False
     keep_optim_last: int | None = 0
+    # Opt-in diagnostics: every update gathers each rank's CUDA caching-allocator counters (and
+    # resets the process-wide peak counters) into the update receipt's ``cuda_allocator``.
+    # Not part of the run identity.
+    cuda_allocator_receipts: bool = False
     optimizer: OptimizerConfig = field(
         default_factory=lambda: OptimizerConfig(
             lr=5e-6,
@@ -3284,6 +3356,8 @@ class JointPPOConfig(PPOBaseConfig):
                 raise ValueError(f"rl.{name} must be a positive integer")
         if type(self.verify_behavior_logprobs) is not bool:
             raise ValueError("rl.verify_behavior_logprobs must be a boolean")
+        if type(self.cuda_allocator_receipts) is not bool:
+            raise ValueError("rl.cuda_allocator_receipts must be a boolean")
         if self.time_limit_bootstrap not in ("value", "zero"):
             raise ValueError("rl.time_limit_bootstrap must be 'value' or 'zero'")
         if self.loss_reduction not in ("decision_mean", "fixed_episode_mean"):
@@ -3300,12 +3374,21 @@ class JointPPOConfig(PPOBaseConfig):
             raise ValueError("joint PPO requires synchronous dcp checkpoints and rl.grad_accum=1")
         if self.optimizer.train_keys or self.optimizer.decay_groups:
             raise ValueError("joint PPO owns the complete actor/value parameter partition")
+        if self.optimizer.name in QUANTIZED_OPTIMIZER_NAMES and self.optimizer.update_policy != "fp32_master":
+            raise ValueError("native Joint PPO quantized optimizers require optimizer.update_policy=fp32_master")
 
     def identity(self) -> dict:
         from dataclasses import asdict
 
         from cosmos_framework.posttrain.utils.identity import canonical_config_value
 
+        optimizer_identity = asdict(self.optimizer)
+        # Fields added by the opt-in eight-bit/master work appear only when set, so every
+        # existing run (all defaults) keeps its pre-existing identity and exact resume.
+        defaults = OptimizerConfig()
+        for name in OPTIMIZER_IDENTITY_OPT_IN_FIELDS:
+            if optimizer_identity[name] == getattr(defaults, name):
+                optimizer_identity.pop(name)
         return {
             "algorithm": "joint-ppo-v3",
             # Version 3 already requires verification; only the explicit opt-out
@@ -3335,7 +3418,7 @@ class JointPPOConfig(PPOBaseConfig):
                 if self.loss_reduction == "fixed_episode_mean"
                 else "actor-local-correction1-std-plus-1e-5"
             ),
-            "optimizer": canonical_config_value(asdict(self.optimizer)),
+            "optimizer": canonical_config_value(optimizer_identity),
         }
 
 

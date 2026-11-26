@@ -55,6 +55,9 @@ dependencies = [
   "webdataset",
 ]
 
+[project.optional-dependencies]
+quantized-optimizers = ["bitsandbytes==0.49.2"]
+
 [dependency-groups]
 dev = [
   "pytest",

@@ -55,9 +55,10 @@ from torch.distributed.checkpoint.default_planner import DefaultSavePlanner
 
 from cosmos_framework.checkpoint.base import AbstractCheckpointer, CheckpointLoadSource
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
-from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils import callback, distributed, log, misc
+from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.quantized_optimizer_names import refuse_rank_local_optimizer
 from cosmos_framework.utils.reasoner.model_wrapper import ModelWrapper
 from cosmos_framework.utils.reasoner.optimizer import OptimizersContainer
 from cosmos_framework.utils.reasoner.planner import RenameLoadPlanner
@@ -271,6 +272,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
         grad_scaler: torch.amp.GradScaler | None = None,
     ) -> int:
+        refuse_rank_local_optimizer(optimizer, "The reasoner DistributedCheckpointer")
         del grad_scaler
 
         self.callbacks.on_load_checkpoint_start(model_parts)
@@ -476,6 +478,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
             grad_scaler (torch.amp.GradScaler): The gradient scaler (for mixed precision training).
             iteration (int): Current iteration number.
         """
+        refuse_rank_local_optimizer(optimizer, "The reasoner DistributedCheckpointer")
         del grad_scaler
         self.callbacks.on_save_checkpoint_start(model_parts, iteration)
 

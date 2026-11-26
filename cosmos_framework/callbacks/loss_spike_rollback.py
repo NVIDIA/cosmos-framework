@@ -27,10 +27,12 @@ trip the same edge.
 MEMORY: the ring holds ``rollback_depth`` copies of every trainable parameter plus its
 two AdamW moments. That is roughly 1.2GB for a rank-64 LoRA adapter, but it scales with
 the *trainable* parameter count, so full fine-tuning of an 8B model would need hundreds
-of gigabytes. Hence ``enabled`` defaults to False; turn it on for PEFT.
+of gigabytes. Hence ``enabled`` defaults to False; turn it on for PEFT. Paged eight-bit
+moments are the exception: their snapshots are staged in pinned host memory, not VRAM.
 """
 
 from collections import deque
+from copy import deepcopy
 from typing import Any
 
 import torch
@@ -38,11 +40,27 @@ import torch.distributed as dist
 
 from cosmos_framework.utils import log
 from cosmos_framework.utils.callback import Callback
+from cosmos_framework.utils.quantized_optimizer import copy_state_tensor, device_view
+from cosmos_framework.utils.quantized_optimizer_names import is_local_master_optimizer, is_quantized_optimizer
 
 try:  # ImaginaireModel is only needed for type hints.
     from cosmos_framework.model._base import ImaginaireModel
 except Exception:  # pragma: no cover - typing convenience only
     ImaginaireModel = Any  # type: ignore[assignment,misc]
+
+
+def _masters_match(saved: dict[int, list[torch.Tensor | None]], opts: list[torch.optim.Optimizer]) -> bool:
+    """Whether every snapshotted FP32 master still has a live counterpart of the same shape and dtype."""
+    for opt_index, saved_masters in saved.items():
+        if opt_index >= len(opts) or not is_local_master_optimizer(opts[opt_index]):
+            return False
+        live = opts[opt_index].masters
+        if len(live) != len(saved_masters) or any(
+            copy is not None and (copy.shape != master.shape or copy.dtype != master.dtype)
+            for master, copy in zip(live, saved_masters)
+        ):
+            return False
+    return True
 
 
 def _real_optimizers(optimizer: Any) -> list[torch.optim.Optimizer]:
@@ -219,29 +237,56 @@ class LossSpikeRollback(Callback):
     @torch.no_grad()
     def _capture(self, model: "ImaginaireModel", optimizer: torch.optim.Optimizer) -> None:
         params = {name: p.detach().clone() for name, p in model.named_parameters() if p.requires_grad}
-        moments: dict[tuple[int, int], dict[str, torch.Tensor]] = {}
+        moments: dict[tuple[int, int], dict[str, Any]] = {}
+        masters: dict[int, list[torch.Tensor | None]] = {}
         for opt_index, opt in enumerate(_real_optimizers(optimizer)):
+            if is_local_master_optimizer(opt):
+                # The FP32-master owner writes its masters back into the model on every step, so
+                # a rewind that skipped them would be undone by the next update. An FP32 master
+                # aliases its parameter's storage, already captured in ``params``: no second copy.
+                masters[opt_index] = [
+                    None if live.dtype == torch.float32 else master.detach().clone()
+                    for live, master in zip(opt.live, opt.masters)
+                ]
+            # bitsandbytes' quantization maps (``qmap1``/``qmap2``) are constant lookup tables shared
+            # by every parameter; the optimizer never writes them, so they are neither copied nor
+            # restored.
+            constant = ("qmap",) if is_quantized_optimizer(opt) else ()
             for index, parameter in enumerate(p for group in opt.param_groups for p in group["params"]):
                 state = opt.state.get(parameter)
                 if not state:
                     continue
+                # Non-tensor entries matter too: bitsandbytes keeps ``step`` as a Python int, and
+                # restoring old moments with an advanced step would change bias correction. Tensors
+                # are cloned where they live, except paged moments: a device clone would put their
+                # bytes back in VRAM, which paging exists to avoid, so they are staged in pinned host
+                # memory, stream-ordered after the step that wrote them.
                 moments[(opt_index, index)] = {
-                    key: value.detach().clone() for key, value in state.items() if isinstance(value, torch.Tensor)
+                    key: copy_state_tensor(value, ordinary="device")
+                    if isinstance(value, torch.Tensor)
+                    else deepcopy(value)
+                    for key, value in state.items()
+                    if not key.startswith(constant)
                 }
-        self._ring.append({"params": params, "moments": moments})
+        self._ring.append({"params": params, "moments": moments, "masters": masters})
 
     @torch.no_grad()
     def _restore(self, model: "ImaginaireModel", optimizer: torch.optim.Optimizer) -> bool:
         if not self._ring:
             return False
         snapshot = self._ring[0]
+        opts = _real_optimizers(optimizer)
+        if not _masters_match(snapshot.get("masters", {}), opts):
+            # Checked before anything is written, so a mismatch never leaves a half-applied rewind.
+            log.warning("LossSpikeRollback: snapshot FP32 masters do not match the current optimizer; not rolling back")
+            return False
         named = dict(model.named_parameters())
         for name, saved in snapshot["params"].items():
             target = named.get(name)
             if target is not None:
                 target.detach().copy_(saved)
-        opts = _real_optimizers(optimizer)
         flats = [[p for group in opt.param_groups for p in group["params"]] for opt in opts]
+        paged_devices: set[torch.device] = set()
         for (opt_index, index), saved_state in snapshot["moments"].items():
             if opt_index >= len(opts) or index >= len(flats[opt_index]):
                 continue
@@ -249,8 +294,25 @@ class LossSpikeRollback(Callback):
             if not state:
                 continue
             for key, saved in saved_state.items():
-                if key in state and isinstance(state[key], torch.Tensor):
-                    state[key].copy_(saved)
+                if key not in state:
+                    continue
+                if isinstance(state[key], torch.Tensor):
+                    target = device_view(state[key])
+                    if target is not state[key]:
+                        paged_devices.add(target.device)
+                    # A pinned host snapshot of paged state goes back through the CUDA view, on the
+                    # current stream, so the next optimizer step is ordered after it.
+                    target.copy_(saved, non_blocking=True)
+                else:
+                    state[key] = deepcopy(saved)
+        for opt_index, saved_masters in snapshot.get("masters", {}).items():
+            for master, saved in zip(opts[opt_index].masters, saved_masters):
+                if saved is not None:  # None: aliases a parameter restored above
+                    master.copy_(saved)
+        for device in paged_devices:
+            # Managed pages are also reachable from the host (checkpoint snapshots, host-side
+            # checks): finish the restore before anything can read them outside stream order.
+            torch.cuda.synchronize(device)
         # Everything newer than the restored point came after the poisoned step, so it is
         # not a safe place to rewind to a second time. The gradient-norm history is NOT
         # cleared alongside it: those samples were all taken before the spike (the spiking

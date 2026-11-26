@@ -9,6 +9,8 @@ from typing import Any
 
 import torch
 
+# Defined in posttrain.utils.dist so utils.optimizer_master can share it; re-exported here.
+from cosmos_framework.posttrain.utils.dist import all_ranks_tensor_true as all_ranks_tensor_true
 from cosmos_framework.posttrain.utils.dist import collective_device
 
 
@@ -83,6 +85,13 @@ def _finite_flags_by_device(tensors: Iterable[torch.Tensor]) -> dict[torch.devic
     for tensor in tensors:
         if not (tensor.is_floating_point() or tensor.is_complex()):
             continue
+        if getattr(tensor, "is_paged", False):
+            # Paged FP32 optimizer moments are CPU tensors over CUDA managed memory: a host scan
+            # would migrate every page to the CPU (and back for the next step). Check them on
+            # their GPU through a zero-copy CUDA view, stream-ordered after the update kernels.
+            from cosmos_framework.utils.quantized_optimizer import device_view
+
+            tensor = device_view(tensor)  # [*]
         finite = torch.isfinite(tensor).all()  # []
         device_flag = flags.get(tensor.device)
         if device_flag is None:
@@ -123,17 +132,6 @@ def all_ranks_tensors_finite(value: Any, *, require_any: bool = False) -> bool:
     flags = _finite_flags_by_device(leaves)
     local_status = _local_finite_status(flags.values(), missing_required=require_any and not leaves)  # []
     return _all_ranks_status(local_status) == 0
-
-
-def all_ranks_tensor_true(local_flag: torch.Tensor) -> bool:  # local_flag: [], returns scalar bool
-    """Logical-AND a scalar tensor flag with one host synchronization total."""
-    import torch.distributed as dist
-
-    if not (dist.is_initialized() and dist.get_world_size() > 1):
-        return bool(local_flag.item())
-    flag = local_flag.to(device=collective_device(), dtype=torch.int32)  # []
-    dist.all_reduce(flag, op=dist.ReduceOp.MIN)
-    return bool(flag.item())
 
 
 def all_ranks_tensor_finite(tensor: torch.Tensor) -> bool:  # tensor: [*], returns scalar bool

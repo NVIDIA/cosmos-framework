@@ -293,6 +293,21 @@ wheels = [
 ]
 
 [[package]]
+name = "bitsandbytes"
+version = "0.49.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl" }, marker = "extra == 'group-17-cosmos3-posttrain-cu128-runtime' or (extra == 'group-17-cosmos3-posttrain-gr00t-cu130-aarch64' and extra == 'group-17-cosmos3-posttrain-sft') or (extra == 'group-17-cosmos3-posttrain-sft' and extra == 'group-17-cosmos3-posttrain-transformers4')" },
+    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl" }, marker = "extra == 'group-17-cosmos3-posttrain-cu130-aarch64' or extra == 'group-17-cosmos3-posttrain-cu130-runtime' or extra == 'group-17-cosmos3-posttrain-gr00t-cu130-aarch64' or extra == 'group-17-cosmos3-posttrain-nixl-cu130-aarch64' or extra != 'group-17-cosmos3-posttrain-cu128-runtime' or (extra == 'group-17-cosmos3-posttrain-sft' and extra == 'group-17-cosmos3-posttrain-transformers4')" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/29/71/acff7af06c818664aa87ff73e17a52c7788ad746b72aea09d3cb8e424348/bitsandbytes-0.49.2-py3-none-manylinux_2_24_aarch64.whl", hash = "sha256:2fc0830c5f7169be36e60e11f2be067c8f812dfcb829801a8703735842450750", size = 31442815, upload-time = "2026-02-16T21:26:06.783Z" },
+    { url = "https://files.pythonhosted.org/packages/19/57/3443d6f183436fbdaf5000aac332c4d5ddb056665d459244a5608e98ae92/bitsandbytes-0.49.2-py3-none-manylinux_2_24_x86_64.whl", hash = "sha256:54b771f06e1a3c73af5c7f16ccf0fc23a846052813d4b008d10cb6e017dd1c8c", size = 60651714, upload-time = "2026-02-16T21:26:11.579Z" },
+]
+
+[[package]]
 name = "blake3"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -575,6 +590,11 @@ dependencies = [
     { name = "websockets" },
 ]
 
+[package.optional-dependencies]
+quantized-optimizers = [
+    { name = "bitsandbytes" },
+]
+
 [package.dev-dependencies]
 cu128-runtime = [
     { name = "cuda-bindings", version = "12.9.4", source = { registry = "https://pypi.org/simple" } },
@@ -747,6 +767,7 @@ requires-dist = [
     { name = "accelerate" },
     { name = "attrs", specifier = "==25.4.0" },
     { name = "av" },
+    { name = "bitsandbytes", marker = "extra == 'quantized-optimizers'", specifier = "==0.49.2" },
     { name = "boto3" },
     { name = "cattrs" },
     { name = "datasets", specifier = "==4.6.1" },
@@ -785,6 +806,7 @@ requires-dist = [
     { name = "webdataset" },
     { name = "websockets" },
 ]
+provides-extras = ["quantized-optimizers"]
 
 [package.metadata.requires-dev]
 cu128-runtime = [

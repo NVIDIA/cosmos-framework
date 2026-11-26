@@ -27,9 +27,6 @@ from torch.distributed.checkpoint.state_dict import (
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.nn.modules.module import _IncompatibleKeys
 
-from cosmos_framework.model._base import ImaginaireModel
-from cosmos_framework.utils import log, misc
-from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.checkpoint.dcp import (
     AsyncMode,
     CustomLoadPlanner,
@@ -40,8 +37,12 @@ from cosmos_framework.checkpoint.dcp import (
     DistributedCheckpointer as _DistributedCheckpointer,
 )
 from cosmos_framework.checkpoint.dcp import ModelWrapper as VFMModelWrapper
+from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.model.generator.distillation.optimizer import OptimizerContainerLike, is_optimizer_container
+from cosmos_framework.utils import log, misc
+from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.generator.rand_state import get_rand_state_dict
+from cosmos_framework.utils.quantized_optimizer_names import refuse_rank_local_optimizer
 
 __all__: tuple[str, ...] = (
     "DistributedCheckpointer",
@@ -175,6 +176,11 @@ class DistributedCheckpointer(_DistributedCheckpointer):
         scheduler: Any = None,
         grad_scaler: torch.amp.GradScaler | None = None,
     ) -> int:
+        # Per-phase optimizers go through torch's generic DCP state, which cannot hold rank-local
+        # (eight-bit / FP32-master) payloads, sync or async: refuse before training.
+        refuse_rank_local_optimizer(
+            optimizer, "Distillation checkpointing", "use a standard optimizer for distillation"
+        )
         if self.callbacks is not None:
             self.callbacks.on_load_checkpoint_start(model)
 
@@ -346,6 +352,11 @@ class DistributedCheckpointer(_DistributedCheckpointer):
         iteration: int = 0,
         epoch: int | None = None,
     ) -> None:
+        # Per-phase optimizers go through torch's generic DCP state, which cannot hold rank-local
+        # (eight-bit / FP32-master) payloads, sync or async: refuse before training.
+        refuse_rank_local_optimizer(
+            optimizer, "Distillation checkpointing", "use a standard optimizer for distillation"
+        )
         if self.async_mode == AsyncMode.ASYNC_WITH_PINNED_MEM:
             self._wait_for_previous_async_checkpoint()
 

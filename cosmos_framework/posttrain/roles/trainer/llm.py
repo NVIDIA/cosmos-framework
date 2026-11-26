@@ -54,6 +54,11 @@ from cosmos_framework.posttrain.utils.identity import json_identity_equal, norma
 from cosmos_framework.posttrain.utils.log import info0
 from cosmos_framework.posttrain.utils.profile import ProfileRecord, live_cuda_tensor_summary
 from cosmos_framework.posttrain.utils.residency import HostOffload, make_offload
+from cosmos_framework.utils.quantized_optimizer_names import (
+    is_local_master_optimizer,
+    is_quantized_optimizer,
+    supports_host_offload,
+)
 
 if TYPE_CHECKING:
     from cosmos_framework.posttrain.checkpoint.store import CheckpointStore
@@ -748,6 +753,10 @@ class LLMTrainer(BaseTrainer):
                 metrics["train/learning_rate"] = update_learning_rate
                 metrics.update(self._outcome_metrics("skipped"))
                 return metrics
+            if self.force_finite_grads and (is_local_master_optimizer(self.opt) or is_quantized_optimizer(self.opt)):
+                # The window's gradients passed the collective finite check above; the master owner
+                # (or the bare eight-bit backend) need not repeat that scan, collective and host sync.
+                self.opt.note_gradients_checked_finite()
             self._run_partial_update_stage(stage="optimizer_step", action=self.opt.step)
             self._run_partial_update_stage(
                 stage="post_optimizer_step",
@@ -965,6 +974,9 @@ class LLMTrainer(BaseTrainer):
             raise RuntimeError(
                 f"prepare_weight_sync requires a completed accumulation window, got _accum={self._accum}"
             )
+        # This hand-off moves the optimizer's device state and nothing else of it; the policy (which
+        # FP32 masters alias) stays resident. Refuse only if there is such state to move.
+        self._require_host_offloadable_optimizer(device_state_only=True)
         profile = ProfileRecord("trainer_prepare_weight_sync")
         # A completed window's gradients are dead and otherwise keep per-layer reduce-scatter
         # buffers alive. The next window starts by materializing fresh gradients.
@@ -976,12 +988,29 @@ class LLMTrainer(BaseTrainer):
         profile.emit(**({"live_after": live} if live is not None else {}))
         return moved
 
+    def _require_host_offloadable_optimizer(self, *, device_state_only: bool = False) -> None:
+        """Refuse a host hand-off that would move opt-in optimizer state, before moving anything.
+
+        ``offload`` moves the policy too, whose storage FP32 masters alias, so it always refuses.
+        ``device_state_only`` (``prepare_weight_sync``) refuses only when the optimizer holds device
+        state the hand-off would move, e.g. not before the first step.
+        """
+        if supports_host_offload(self.opt):
+            return
+        if device_state_only:
+            from cosmos_framework.posttrain.utils.residency import _optimizer_device_entries
+
+            if not _optimizer_device_entries(self.opt):
+                return
+        raise ValueError("quantized/local-master optimizer offload is unsupported; paging is a separate capacity mode")
+
     def offload(self) -> float:
         """Release the complete trainer after publication so rollout can use the card.
 
         Returns:
             MiB of total trainer state parked on the host by this hand-off.
         """
+        self._require_host_offloadable_optimizer()
         if self._offload.offloaded:
             return 0.0
         profile = ProfileRecord("trainer_offload")
@@ -1261,12 +1290,15 @@ class LLMTrainer(BaseTrainer):
         self._require_checkpoint_boundary()
         # State-dict extraction gathers over the device mesh, so offloaded shards must come back first.
         self.onload()
+        if is_local_master_optimizer(self.opt) or is_quantized_optimizer(self.opt):
+            self._release_update_memory_for_checkpoint()
         component_plan = self.checkpoint_manager.component_plan(components)
         model_selected = component_plan.includes("model")
         optimizer_selected = component_plan.includes("optimizer")
         training_state_selected = component_plan.includes("training_state")
         needs_net = model_selected or optimizer_selected
         net = run_rank_converged(self._net, "LLM checkpoint network extraction") if needs_net else None
+        local_master = is_local_master_optimizer(self.opt)
 
         if self.checkpoint_format == "dcp":
             from torch.distributed.checkpoint.state_dict import get_model_state_dict, get_optimizer_state_dict
@@ -1279,19 +1311,22 @@ class LLMTrainer(BaseTrainer):
                 if model_selected
                 else None
             )
-            with self._preserved_pristine_optimizer() as guard:
-                optim_state = (
-                    run_rank_converged(  # [*sharded optimizer-state] values
-                        lambda: get_optimizer_state_dict(net, self.opt),
-                        "LLM DCP optimizer state extraction",
+            if local_master:
+                optim_state = self._master_optimizer_payload() if optimizer_selected else None
+            else:
+                with self._preserved_pristine_optimizer() as guard:
+                    optim_state = (
+                        run_rank_converged(  # [*sharded optimizer-state] values
+                            lambda: get_optimizer_state_dict(net, self.opt),
+                            "LLM DCP optimizer state extraction",
+                        )
+                        if optimizer_selected
+                        else None
                     )
-                    if optimizer_selected
-                    else None
-                )
-            # Write what a never-stepped optimizer actually holds. The extraction had to run to
-            # shape `param_groups` the way DCP expects, but the state it produced is an artifact
-            # of the probe step, not state this run ever computed.
-            optim_state = guard.sanitized(optim_state)
+                # Write what a never-stepped optimizer actually holds. The extraction had to run to
+                # shape `param_groups` the way DCP expects, but the state it produced is an artifact
+                # of the probe step, not state this run ever computed.
+                optim_state = guard.sanitized(optim_state)
             tail_components = {"trainer": self._trainer_state(), "data": data_state} if training_state_selected else {}
             live_tail_state = (
                 run_rank_converged(
@@ -1316,7 +1351,7 @@ class LLMTrainer(BaseTrainer):
         else:
             sharded = net is not None and is_dtensor_sharded(net)
             sharded_opt_sd: dict[str, Any] | None = None
-            if sharded:
+            if sharded or local_master:
                 from torch.distributed.checkpoint.state_dict import (
                     StateDictOptions,
                     get_model_state_dict,
@@ -1339,16 +1374,19 @@ class LLMTrainer(BaseTrainer):
                 # Same materializing extraction as the DCP branch, so the same rollback applies. The
                 # unsharded branch below reads `self.opt.state_dict()`, which does not initialize and
                 # already reports an empty state for a never-stepped optimizer.
-                with self._preserved_pristine_optimizer() as guard:
-                    sharded_opt_sd = (
-                        run_rank_converged(  # [*sharded optimizer-state] values
-                            lambda: get_optimizer_state_dict(net, self.opt),
-                            "LLM consolidated checkpoint sharded optimizer state extraction",
+                if local_master:
+                    sharded_opt_sd = self._master_optimizer_payload() if optimizer_selected else None
+                else:
+                    with self._preserved_pristine_optimizer() as guard:
+                        sharded_opt_sd = (
+                            run_rank_converged(  # [*sharded optimizer-state] values
+                                lambda: get_optimizer_state_dict(net, self.opt),
+                                "LLM consolidated checkpoint sharded optimizer state extraction",
+                            )
+                            if optimizer_selected
+                            else None
                         )
-                        if optimizer_selected
-                        else None
-                    )
-                sharded_opt_sd = guard.sanitized(sharded_opt_sd)
+                    sharded_opt_sd = guard.sanitized(sharded_opt_sd)
                 opt_sd = None
             else:
                 net_sd = net.state_dict() if model_selected and net is not None else None  # [*parameter] values
@@ -1415,9 +1453,49 @@ class LLMTrainer(BaseTrainer):
             ),
         )
 
+    def _release_update_memory_for_checkpoint(self) -> None:
+        """Opt-in optimizers: free the completed update's gradients, and for FP32 masters the device cache.
+
+        At a checkpoint boundary (checked by the caller) these gradients belong to a completed
+        update and are not recovery state; the next window starts with ``zero_grad`` anyway.
+        Keeping BF16 model gradients and FP32 master staging alive can strand several GiB per rank
+        while DCP/NCCL need temporary device allocations, and NCCL allocates outside PyTorch's
+        caching allocator. Only the FP32-master owner (the policy that runs sharded and saves through
+        DCP) also returns the cached blocks; the single-device ``parameter`` policy has no such
+        pressure and skips the synchronization. Default optimizers keep their historical save path.
+        """
+        self.opt.zero_grad(set_to_none=True)
+        if not is_local_master_optimizer(self.opt):
+            return
+
+        def release_device_cache() -> None:
+            # The optimizer's own parameters name the devices; no second model resolution.
+            devices = {p.device for group in self.opt.param_groups for p in group["params"] if p.is_cuda}
+            for device in sorted(devices, key=str):
+                with torch.cuda.device(device):
+                    # Deliberate, once per save (not per step): GR00T Joint PPO checkpoint saves after an
+                    # update ran out of device memory. The freed gradients stayed in PyTorch's cache, where
+                    # DCP's and NCCL's own allocations cannot use them. Returning the cached blocks to
+                    # the driver after the queued work finishes is what made that save fit.
+                    torch.cuda.synchronize(device)
+                    torch.cuda.empty_cache()
+
+        run_rank_converged(release_device_cache, "checkpoint device memory preparation")
+
+    def _master_optimizer_payload(self) -> dict[str, Any]:
+        """This rank's FP32-master optimizer payload; the same in both checkpoint formats."""
+        from cosmos_framework.posttrain.checkpoint.master_optimizer import optimizer_payload
+
+        return run_rank_converged(lambda: optimizer_payload(self.opt), "master optimizer snapshot")
+
     def load(self, path: str) -> int:
         """Restore model, optimizer, and exact trainer state."""
         import os
+
+        if is_local_master_optimizer(self.opt):
+            from cosmos_framework.posttrain.checkpoint.master_optimizer import restore
+
+            return restore(self, path)
 
         if self.checkpoint_manager.has_dcp_component(path, "model"):
             resumed = self._load_dcp(path)
@@ -1475,6 +1553,10 @@ class LLMTrainer(BaseTrainer):
                 # does not materialize moments. The reset keeps a pristine checkpoint pristine even
                 # when it is loaded into a trainer that has already stepped, or was written before
                 # the emptied-state save.
+                if "cosmos_quantized_optimizer" in opt_sd and not is_quantized_optimizer(self.opt):
+                    raise ValueError(
+                        "quantized optimizer checkpoint requires the same optimizer family for exact resume"
+                    )
                 self.opt.load_state_dict(opt_sd)
                 if pristine:
                     self.reset_optimizer_to_pristine()

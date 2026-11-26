@@ -9,7 +9,7 @@ import dataclasses
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from cosmos_framework.posttrain.schema import FINAL_REWARD_KEY, ObsBundle, SampleSource, Status, Trajectory, Transition
 
@@ -141,3 +141,6 @@ class JointUpdateReceipt(TypedDict):
     optimizer_metrics: list[dict[str, float]]
     learning_rates: dict[str, float]
     parameter_update_l2: dict[str, float]
+    # Rank-ordered CUDA caching-allocator receipts (None off-device); present only with the opt-in
+    # rl.cuda_allocator_receipts diagnostics, absent from default receipts.
+    cuda_allocator: NotRequired[list[dict[str, Any]] | None]
