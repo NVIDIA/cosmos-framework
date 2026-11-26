@@ -30,6 +30,7 @@ from cosmos_framework.posttrain.schema import (
     ObsBundle,
     SFTTarget,
 )
+from cosmos_framework.posttrain.utils.training_profile import profile_cpu_range, profile_processor
 
 _IGNORE = -100
 _CHAT = re.compile(r"<\|im_start\|>(system|user|assistant)\n(.*?)<\|im_end\|>", re.DOTALL)
@@ -483,7 +484,8 @@ class QwenSFTDataPacker(DataPacker):
         rendered = self._render(messages, sample.tools)
         roles = self._validate_boundaries(messages, sample.tools, rendered)
         if self.processor is None:
-            processed = dict(self.tokenizer(rendered, add_special_tokens=False, return_tensors="pt"))
+            with profile_cpu_range("sft.tokenizer"):
+                processed = dict(self.tokenizer(rendered, add_special_tokens=False, return_tensors="pt"))
         else:
             # Render separately so media kwargs cannot be swallowed as template variables. HF owns
             # media loading and expansion; never use RL's image-only normalization/removal helpers.
@@ -505,22 +507,23 @@ class QwenSFTDataPacker(DataPacker):
                         "part(s); media the template does not render (for example inside an assistant turn) cannot be "
                         "aligned with the processor's outputs"
                     )
-            processed = dict(
-                self.processor(
-                    text=[rendered],
-                    **{key: value for key, value in media.items() if value},
-                    **deepcopy(self.processor_kwargs),
-                    **(
-                        {"return_mm_token_type_ids": True}
-                        if "mm_token_type_ids" in self.processor.model_input_names
-                        else {}
-                    ),
-                    add_special_tokens=False,
-                    padding=False,
-                    truncation=False,
-                    return_tensors="pt",
+            with profile_processor(self.processor):
+                processed = dict(
+                    self.processor(
+                        text=[rendered],
+                        **{key: value for key, value in media.items() if value},
+                        **deepcopy(self.processor_kwargs),
+                        **(
+                            {"return_mm_token_type_ids": True}
+                            if "mm_token_type_ids" in self.processor.model_input_names
+                            else {}
+                        ),
+                        add_special_tokens=False,
+                        padding=False,
+                        truncation=False,
+                        return_tensors="pt",
+                    )
                 )
-            )
         ids_tensor = processed.pop("input_ids")  # [1,L]
         if ids_tensor.ndim != 2 or ids_tensor.shape[0] != 1:
             raise ValueError("SFT processor must produce exactly one sequence")
