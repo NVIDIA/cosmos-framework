@@ -69,6 +69,16 @@ curl -fsS "$NIM_URL/v1/metadata" | python3 -m json.tool
 Confirm that metadata identifies the intended runtime and primary endpoint.
 Generator uses `/v1/infer`, and Reasoner uses `/v1/chat/completions`.
 
+The example images and videos are stored with [Git LFS](https://git-lfs.com/).
+If you cloned the repository without Git LFS, the media files are small text
+pointers and requests that use them will fail. Install `git-lfs`, then run this
+from the repository root:
+
+```bash
+git lfs install
+git lfs pull --include=".agents/skills/cookbooks/cosmos3/**/assets/**"
+```
+
 Run an example that matches the active runtime and model. For a general-purpose
 Generator, start with an image request:
 

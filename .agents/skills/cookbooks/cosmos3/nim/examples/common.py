@@ -152,7 +152,13 @@ def media_to_data_url(path: Path) -> str:
     except KeyError as exc:
         supported = ", ".join(sorted(_MIME_TYPES))
         raise ValueError(f"Unsupported media type; use one of: {supported}") from exc
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    data = path.read_bytes()
+    if data.startswith(b"version https://git-lfs.github.com/spec/v1"):
+        raise ValueError(
+            f"{path} is a Git LFS pointer, not the media file. Install git-lfs, "
+            "then run `git lfs pull` from the repository root."
+        )
+    encoded = base64.b64encode(data).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
 
 
