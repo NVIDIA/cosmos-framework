@@ -339,6 +339,14 @@ The README's own "Run" command, quoted as text (retired `.ipynb`, no target here
 `cd "$FRAMEWORK_ROOT/.agents/skills/cookbooks/cosmos3/quantization"` then
 `DEMO=1 I2V_COND_DIR=/path/to/cond_images "$COSMOS3_QUANTIZE_VENV/bin/jupyter" nbconvert --to notebook --execute --output-dir "$RUN_ARTIFACTS" --ExecutePreprocessor.kernel_name=cosmos3-quantize --ExecutePreprocessor.timeout=7200 quantize_super_image2video.ipynb`.
 
+## Variant 4 — Nano Transfer-Auto (multiview)
+
+Reference: [`references/quantize-transfer-auto.md`](references/quantize-transfer-auto.md). This variant is not a
+notebook. `cosmos_framework/quantization/transfer_auto.py` calibrates through the native `OmniInference.generate` on
+request JSONL files (7 cameras, all 35 steps), optionally searches the weight scales, and exports 504 linears to
+static E4M3 from the BF16 source. Three commands: `calibrate`, `search`, `export`
+(`python -m cosmos_framework.quantization.transfer_auto <command>`). Read the reference before the first command.
+
 ## Demo vs. full runs (README)
 
 |                     | `DEMO=1` (default)              | `DEMO=0` (full calibration)                    |
@@ -453,6 +461,7 @@ the top). Do not look for the notebooks; these files replace them.
 | `references/quantize-cosmos3.md`           | Variant 1 — the former `quantize_cosmos3.ipynb`: Edge, Nano and Super video models (`t2v`)                                                                |
 | `references/quantize-super-text2image.md`  | Variant 2 — the former `quantize_super_text2image.ipynb`: Super Text-to-Image base and 4-step distilled (`t2i`)                                           |
 | `references/quantize-super-image2video.md` | Variant 3 — the former `quantize_super_image2video.ipynb`: Super Image-to-Video base and 4-step distilled (`i2v`), conditioning images                    |
+| `references/quantize-transfer-auto.md`     | Variant 4 — Nano Transfer-Auto recipe (`cosmos_framework/quantization/transfer_auto.py`): calibrate, weight-scale search, export; 504 linears; MAPS       |
 | `../cookbooks/cosmos3/README.md`           | Shared environment setup guide (Cosmos Framework section, system packages, vLLM / vLLM-Omni server install); not part of this skill                       |
 
 Origin: the retired cookbooks/cosmos3/quantization notebooks and README of the public cosmos-framework repository

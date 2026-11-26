@@ -15,11 +15,12 @@ These notebooks are walkthroughs of that API.
 
 ## What's in this folder
 
-| Path                                                              | Role                                            |
-| ----------------------------------------------------------------- | ----------------------------------------------- |
-| [quantize_cosmos3.ipynb](quantize-cosmos3.md)                     | Edge, Nano, and Super video-model quantization. |
-| [quantize_super_text2image.ipynb](quantize-super-text2image.md)   | Base and distilled Text-to-Image quantization.  |
-| [quantize_super_image2video.ipynb](quantize-super-image2video.md) | Base and distilled Image-to-Video quantization. |
+| Path                                                              | Role                                                       |
+| ----------------------------------------------------------------- | ---------------------------------------------------------- |
+| [quantize_cosmos3.ipynb](quantize-cosmos3.md)                     | Edge, Nano, and Super video-model quantization.            |
+| [quantize_super_text2image.ipynb](quantize-super-text2image.md)   | Base and distilled Text-to-Image quantization.             |
+| [quantize_super_image2video.ipynb](quantize-super-image2video.md) | Base and distilled Image-to-Video quantization.            |
+| [quantize-transfer-auto.md](quantize-transfer-auto.md)            | Nano Transfer-Auto recipe (multiview, native calibration). |
 
 The whole pipeline for one checkpoint is a single call:
 
