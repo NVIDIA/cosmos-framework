@@ -488,15 +488,12 @@ class FThetaCamera(CameraBase):
         deg2rad = np.pi / 180.0
 
         while ray_angle >= np.float32(0.0):
-            temp_dval = self._fw_poly.deriv()(self._max_ray_angle).item()
+            temp_dval = self._fw_poly.deriv()(ray_angle).item()
             if temp_dval < 0:
                 is_fw_poly_slope_negative_in_domain = True
             ray_angle -= deg2rad * np.float32(1.0)
 
         if is_fw_poly_slope_negative_in_domain:
-            ray_angle = (np.float32(self._max_ray_angle)).copy()
-            while ray_angle >= np.float32(0.0):
-                ray_angle -= deg2rad * np.float32(1.0)
             raise ArithmeticError("FThetaCamera: derivative of distortion within image interior is negative")
 
         # Evaluate the forward polynomial at point (self._max_ray_angle, 0)
