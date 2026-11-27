@@ -155,7 +155,11 @@ def find_framework_root(start: Path) -> Path:
 FRAMEWORK_ROOT = find_framework_root(Path.cwd().resolve())
 COSMOS_ROOT = FRAMEWORK_ROOT / ".agents" / "skills"
 TRANSFER_ROOT = COSMOS_ROOT / "cookbooks" / "cosmos3" / "generator" / "transfer"
-SPECS_DIR = TRANSFER_ROOT / "specs"
+# framework-specs/ in the cosmos3-inference-transfer skill, specs/ in the cookbook directory
+SPECS_DIR = next(
+    (d for d in (TRANSFER_ROOT / "framework-specs", TRANSFER_ROOT / "specs") if d.is_dir()),
+    TRANSFER_ROOT / "framework-specs",
+)
 ASSETS_DIR = TRANSFER_ROOT / "assets"
 OUTPUT_ROOT = Path(
     os.environ.get("COSMOS3_TRANSFER_VLLM_OUTPUT_ROOT", TRANSFER_ROOT / "outputs" / "vllm_omni")

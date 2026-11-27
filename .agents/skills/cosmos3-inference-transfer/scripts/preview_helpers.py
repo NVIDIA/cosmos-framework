@@ -29,22 +29,38 @@ def _ffmpeg_exe() -> str:
     )
 
 
+# The skill keeps the specs in framework-specs/, not specs/: GCC reads a `specs` entry in its working
+# directory as its spec file when LIBRARY_PATH has an empty or "." entry, so a specs/ folder in the
+# directory the skill runs from broke every gcc call there, Triton's JIT build included.
+# The cookbook directory still uses specs/.
+SPEC_DIR_NAMES = ("framework-specs", "specs")
+
+
+def _find_specs_dir(root: Path) -> Path | None:
+    for name in SPEC_DIR_NAMES:
+        if (root / name).is_dir():
+            return root / name
+    return None
+
+
 def _transfer_root() -> Path:
     root = os.environ.get("COSMOS3_TRANSFER_ROOT")
     if root:
         return Path(root).resolve()
     here = Path(__file__).resolve().parent
-    if (here / "specs").is_dir():
-        return here
+    for candidate in (here, here.parent):
+        if _find_specs_dir(candidate):
+            return candidate
     for path in [Path.cwd().resolve(), *Path.cwd().resolve().parents]:
         candidate = path / "cookbooks" / "cosmos3" / "generator" / "transfer"
-        if (candidate / "specs").is_dir():
+        if _find_specs_dir(candidate):
             return candidate
     return here
 
 
 def _specs_dir() -> Path:
-    return _transfer_root() / "specs"
+    root = _transfer_root()
+    return _find_specs_dir(root) or root / SPEC_DIR_NAMES[0]
 
 
 def _output_root() -> Path:

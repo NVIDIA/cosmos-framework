@@ -468,7 +468,7 @@ def get_pipe(model: str) -> Cosmos3OmniModularPipeline:
 
 
 def run_transfer(control: str, *, model: str) -> Path:
-    """Run one control modality with the sampling values from `specs/<control>.json`."""
+    """Run one control modality with the sampling values from `framework-specs/<control>.json`."""
     spec = load_transfer_spec(control)
     height, width = spec_dimensions(spec)
     control_path = resolve_spec_path(spec[control]["control_path"])

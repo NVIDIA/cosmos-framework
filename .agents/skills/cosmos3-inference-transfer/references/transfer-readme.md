@@ -71,6 +71,8 @@ exactly: `cd` into the framework repo first, then invoke the venv's Python or to
 # In this cosmos checkout: packages/cosmos3 (or packages/cosmos-framework).
 export COSMOS_FRAMEWORK=/path/to/cosmos-framework   # e.g. <cosmos_root>/packages/cosmos3
 export TRANSFER_ROOT=$(pwd)/cookbooks/cosmos3/generator/transfer
+# framework-specs/ in the cosmos3-inference-transfer skill, specs/ in the cookbook directory
+export SPECS_DIR="$TRANSFER_ROOT/framework-specs"; [ -d "$SPECS_DIR" ] || SPECS_DIR="$TRANSFER_ROOT/specs"
 
 # NGC containers bundle libtorch in LD_LIBRARY_PATH which conflicts with Triton/CUDA.
 unset LD_LIBRARY_PATH
@@ -85,7 +87,7 @@ cd "$COSMOS_FRAMEWORK"
 CUDA_VISIBLE_DEVICES=0 \
 .venv/bin/python -m cosmos_framework.scripts.inference \
   --parallelism-preset=latency \
-  -i "$TRANSFER_ROOT/specs/edge.json" \
+  -i "$SPECS_DIR/edge.json" \
   -o "$TRANSFER_ROOT/outputs/Cosmos3-Nano/" \
   --checkpoint-path Cosmos3-Nano \
   --seed 2026
@@ -102,7 +104,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
   --master-addr=127.0.0.1 --master-port=29500 \
   -m cosmos_framework.scripts.inference \
   --parallelism-preset=latency \
-  -i "$TRANSFER_ROOT/specs/edge.json" \
+  -i "$SPECS_DIR/edge.json" \
   -o "$TRANSFER_ROOT/outputs/Cosmos3-Super/" \
   --checkpoint-path Cosmos3-Super \
   --seed 2026
@@ -116,7 +118,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 | GPUs                   | 1                                        | 4+                                                              |
 
 The input spec sets `prompt_path` and a hint block with `control_path` pointing at the
-checked-in assets under [`assets/`](../assets) via paths relative to [`specs/`](../specs).
+checked-in assets under [`assets/`](../assets) via paths relative to [`framework-specs/`](../framework-specs).
 
 Outputs are written under the directory passed to `-o`, with one subdirectory per sample
 name, e.g. `outputs/Cosmos3-Nano/transfer_edge/vision.mp4`.
@@ -195,7 +197,7 @@ To run **Cosmos3-Super** instead, load the larger checkpoint:
 [`run_video_transfer_with_diffusers.ipynb`](diffusers.md) is
 the full tutorial for the Diffusers backend: it provisions a dedicated venv, then runs
 edge, blur, depth, segmentation, and world-scenario-map transfer on Cosmos3-Nano followed
-by the same five controls on Cosmos3-Super. It reads the same [`specs/`](../specs) files and
+by the same five controls on Cosmos3-Super. It reads the same [`framework-specs/`](../framework-specs) files and
 reuses the previews from [`preview_helpers.py`](../scripts/preview_helpers.py), writing outputs to
 `outputs/notebooks/diffusers/<model>/transfer_<control>/vision.mp4`.
 
@@ -369,7 +371,7 @@ Path("/tmp/cosmos3_transfer_depth.mp4").write_bytes(response.content)
 
 ### Spec field reference
 
-A representative spec (`specs/edge.json`):
+A representative spec (`framework-specs/edge.json`):
 
 ```json
 {
@@ -419,7 +421,7 @@ Key fields:
   control paths, five single-control transfer requests, and compact previews. The API
   also accepts unweighted multi-control requests by including multiple hint blocks in
   `extra_params`.
-- [`specs/`](../specs) — checked-in Framework input JSON per control (paths relative to `specs/`).
+- [`framework-specs/`](../framework-specs) — checked-in Framework input JSON per control (paths relative to `framework-specs/`).
   Shared by both Nano and Super.
 
 ### Troubleshooting

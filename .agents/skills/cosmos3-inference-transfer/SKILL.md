@@ -13,7 +13,7 @@ description: >
   text/image-to-video without a control video (cosmos3-inference-generate-media), for Reasoner inference,
   or for quantizing a checkpoint yourself (cosmos3-quantization). Ships the edge, blur
   and depth control videos, every prompt, the negative prompt and the framework specs in assets/
-  and specs/; the seg and wsm control videos are fetched by a documented command.
+  and framework-specs/; the seg and wsm control videos are fetched by a documented command.
 ---
 
 # Cosmos3 Video Transfer (control-to-video)
@@ -36,9 +36,15 @@ Before the first command of any variant — including a single edge smoke:
 3. Environment setup is the shared setup guide [`../cookbooks/cosmos3/README.md`](../cookbooks/cosmos3/README.md) — every README quickstart opens
    with "Set up the environment: … setup", pointing at its "Cosmos Framework", "Diffusers", "TensorRT-LLM Generator" or "vLLM-Omni" section; the
    framework notebook is self-contained instead (§ 4–§ 6 install the system packages, clone the framework and run `uv sync`).
-4. Where the inputs live (skill note): `specs/` and `assets/` of this skill directory (tables below). The notebooks resolve everything from
+4. Where the inputs live (skill note): `framework-specs/` and `assets/` of this skill directory (tables below). The notebooks resolve everything from
    `find_repo_root()` → `.agents/skills/cookbooks/cosmos3/generator/transfer`; in this skill that directory is the skill directory itself. Run
-   everything from here; the replacement for the notebooks' path cells is in "Paths" below.
+   everything from here; the replacement for the notebooks' path cells is in "Paths" below. The folder is `framework-specs/`, not the
+   cookbook's `specs/`: GCC reads a `specs` entry in its working directory as its spec file whenever `LIBRARY_PATH` has an empty or `.`
+   entry — `nvcr.io/nvidia/pytorch:25.09-py3` sets `LIBRARY_PATH=/usr/local/cuda/lib64/stubs:`, whose trailing empty entry is the cwd — so a
+   `specs/` folder here made every gcc call from this directory fail with `gcc: fatal error: cannot read spec file './specs': Is a
+   directory` — Triton's JIT build of its `cuda_utils` helper on Variant 2's first denoising step among them. The
+   reference files' path cells and shell examples take `framework-specs/` when it exists and `specs/` otherwise, so they work from
+   this directory and from the cookbook directory; never create a `specs` file or folder here.
 5. Guardrails, as the sources state them: "Blur, segmentation, and WSM use the Guardrail and require access to the gated
    [nvidia/Cosmos-1.0-Guardrail](https://huggingface.co/nvidia/Cosmos-1.0-Guardrail) HF repository. The edge and depth calls explicitly disable
    the safety checker." (diffusers notebook; the vLLM-Omni notebook's edge and depth requests do the same). Server-wide switches named by the
@@ -53,7 +59,7 @@ Before the first command of any variant — including a single edge smoke:
   with Cosmos3-Nano or Cosmos3-Super, in-process (Cosmos Framework, Diffusers) or against a server (vLLM-Omni, SGLang, TensorRT-LLM)
 - Use for multi-control transfer: "Cosmos Framework, TensorRT-LLM, and vLLM-Omni support multi-control transfer. Per-hint weighting is supported
   only by Cosmos Framework; the serving backends accept multiple unweighted controls. Diffusers also accepts multiple precomputed controls
-  without per-hint weights." (README); the framework example derives edge and blur from a raw source video (`specs/multi_control.json`)
+  without per-hint weights." (README); the framework example derives edge and blur from a raw source video (`framework-specs/multi_control.json`)
 - Use to pick the transfer backend and model size for the GPUs at hand
 - Not for Transfer-Auto or Sim-Transfer: "**Transfer-Auto** is driven like a transfer model (control video in, photoreal video out) but belongs
   to the Simulation family" (simulation cookbook README) — use `../cosmos3-inference-simulation-auto/SKILL.md` and
@@ -67,20 +73,21 @@ Before the first command of any variant — including a single edge smoke:
 "Sample assets under `assets/` cover spatial control signals paired with `prompt.json` files" and "All examples share `assets/negative_prompt.json`
 for the negative caption" (README). The README's table, with what ships in this skill (paths relative to this skill directory):
 
-| Control (README)     | Asset folder                  | Inference input                                    | Generation duration (README) | Framework spec             | In this skill                                                                                                                                                                                |
-| -------------------- | ----------------------------- | -------------------------------------------------- | ---------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Edge (Canny)         | `assets/edge/`                | `control_edge.mp4` + `prompt.json`                 | 121 frames @ 30 FPS          | `specs/edge.json`          | both vendored (`control_edge.mp4` 0.66 MiB)                                                                                                                                                  |
-| Blur                 | `assets/blur/`                | `control_blur.mp4` + `prompt.json`                 | 121 frames @ 30 FPS          | `specs/blur.json`          | both vendored (`control_blur.mp4` 0.39 MiB)                                                                                                                                                  |
-| Depth                | `assets/depth/`               | `control_depth.mp4` + `prompt.json`                | 121 frames @ 30 FPS          | `specs/depth.json`         | both vendored (`control_depth.mp4` 1.00 MiB)                                                                                                                                                 |
-| Segmentation         | `assets/seg/`                 | `control_seg.mp4` + `prompt.json`                  | 121 frames @ 30 FPS          | `specs/seg.json`           | `prompt.json` vendored; `control_seg.mp4` (4.77 MiB) NOT vendored — materialise it (below)                                                                                                   |
-| World scenario (WSM) | `assets/wsm/`                 | `control_wsm.mp4` + `prompt.json`                  | 100 frames @ 10 FPS          | `specs/wsm.json`           | `prompt.json` vendored; `control_wsm.mp4` (3.44 MiB) NOT vendored — materialise it (below)                                                                                                   |
-| Multi-control        | `assets/multi_control/`       | `vision_path` + multiple hints (Framework example) | 93 frames @ 16 FPS           | `specs/multi_control.json` | `prompt.json` vendored (the folder's only file); the source video is the spec's `vision_path` URL — § 19: "computed on-the-fly via `vision_path`. No pre-computed control files are needed." |
-| Negative caption     | `assets/negative_prompt.json` | every spec's `negative_prompt_file`                | —                            | —                          | vendored                                                                                                                                                                                     |
+| Control (README)     | Asset folder                  | Inference input                                    | Generation duration (README) | Framework spec                       | In this skill                                                                                                                                                                                |
+| -------------------- | ----------------------------- | -------------------------------------------------- | ---------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Edge (Canny)         | `assets/edge/`                | `control_edge.mp4` + `prompt.json`                 | 121 frames @ 30 FPS          | `framework-specs/edge.json`          | both vendored (`control_edge.mp4` 0.66 MiB)                                                                                                                                                  |
+| Blur                 | `assets/blur/`                | `control_blur.mp4` + `prompt.json`                 | 121 frames @ 30 FPS          | `framework-specs/blur.json`          | both vendored (`control_blur.mp4` 0.39 MiB)                                                                                                                                                  |
+| Depth                | `assets/depth/`               | `control_depth.mp4` + `prompt.json`                | 121 frames @ 30 FPS          | `framework-specs/depth.json`         | both vendored (`control_depth.mp4` 1.00 MiB)                                                                                                                                                 |
+| Segmentation         | `assets/seg/`                 | `control_seg.mp4` + `prompt.json`                  | 121 frames @ 30 FPS          | `framework-specs/seg.json`           | `prompt.json` vendored; `control_seg.mp4` (4.77 MiB) NOT vendored — materialise it (below)                                                                                                   |
+| World scenario (WSM) | `assets/wsm/`                 | `control_wsm.mp4` + `prompt.json`                  | 100 frames @ 10 FPS          | `framework-specs/wsm.json`           | `prompt.json` vendored; `control_wsm.mp4` (3.44 MiB) NOT vendored — materialise it (below)                                                                                                   |
+| Multi-control        | `assets/multi_control/`       | `vision_path` + multiple hints (Framework example) | 93 frames @ 16 FPS           | `framework-specs/multi_control.json` | `prompt.json` vendored (the folder's only file); the source video is the spec's `vision_path` URL — § 19: "computed on-the-fly via `vision_path`. No pre-computed control files are needed." |
+| Negative caption     | `assets/negative_prompt.json` | every spec's `negative_prompt_file`                | —                            | —                                    | vendored                                                                                                                                                                                     |
 
-Skill note (not in the source): `specs/*.json` are byte-identical copies of the cookbook's `specs/` (which stays in the cookbook for the framework
+Skill note (not in the source): `framework-specs/*.json` are byte-identical copies of the cookbook's `specs/` (which stays in the cookbook for the framework
 tests), kept next to `assets/` so the specs' relative `control_path`, `prompt_path` and `negative_prompt_file` values (one directory up, into
 `assets/`) resolve exactly as in the cookbook — the framework validates a spec inside the spec's own folder, and the notebooks' `resolve_spec_path`
-resolves against the spec's parent. The vendored control videos are plain blobs (nested `.gitattributes`), identical to the cookbook's LFS objects
+resolves against the spec's parent; the folder name differs from the cookbook's because of the GCC spec-file lookup ("Read this first"
+item 4), and the relative values are unaffected because both folders sit one level below `assets/`. The vendored control videos are plain blobs (nested `.gitattributes`), identical to the cookbook's LFS objects
 (same sha256). The two videos over the vendoring limit stay in the cookbook's `assets/` as LFS objects; fetch them into this skill's `assets/` before
 a `seg` or `wsm` run (the LFS pointers give sizes 5,000,598 and 3,611,984 bytes and the sha256 `oid`s `cb3faf8e…29b64b` and `614a207c…60b6ae`):
 
@@ -93,7 +100,7 @@ done
 ls -l assets/*/control_*.mp4   # five videos. Alternative: `git lfs pull --include=".agents/skills/cookbooks/cosmos3/generator/transfer/assets/**"` in a checkout with git-lfs, then copy the two files here
 ```
 
-`scripts/preview_helpers.py` is the cookbook's `preview_helpers.py`, unchanged. Skill note (not in the source): the notebooks import
+`scripts/preview_helpers.py` is the cookbook's `preview_helpers.py`; skill change: it looks for `framework-specs/` before `specs/`. Skill note (not in the source): the notebooks import
 `preview_helpers` from their own directory (`sys.path.insert(0, str(COSMOS3_TRANSFER_ROOT))`, or the `_root` search for the cookbook transfer
 directory in the framework notebook's preview cells); here put `scripts/` on `sys.path`, as the "Paths" block does, or copy the file next to the
 code you run — do not edit it. Its `preview_transfer` / `preview_multi_control` need ffmpeg (`imageio_ffmpeg` or `ffmpeg` on PATH) and read
@@ -127,9 +134,9 @@ COSMOS_ROOT = Path.cwd().resolve()       # this skill directory; the helpers' re
 FRAMEWORK_ROOT = COSMOS_ROOT             # vLLM-Omni notebook only (its find_framework_root result is not used elsewhere)
 TRANSFER_ROOT = COSMOS_ROOT              # the notebooks' cookbooks/cosmos3/generator/transfer
 COSMOS3_TRANSFER_ROOT = TRANSFER_ROOT    # the diffusers notebook's name for it
-SPECS_DIR = TRANSFER_ROOT / "specs"
+SPECS_DIR = TRANSFER_ROOT / "framework-specs"
 ASSETS_DIR = TRANSFER_ROOT / "assets"
-os.environ["COSMOS3_TRANSFER_ROOT"] = str(TRANSFER_ROOT)   # preview_helpers resolves specs/ and outputs from it
+os.environ["COSMOS3_TRANSFER_ROOT"] = str(TRANSFER_ROOT)   # preview_helpers resolves framework-specs/ and outputs from it
 sys.path.insert(0, str(TRANSFER_ROOT / "scripts"))         # `from preview_helpers import ...`
 ```
 
@@ -154,13 +161,15 @@ venv and run the notebook. The commands mirror the notebook exactly: `cd` into t
 # In this cosmos checkout: packages/cosmos3 (or packages/cosmos-framework).
 export COSMOS_FRAMEWORK=/path/to/cosmos-framework   # e.g. <cosmos_root>/packages/cosmos3
 export TRANSFER_ROOT=$(pwd)/cookbooks/cosmos3/generator/transfer
+# framework-specs/ in the cosmos3-inference-transfer skill, specs/ in the cookbook directory
+export SPECS_DIR="$TRANSFER_ROOT/framework-specs"; [ -d "$SPECS_DIR" ] || SPECS_DIR="$TRANSFER_ROOT/specs"
 
 # NGC containers bundle libtorch in LD_LIBRARY_PATH which conflicts with Triton/CUDA.
 unset LD_LIBRARY_PATH
 ```
 
 Skill note (not in the source): from this skill directory, `export TRANSFER_ROOT="$PWD"` replaces the `$(pwd)/cookbooks/cosmos3/generator/transfer`
-line — the specs and assets are here — and the filtered `LD_LIBRARY_PATH` export of § 3 below replaces `unset LD_LIBRARY_PATH` (keep a cuda-compat dir). Then the README's Nano block, verbatim:
+line — the specs and assets are here; the `SPECS_DIR` line then picks `framework-specs/` ("Read this first" item 4) — and the filtered `LD_LIBRARY_PATH` export of § 3 below replaces `unset LD_LIBRARY_PATH` (keep a cuda-compat dir). Then the README's Nano block, verbatim:
 
 ```bash
 cd "$COSMOS_FRAMEWORK"
@@ -169,7 +178,7 @@ cd "$COSMOS_FRAMEWORK"
 CUDA_VISIBLE_DEVICES=0 \
 .venv/bin/python -m cosmos_framework.scripts.inference \
   --parallelism-preset=latency \
-  -i "$TRANSFER_ROOT/specs/edge.json" \
+  -i "$SPECS_DIR/edge.json" \
   -o "$TRANSFER_ROOT/outputs/Cosmos3-Nano/" \
   --checkpoint-path Cosmos3-Nano \
   --seed 2026
@@ -190,7 +199,8 @@ shell call what the notebook's § 3 cell puts into `os.environ`:
 
 ```bash
 # Skill note (not in the notebook): the § 3 cell's environment for the %%bash cells of references/cosmos-framework.md
-export COSMOS3_TRANSFER_ROOT="$PWD"                                                   # this skill directory (specs/, assets/)
+export COSMOS3_TRANSFER_ROOT="$PWD"                                                   # this skill directory (framework-specs/, assets/)
+export COSMOS3_SPECS_DIR="$COSMOS3_TRANSFER_ROOT/framework-specs"                     # the § 3 cell resolves and exports it; the %%bash cells read their spec from it
 export COSMOS3_TRANSFER_OUTPUT_ROOT="${COSMOS3_TRANSFER_OUTPUT_ROOT:-$PWD/outputs/notebooks}"
 export COSMOS3_REPO="${COSMOS3_REPO:?set COSMOS3_REPO to the framework checkout (an existing tree skips the clone of § 5; a new path is cloned there)}"
 export COSMOS3_GIT_URL="${COSMOS3_GIT_URL:-https://github.com/NVIDIA/cosmos-framework.git}"; export HF_TOKEN="${HF_TOKEN:-}"   # HF_TOKEN: the § 2 cell (empty when `hf auth login` is used)
@@ -201,8 +211,8 @@ export COSMOS3_MASTER_ADDR="${COSMOS3_MASTER_ADDR:-127.0.0.1}"; export COSMOS3_M
 export LD_LIBRARY_PATH="$(tr ':' '\n' <<<"${LD_LIBRARY_PATH:-}" | grep -v -E 'torch|cudnn|nccl|tensorrt|triton|site-packages|dist-packages' | paste -sd: -)"   # skill note (not in the notebook): drops only the inherited NGC library dirs that conflict with the venv's torch and keeps a cuda-compat dir (docs/setup.md: do not clear LD_LIBRARY_PATH unconditionally); the notebook's `unset` / `os.environ.pop` / `env -u LD_LIBRARY_PATH` lines are its NGC-container shortcut — run the cells without them; verify after § 6: `.venv/bin/python -c 'import torch; torch.cuda.init(); print(torch.cuda.get_device_name())'`
 ```
 
-The notebook's § 9 cell is the README command with `-i "$COSMOS3_TRANSFER_ROOT/specs/edge.json"`, `-o "$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Nano"`
-and `cd "$COSMOS3_REPO"`; its output is `<COSMOS3_TRANSFER_OUTPUT_ROOT>/Cosmos3-Nano/transfer_edge/vision.mp4`. § 19 (Nano, `specs/multi_control.json`):
+The notebook's § 9 cell is the README command with `-i "$COSMOS3_SPECS_DIR/edge.json"`, `-o "$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Nano"`
+and `cd "$COSMOS3_REPO"`; its output is `<COSMOS3_TRANSFER_OUTPUT_ROOT>/Cosmos3-Nano/transfer_edge/vision.mp4`. § 19 (Nano, `framework-specs/multi_control.json`):
 "Combines **edge** (Canny) and **blur** controls simultaneously from a single source video, computed on-the-fly via `vision_path`. No pre-computed
 control files are needed." "The framework also saves the intermediate control signals alongside the output: `control_edge.mp4` and `control_blur.mp4`."
 
@@ -455,8 +465,8 @@ What the notebooks' viewer cells check, then verify the file yourself:
 - vLLM-Omni and SGLang: `view_transfer(control, output)` raises `missing output: … (run <control> transfer first)` unless `output_path.is_file()`, then
   previews control and output the same way.
 - TensorRT-LLM: `run_transfer` itself verifies the response — non-empty, `video/mp4` content type, `ftyp` at bytes 4–8.
-- Expected facts from the sources: edge, blur, depth and segmentation "121 frames @ 30 FPS", WSM "100 frames @ 10 FPS" (README table; `specs/wsm.json`
-  carries `num_frames: 101`), multi-control "93 frames @ 16 FPS"; "`720` + `16,9` → 1280 × 720" (Spec field reference) — blur is 4:3 (`specs/blur.json`:
+- Expected facts from the sources: edge, blur, depth and segmentation "121 frames @ 30 FPS", WSM "100 frames @ 10 FPS" (README table; `framework-specs/wsm.json`
+  carries `num_frames: 101`), multi-control "93 frames @ 16 FPS"; "`720` + `16,9` → 1280 × 720" (Spec field reference) — blur is 4:3 (`framework-specs/blur.json`:
   `"aspect_ratio": "4,3"`; TensorRT-LLM `1104x832`). "Output frame count and geometry come from the control video" (README).
 - Skill note (not in the source) — tool commands:
   `ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=codec_name,width,height,r_frame_rate,nb_read_frames,duration -of default=nw=1 <file>`;
@@ -478,8 +488,8 @@ the notebooks or the cookbook README; these files replace them.
 | `references/vllm-omni.md`        | Variant 3 — `run_video_transfer_with_vllm_omni.ipynb` (launch, Quantized Checkpoints, request helpers, five controls)                                                                                       |
 | `references/sglang.md`           | Variant 4 — `run_video_transfer_with_sglang.ipynb` (launch, FP8, request helpers, five controls)                                                                                                            |
 | `references/trt-llm.md`          | Variant 5 — `run_video_transfer_with_trt_llm.ipynb` (launch, request matrix, base64 control contract, five controls)                                                                                        |
-| `scripts/preview_helpers.py`     | The cookbook's preview helpers (spec loading, ffmpeg previews), unchanged                                                                                                                                   |
-| `specs/`                         | The cookbook's framework specs, unchanged (one per control plus `multi_control.json`)                                                                                                                       |
+| `scripts/preview_helpers.py`     | The cookbook's preview helpers (spec loading, ffmpeg previews); reads `framework-specs/` first                                                                                                              |
+| `framework-specs/`               | The cookbook's `specs/`, unchanged, renamed ("Read this first" item 4) (one per control plus `multi_control.json`)                                                                                          |
 
 Origin: the `.agents/skills/cookbooks/cosmos3/generator/transfer` notebooks, README and `preview_helpers.py` of the public cosmos-framework repository
 (`main` bbd4a67); superseded by this skill. The cookbook keeps `assets/` (LFS) and `specs/`: the framework tests import the specs and the NIM examples

@@ -135,7 +135,11 @@ COSMOS3_TRANSFER_OUTPUT_ROOT = Path(
         COSMOS3_TRANSFER_ROOT / "outputs" / "notebooks",
     )
 ).resolve()
-COSMOS3_SPECS_DIR = COSMOS3_TRANSFER_ROOT / "specs"
+# framework-specs/ in the cosmos3-inference-transfer skill, specs/ in the cookbook directory
+COSMOS3_SPECS_DIR = next(
+    (d for d in (COSMOS3_TRANSFER_ROOT / "framework-specs", COSMOS3_TRANSFER_ROOT / "specs") if d.is_dir()),
+    COSMOS3_TRANSFER_ROOT / "framework-specs",
+)
 TRANSFER_CONTROLS = ("edge", "blur", "depth", "seg", "wsm")
 
 
@@ -159,6 +163,7 @@ COSMOS3_NUM_GPUS = os.environ.get("COSMOS3_NUM_GPUS") or _detect_gpu_count()
 
 os.environ["COSMOS_ROOT"] = str(COSMOS_ROOT)
 os.environ["COSMOS3_TRANSFER_ROOT"] = str(COSMOS3_TRANSFER_ROOT)
+os.environ["COSMOS3_SPECS_DIR"] = str(COSMOS3_SPECS_DIR)
 os.environ["COSMOS3_REPO"] = str(COSMOS3_REPO)
 os.environ["COSMOS3_GIT_URL"] = COSMOS3_GIT_URL
 os.environ["COSMOS3_UV_GROUP"] = COSMOS3_UV_GROUP
@@ -410,7 +415,7 @@ if result.returncode != 0:
 
 ## 8. Input Specs and Preview Helpers
 
-Checked-in [`specs/<control>.json`](../specs) are model-agnostic — the same spec runs with Nano and Super.
+Checked-in [`framework-specs/<control>.json`](../framework-specs) are model-agnostic — the same spec runs with Nano and Super.
 
 Inference writes videos to:
 
@@ -461,7 +466,7 @@ Precomputed edge control (`control_edge.mp4`) + caption. Output:
 set -euo pipefail
 unset LD_LIBRARY_PATH
 CONTROL=edge
-SPEC="$COSMOS3_TRANSFER_ROOT/specs/${CONTROL}.json"
+SPEC="$COSMOS3_SPECS_DIR/${CONTROL}.json"
 OUT_DIR="$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Nano"
 mkdir -p "$OUT_DIR"
 echo "control=$CONTROL model=Cosmos3-Nano spec=$SPEC output=$OUT_DIR"
@@ -509,7 +514,7 @@ Blurred-reference control (`control_blur.mp4`) + caption. Output:
 set -euo pipefail
 unset LD_LIBRARY_PATH
 CONTROL=blur
-SPEC="$COSMOS3_TRANSFER_ROOT/specs/${CONTROL}.json"
+SPEC="$COSMOS3_SPECS_DIR/${CONTROL}.json"
 OUT_DIR="$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Nano"
 mkdir -p "$OUT_DIR"
 echo "control=$CONTROL model=Cosmos3-Nano spec=$SPEC output=$OUT_DIR"
@@ -557,7 +562,7 @@ Depth map control (`control_depth.mp4`) + caption. Output:
 set -euo pipefail
 unset LD_LIBRARY_PATH
 CONTROL=depth
-SPEC="$COSMOS3_TRANSFER_ROOT/specs/${CONTROL}.json"
+SPEC="$COSMOS3_SPECS_DIR/${CONTROL}.json"
 OUT_DIR="$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Nano"
 mkdir -p "$OUT_DIR"
 echo "control=$CONTROL model=Cosmos3-Nano spec=$SPEC output=$OUT_DIR"
@@ -605,7 +610,7 @@ Segmentation map control (`control_seg.mp4`) + caption. Output:
 set -euo pipefail
 unset LD_LIBRARY_PATH
 CONTROL=seg
-SPEC="$COSMOS3_TRANSFER_ROOT/specs/${CONTROL}.json"
+SPEC="$COSMOS3_SPECS_DIR/${CONTROL}.json"
 OUT_DIR="$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Nano"
 mkdir -p "$OUT_DIR"
 echo "control=$CONTROL model=Cosmos3-Nano spec=$SPEC output=$OUT_DIR"
@@ -653,7 +658,7 @@ World-scenario map control (`control_wsm.mp4`) + caption. Output:
 set -euo pipefail
 unset LD_LIBRARY_PATH
 CONTROL=wsm
-SPEC="$COSMOS3_TRANSFER_ROOT/specs/${CONTROL}.json"
+SPEC="$COSMOS3_SPECS_DIR/${CONTROL}.json"
 OUT_DIR="$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Nano"
 mkdir -p "$OUT_DIR"
 echo "control=$CONTROL model=Cosmos3-Nano spec=$SPEC output=$OUT_DIR"
@@ -705,7 +710,7 @@ Precomputed edge control (`control_edge.mp4`) + caption. Output:
 set -euo pipefail
 unset LD_LIBRARY_PATH
 CONTROL=edge
-SPEC="$COSMOS3_TRANSFER_ROOT/specs/${CONTROL}.json"
+SPEC="$COSMOS3_SPECS_DIR/${CONTROL}.json"
 OUT_DIR="$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Super"
 mkdir -p "$OUT_DIR"
 echo "control=$CONTROL model=Cosmos3-Super spec=$SPEC output=$OUT_DIR"
@@ -757,7 +762,7 @@ Blurred-reference control (`control_blur.mp4`) + caption. Output:
 set -euo pipefail
 unset LD_LIBRARY_PATH
 CONTROL=blur
-SPEC="$COSMOS3_TRANSFER_ROOT/specs/${CONTROL}.json"
+SPEC="$COSMOS3_SPECS_DIR/${CONTROL}.json"
 OUT_DIR="$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Super"
 mkdir -p "$OUT_DIR"
 echo "control=$CONTROL model=Cosmos3-Super spec=$SPEC output=$OUT_DIR"
@@ -809,7 +814,7 @@ Depth map control (`control_depth.mp4`) + caption. Output:
 set -euo pipefail
 unset LD_LIBRARY_PATH
 CONTROL=depth
-SPEC="$COSMOS3_TRANSFER_ROOT/specs/${CONTROL}.json"
+SPEC="$COSMOS3_SPECS_DIR/${CONTROL}.json"
 OUT_DIR="$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Super"
 mkdir -p "$OUT_DIR"
 echo "control=$CONTROL model=Cosmos3-Super spec=$SPEC output=$OUT_DIR"
@@ -861,7 +866,7 @@ Segmentation map control (`control_seg.mp4`) + caption. Output:
 set -euo pipefail
 unset LD_LIBRARY_PATH
 CONTROL=seg
-SPEC="$COSMOS3_TRANSFER_ROOT/specs/${CONTROL}.json"
+SPEC="$COSMOS3_SPECS_DIR/${CONTROL}.json"
 OUT_DIR="$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Super"
 mkdir -p "$OUT_DIR"
 echo "control=$CONTROL model=Cosmos3-Super spec=$SPEC output=$OUT_DIR"
@@ -913,7 +918,7 @@ World-scenario map control (`control_wsm.mp4`) + caption. Output:
 set -euo pipefail
 unset LD_LIBRARY_PATH
 CONTROL=wsm
-SPEC="$COSMOS3_TRANSFER_ROOT/specs/${CONTROL}.json"
+SPEC="$COSMOS3_SPECS_DIR/${CONTROL}.json"
 OUT_DIR="$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Super"
 mkdir -p "$OUT_DIR"
 echo "control=$CONTROL model=Cosmos3-Super spec=$SPEC output=$OUT_DIR"
@@ -958,7 +963,7 @@ preview_transfer("wsm", model="Cosmos3-Super")
 Combines **edge** (Canny) and **blur** controls simultaneously from a single source video,
 computed on-the-fly via `vision_path`. No pre-computed control files are needed.
 
-Spec: [`specs/multi_control.json`](../specs/multi_control.json).
+Spec: [`framework-specs/multi_control.json`](../framework-specs/multi_control.json).
 Output:
 
 ```text
@@ -971,7 +976,7 @@ The framework also saves the intermediate control signals alongside the output:
 ```bash
 set -euo pipefail
 unset LD_LIBRARY_PATH
-SPEC="$COSMOS3_TRANSFER_ROOT/specs/multi_control.json"
+SPEC="$COSMOS3_SPECS_DIR/multi_control.json"
 OUT_DIR="$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Nano"
 mkdir -p "$OUT_DIR"
 echo "spec=$SPEC output=$OUT_DIR model=Cosmos3-Nano"
