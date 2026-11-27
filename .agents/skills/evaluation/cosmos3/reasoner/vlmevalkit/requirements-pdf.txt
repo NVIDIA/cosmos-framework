@@ -1,0 +1,2 @@
+# Optional PDF rendering for DUDE and MMLongBench.
+pypdfium2==5.15.2

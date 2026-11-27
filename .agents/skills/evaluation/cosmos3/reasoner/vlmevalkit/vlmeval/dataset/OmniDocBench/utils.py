@@ -11,7 +11,7 @@ import unicodedata
 import uuid
 from collections import defaultdict
 
-import Levenshtein
+from rapidfuzz.distance import Levenshtein
 import numpy as np
 from bs4 import BeautifulSoup
 from pylatexenc.latex2text import LatexNodes2Text
@@ -1037,10 +1037,8 @@ import pdb
 from collections import Counter, defaultdict
 
 import evaluate
-# from rapidfuzz.distance import Levenshtein
-import Levenshtein
 import numpy as np
-from Levenshtein import distance as Levenshtein_distance
+from rapidfuzz.distance.Levenshtein import distance as Levenshtein_distance
 from scipy.optimize import linear_sum_assignment
 
 

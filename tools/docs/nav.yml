@@ -42,7 +42,7 @@ nav:
           - Action: skills/cosmos3-inference-action/SKILL.md
           - Control-to-video transfer: skills/cosmos3-inference-transfer/SKILL.md
           - Reasoner: skills/cosmos3-inference-reasoning/SKILL.md
-          - Simulation: skills/cookbooks/cosmos3/simulation/README.md
+          - Simulation: skills/cosmos3-inference-simulation/SKILL.md
   - Post-Training:
       - Choose a path: post_training/choose_path.md
       - Model and algorithm support: post_training/model_algorithm_support.md
@@ -61,10 +61,10 @@ nav:
           - Sim-Auto: training_sim_auto.md
           - Sim-Transfer:
               - "Stage 0: teacher": training_sim_transfer_stage0.md
-              - Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-transfer/post-training/SKILL.md
+              - Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-transfer/SKILL.md
           - Sim-Bimanual:
               - Check training data: bimanual_data_preflight.md
-              - Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-bimanual/post-training/SKILL.md
+              - Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-bimanual/SKILL.md
           - Super four-step (DMD2): skills/cookbooks/cosmos3/generator/audiovisual/distill/README.md
       - RL:
           - Overview: posttrain/index.md
@@ -138,8 +138,8 @@ hold:
   - docs/transfer_numerical_preservation.md
   - docs/posttrain/reference/compatibility.md
   # These simulation pages clone the code from a fork; publish once they use this repo.
-  - .agents/skills/cookbooks/cosmos3/simulation/auto/auto.md
-  - .agents/skills/cookbooks/cosmos3/simulation/transfer/transfer.md
+  - .agents/skills/cosmos3-inference-simulation-auto/references/transfer-auto-guide.md
+  - .agents/skills/cosmos3-inference-simulation-transfer/references/transfer-guide.md
 
 # Repo-only pages: links to them go to GitHub.
 not_on_site:

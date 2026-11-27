@@ -44,7 +44,7 @@ from cosmos_framework.inference.common.args import (
     SampleOutputs,
     SetupArgs,
 )
-from cosmos_framework.inference.common.auto_fps import auto_camera_fps
+from cosmos_framework.inference.common.auto_fps import attach_auto_camera_fps, auto_camera_fps
 from cosmos_framework.inference.common.inference import (
     Inference,
     PreparedBatch,
@@ -1839,9 +1839,8 @@ class OmniInference(Inference):
         # Runtime-only policy: preserve immutable published checkpoint files and the shared
         # argument-builder signature. CLI, Ray and Python callers all use pipe.model_config.
         checkpoint_hf = setup_args.checkpoint_hf
-        setattr(
+        attach_auto_camera_fps(
             model.config,
-            "_auto_camera_fps",
             auto_camera_fps(
                 exported_metadata, repository=checkpoint_hf.repository if checkpoint_hf is not None else None
             ),

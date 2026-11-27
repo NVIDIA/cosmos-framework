@@ -3,9 +3,12 @@
 
 import pickle
 import random
+from typing import Any
 
 import numpy as np
 import torch
+
+from cosmos_framework.utils.safe_unpickle import safe_loads
 
 
 def get_rand_state_dict() -> dict[str, torch.Tensor]:
@@ -29,14 +32,17 @@ def set_rand_state_dict(state_dict: dict[str, torch.Tensor]) -> None:
     """
     Set the random state dictionary. used to restore the random state from a checkpoint.
     """
+    # Decode and validate both packed states before touching any generator, so a rejected checkpoint changes nothing.
+    numpy_state = unpack_numpy_state(
+        state_dict["numpy_packed_len"].item(), bytes(state_dict["numpy_packed_bytes"].tolist())
+    )
+    random_state = unpack_random_state(
+        state_dict["random_packed_len"].item(), bytes(state_dict["random_packed_bytes"].tolist())
+    )
     torch.set_rng_state(state_dict["torch"])
     torch.cuda.set_rng_state(state_dict["torch_cuda"])
-    np.random.set_state(
-        unpack_numpy_state(state_dict["numpy_packed_len"].item(), bytes(state_dict["numpy_packed_bytes"].tolist()))
-    )
-    random.setstate(
-        unpack_random_state(state_dict["random_packed_len"].item(), bytes(state_dict["random_packed_bytes"].tolist()))
-    )
+    np.random.set_state(numpy_state)
+    random.setstate(random_state)
 
 
 # MAX padding length for the random state
@@ -63,16 +69,71 @@ def pack_random_state(state: tuple[int, ...]) -> tuple[int, bytearray]:
     return len(packed_bytes), pad_packed_bytes(packed_bytes)
 
 
-def unpack_numpy_state(packed_len: int, packed_bytes: bytearray) -> tuple[int, ...]:
-    packed_bytes = packed_bytes[:packed_len]
-    # unpickle the state
-    return pickle.loads(packed_bytes)
+# The packed bytes come from a checkpoint and are untrusted, so they are unpickled through an allow-list:
+# a pickled ``np.random.get_state()`` references only these globals (``numpy._core`` on numpy >= 2,
+# ``numpy.core`` on numpy 1.x; protocol 2 encodes the key buffer with ``_codecs.encode`` and protocol 5
+# rebuilds it with ``_frombuffer``), and a pickled ``random.getstate()`` references none.
+NUMPY_STATE_PICKLE_GLOBALS = frozenset(
+    {
+        ("numpy._core.multiarray", "_reconstruct"),
+        ("numpy.core.multiarray", "_reconstruct"),
+        ("numpy._core.numeric", "_frombuffer"),
+        ("numpy.core.numeric", "_frombuffer"),
+        ("numpy", "ndarray"),
+        ("numpy", "dtype"),
+        ("_codecs", "encode"),
+    }
+)
+
+# Mersenne Twister state size in 32-bit words.
+MT19937_KEY_LEN = 624
 
 
-def unpack_random_state(packed_len: int, packed_bytes: bytearray) -> tuple[int, ...]:
-    packed_bytes = packed_bytes[:packed_len]
-    # unpickle the state
-    return pickle.loads(packed_bytes)
+def _unpickle_packed_state(packed_len: int, packed_bytes: bytes, allowed_globals: frozenset[tuple[str, str]]) -> Any:
+    max_len = min(MAX_PACKED_LEN, len(packed_bytes))
+    if type(packed_len) is not int or not 0 < packed_len <= max_len:
+        raise ValueError(f"Packed random state length {packed_len!r} is outside (0, {max_len}].")
+    return safe_loads(bytes(packed_bytes[:packed_len]), allowed_globals)
+
+
+def unpack_numpy_state(packed_len: int, packed_bytes: bytes) -> tuple[str, np.ndarray, int, int, float]:
+    state = _unpickle_packed_state(packed_len, packed_bytes, NUMPY_STATE_PICKLE_GLOBALS)
+    if type(state) is not tuple or len(state) != 5:
+        raise ValueError("Numpy random state must be a 5-tuple.")
+    algorithm, key, pos, has_gauss, cached_gaussian = state
+    if type(algorithm) is not str or algorithm != "MT19937":
+        raise ValueError(f"Numpy random state algorithm must be 'MT19937', got {algorithm!r}.")
+    if type(key) is not np.ndarray or key.dtype != np.uint32 or key.shape != (MT19937_KEY_LEN,):
+        raise ValueError(f"Numpy random state key must be a uint32 array of shape ({MT19937_KEY_LEN},).")
+    if type(pos) is not int or not 0 <= pos <= MT19937_KEY_LEN:
+        raise ValueError(f"Numpy random state position must be in [0, {MT19937_KEY_LEN}], got {pos!r}.")
+    if type(has_gauss) is not int or has_gauss not in (0, 1):
+        raise ValueError(f"Numpy random state has_gauss must be 0 or 1, got {has_gauss!r}.")
+    if type(cached_gaussian) is not float:
+        raise ValueError(f"Numpy random state cached gaussian must be a float, got {type(cached_gaussian)}.")
+    return state
+
+
+def unpack_random_state(packed_len: int, packed_bytes: bytes) -> tuple[int, tuple[int, ...], float | None]:
+    state = _unpickle_packed_state(packed_len, packed_bytes, frozenset())
+    if type(state) is not tuple or len(state) != 3:
+        raise ValueError("Python random state must be a 3-tuple.")
+    version, internal_state, gauss_next = state
+    if type(version) is not int or version != 3:
+        raise ValueError(f"Python random state version must be 3, got {version!r}.")
+    if (
+        type(internal_state) is not tuple
+        or len(internal_state) != MT19937_KEY_LEN + 1
+        or any(type(word) is not int or not 0 <= word < 2**32 for word in internal_state[:-1])
+        or type(internal_state[-1]) is not int
+        or not 0 <= internal_state[-1] <= MT19937_KEY_LEN
+    ):
+        raise ValueError(
+            f"Python random state must hold {MT19937_KEY_LEN} uint32 words and a position in [0, {MT19937_KEY_LEN}]."
+        )
+    if gauss_next is not None and type(gauss_next) is not float:
+        raise ValueError(f"Python random state gauss_next must be None or a float, got {type(gauss_next)}.")
+    return state
 
 
 if __name__ == "__main__":

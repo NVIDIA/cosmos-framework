@@ -13,9 +13,10 @@ from urllib.parse import urlparse
 import boto3
 from botocore.config import Config as S3Config
 from botocore.exceptions import ClientError
-from torch.distributed.checkpoint import FileSystemReader, FileSystemWriter
+from torch.distributed.checkpoint import FileSystemWriter
 from torch.distributed.checkpoint.filesystem import FileSystemBase
 
+from cosmos_framework.checkpoint.safe_dcp import SafeFileSystemReader
 from cosmos_framework.utils import log
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.easy_io.backends import auto_auth
@@ -481,7 +482,7 @@ class S3StorageWriter(FileSystemWriter):
         return S3FileSystem.validate_checkpoint_id(checkpoint_id)
 
 
-class S3StorageReader(FileSystemReader):
+class S3StorageReader(SafeFileSystemReader):
     def __init__(
         self, credential_path: str, path: Union[str, os.PathLike], enable_gcs_patch_in_boto3: bool = False
     ) -> None:

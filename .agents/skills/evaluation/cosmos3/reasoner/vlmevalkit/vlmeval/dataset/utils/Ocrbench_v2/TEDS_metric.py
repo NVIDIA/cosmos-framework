@@ -19,14 +19,13 @@ from collections import deque
 from itertools import product
 from typing import Any, Callable, Optional, Sequence
 
-import distance
 import editdistance
 import ipdb
-import Levenshtein
 import numpy as np
 from apted import APTED, Config
 from apted.helpers import Tree
 from lxml import etree, html
+from rapidfuzz.distance import Levenshtein
 from tqdm import tqdm
 from zss import Node, simple_distance
 
@@ -63,7 +62,7 @@ class CustomConfig(Config):
     def normalized_distance(self, *sequences):
         """Get distance from 0 to 1
         """
-        return float(distance.levenshtein(*sequences)) / self.maximum(*sequences)
+        return float(Levenshtein.distance(*sequences)) / self.maximum(*sequences)
 
     def rename(self, node1, node2):
         """Compares attributes of trees"""

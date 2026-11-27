@@ -81,6 +81,10 @@ CANARY_DIR = PurePosixPath(".github/scripts/skill_eval") / CANARY_SKILL  # CI-on
 # another cursor cell was running); the serialised runs confirm or refute it.
 # The repository's .github/skill-eval.yml sets `serial_backends: []`: with Claude Sonnet 5.5 as the cursor model the cursor
 # cells ran four at a time without a rejection (2026-10-29), so nothing is pinned there today.
+# `multi_gpu_runner_label:` (optional, no default): a cell whose case asks for more than one GPU (the case's own `gpus`
+# in eval.config, else the skill-wide top-level `gpus`; evaluator >= 0.3.5 reads the same two keys) also carries this
+# label, so it queues on the runner(s) that have that many GPUs instead of failing at container start on a one-GPU
+# node, while the one-GPU cases of the same skill run on any runner.
 DEFAULT_RUNNER_LABELS = ("self-hosted", "cosmos-skill-eval", "h100")
 DEFAULT_SERIAL_BACKENDS = ("cursor",)
 DEFAULT_SERIAL_RUNNER_LABEL = "cursor-serial"
@@ -175,6 +179,8 @@ class Config:
     runner_labels: list[str] = field(default_factory=lambda: list(DEFAULT_RUNNER_LABELS))
     serial_backends: list[str] = field(default_factory=lambda: list(DEFAULT_SERIAL_BACKENDS))
     serial_runner_label: str | None = DEFAULT_SERIAL_RUNNER_LABEL
+    # extra runs-on label for the cells of a case that asks for more than one GPU (None = no routing by GPU count)
+    multi_gpu_runner_label: str | None = None
 
 
 def _strip_comment(line: str) -> str:
@@ -287,6 +293,13 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
         raise OrchestrationError(
             f"config {path}: `serial_runner_label` must be one runner label (the cells of `serial_backends` need it)"
         )
+    multi_gpu_runner_label = data.get("multi_gpu_runner_label")
+    if multi_gpu_runner_label is not None and (
+        not isinstance(multi_gpu_runner_label, str) or not multi_gpu_runner_label
+    ):
+        raise OrchestrationError(
+            f"config {path}: `multi_gpu_runner_label` must be one runner label (remove the key to switch the routing off)"
+        )
     skills = data.get("skills")
     if skills is not None and (not isinstance(skills, list) or not skills):
         raise OrchestrationError(
@@ -318,6 +331,7 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
         runner_labels=optional_list("runner_labels", DEFAULT_RUNNER_LABELS),
         serial_backends=serial_backends,
         serial_runner_label=serial_runner_label or None,
+        multi_gpu_runner_label=multi_gpu_runner_label,
     )
 
 
@@ -569,6 +583,12 @@ class SkillPlan:
     cases: list[str] = field(default_factory=list)
     skipped_reason: str | None = None  # set -> listed under "Not evaluated" instead of getting a table
     canary: bool = False
+    gpus: int = 0  # the eval.config's top-level `gpus` (GPUs the task container asks for); 0 when absent
+    # per case: its own `gpus` when the case sets one, else the top-level value (the evaluator's rule since 0.3.5)
+    case_gpus: dict[str, int] = field(default_factory=dict)
+
+    def gpus_for(self, case: str) -> int:
+        return self.case_gpus.get(case, self.gpus)
 
 
 def skill_dir(skill: str, *, canary: bool = False) -> PurePosixPath:
@@ -596,7 +616,17 @@ def load_skill_plan(checkout: Path, skill: str, *, canary: bool = False) -> Skil
     if not isinstance(evals, list):
         return SkillPlan(skill, canary=canary, skipped_reason=f"`{relative}` has no `evals` list")
     cases = [str(entry["id"]) for entry in evals if isinstance(entry, dict) and entry.get("id")]
-    return SkillPlan(skill, cases=cases, canary=canary)
+
+    def whole(value: object) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    gpus = whole(data.get("gpus")) or 0
+    case_gpus = {
+        str(entry["id"]): count
+        for entry in evals
+        if isinstance(entry, dict) and entry.get("id") and (count := whole(entry.get("gpus"))) is not None
+    }
+    return SkillPlan(skill, cases=cases, canary=canary, gpus=gpus, case_gpus=case_gpus)
 
 
 def load_skill_plans(checkout: Path, skills: list[str], *, smoke: bool = True) -> list[SkillPlan]:
@@ -2642,29 +2672,49 @@ def load_plan(spec: str) -> dict:
         raise OrchestrationError(f"plan is not valid JSON: {exc}") from exc
 
 
-def runs_on(backend: str, config: Config | None = None) -> list[str]:
+def runs_on(backend: str, config: Config | None = None, *, multi_gpu: bool = False) -> list[str]:
     """`runs-on` labels of the job for a cell of this backend: `runner_labels`, plus `serial_runner_label` for a backend
     in `serial_backends` — exactly one runner carries that label, so those cells queue there and run one at a time
     (cursor: most likely a per-key concurrency cap on Cursor's side, see DEFAULT_SERIAL_BACKENDS). None = the defaults.
+    `multi_gpu` = the cell's case asks for more than one GPU: the cell also gets `multi_gpu_runner_label` when the
+    config names one, so it waits for a runner with that many GPUs.
     """
     labels = list(config.runner_labels if config else DEFAULT_RUNNER_LABELS)
     serial = config.serial_backends if config else DEFAULT_SERIAL_BACKENDS
     serial_label = config.serial_runner_label if config else DEFAULT_SERIAL_RUNNER_LABEL
     if backend in serial and serial_label and serial_label not in labels:
         labels.append(serial_label)
+    multi_gpu_label = config.multi_gpu_runner_label if config else None
+    if multi_gpu and multi_gpu_label and multi_gpu_label not in labels:
+        labels.append(multi_gpu_label)
     return labels
 
 
-def matrix_entries(cells: list[Cell], *, canary: bool, config: Config | None = None) -> list[dict]:
+def multi_gpu_cases(plans: list[SkillPlan]) -> frozenset[tuple[str, str]]:
+    """(skill, case) of the shipped skills' cases that ask for more than one GPU (the canary is never one)."""
+    return frozenset(
+        (plan.name, case) for plan in plans if not plan.canary for case in plan.cases if plan.gpus_for(case) > 1
+    )
+
+
+def matrix_entries(
+    cells: list[Cell],
+    *,
+    canary: bool,
+    config: Config | None = None,
+    multi_gpu: frozenset[tuple[str, str]] = frozenset(),
+) -> list[dict]:
     """Matrix `include` entries for the cells that still have to run (reused, not-selected and exhausted cells are not
     jobs). `runs_on` is the job's runner-label list as a JSON string: the workflow reads it with
-    `runs-on: ${{ fromJSON(matrix.runs_on) }}`."""
+    `runs-on: ${{ fromJSON(matrix.runs_on) }}`. `multi_gpu` = the (skill, case) pairs that need a multi-GPU runner."""
     return [
         {
             "skill": cell.skill,
             "backend": cell.backend,
             "case": cell.case,
-            "runs_on": json.dumps(runs_on(cell.backend, config)),
+            "runs_on": json.dumps(
+                runs_on(cell.backend, config, multi_gpu=(cell.skill, cell.case) in multi_gpu and not cell.canary)
+            ),
         }
         for cell in cells
         if bool(cell.canary) == canary and cell.state not in (CellState.CACHED, CellState.SKIPPED, CellState.EXHAUSTED)
@@ -3113,8 +3163,9 @@ def mode_plan(args: argparse.Namespace, deps: Deps) -> int:
         raise OrchestrationError(invalid_selection_message(options))
     info, plans, cells, hits = prepare_matrix(config, info, checkout, api, deps, options)
     started_at = deps.now()
+    multi_gpu = multi_gpu_cases(plans)
     canary_jobs = matrix_entries(cells, canary=True, config=config)
-    skill_jobs = matrix_entries(cells, canary=False, config=config)
+    skill_jobs = matrix_entries(cells, canary=False, config=config, multi_gpu=multi_gpu)
     not_selected = sum(1 for cell in cells if not cell.selected)
     exhausted = sum(1 for cell in cells if cell.state is CellState.EXHAUSTED)
     log(
@@ -3126,6 +3177,18 @@ def mode_plan(args: argparse.Namespace, deps: Deps) -> int:
         log(
             f"{serial} {'/'.join(config.serial_backends)} job(s) pinned to the runner labelled"
             f" `{config.serial_runner_label}`: they run one at a time"
+        )
+    routed = [job for job in skill_jobs if (job["skill"], job["case"]) in multi_gpu]
+    routed_cases = ", ".join(sorted({f"{job['skill']}/{job['case']}" for job in routed}))
+    if routed and config.multi_gpu_runner_label:
+        log(
+            f"{len(routed)} job(s) of {routed_cases} (eval.config `gpus` > 1) also carry the runner label"
+            f" `{config.multi_gpu_runner_label}`"
+        )
+    elif routed:
+        warn(
+            f"{len(routed)} job(s) of {routed_cases} ask for more than one GPU and no"
+            " `multi_gpu_runner_label` is configured: they can land on a one-GPU runner"
         )
     for name, jobs in (("canary", canary_jobs), ("skill", skill_jobs)):
         if len(jobs) > MATRIX_MAX_JOBS:

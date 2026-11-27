@@ -4,7 +4,7 @@ BeautifulSoup4
 evaluate
 func_timeout
 jmespath
-Levenshtein
+rapidfuzz>=3.9.5,<4
 lxml
 nltk
 pylatexenc

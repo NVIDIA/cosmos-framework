@@ -139,7 +139,7 @@ uv pip install --torch-backend="$COSMOS3_TORCH_BACKEND" \
   av \
   cosmos_guardrail \
   datasets \
-  draccus \
+  draccus==0.11.6 \
   huggingface_hub \
   imageio \
   imageio-ffmpeg \

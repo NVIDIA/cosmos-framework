@@ -105,3 +105,25 @@ benchmark's `data` section in the composed config.
 
 `build_judge` uses plain OpenAI model ids. Set `VLMEVAL_JUDGE_API_STYLE=gateway`
 when the judge endpoint expects provider-prefixed ids (`azure/openai/...`).
+
+## Public Perception Test validation
+
+`PerceptionTestLocal` (`vlmeval/dataset/perception_test.py`) evaluates Google
+DeepMind's public [Perception Test](https://github.com/google-deepmind/perception_test)
+validation multiple-choice questions (19,140 questions over 5,260 videos) with
+local top-1 scoring; no private dataset or credentials are required.
+`vlmeval.perception_test_local` pins the official annotations, cut mapping and
+archives by SHA-256 at source revision `3938d2f1ba3a6b502025741cea4cd73c7b3bdfaf`:
+`fetch_dataset(root, scope)` downloads metadata, smoke or full inputs,
+`prepare_dataset(root, smoke, require_media)` builds the selection, and
+`score_predictions(...)` scores existing predictions into a fresh directory.
+The default smoke selection is `video_8241`, official question IDs 0–4.
+Sixteen frames are sampled uniformly inside each official source cut
+(`-1` means all frames; positive cuts are exclusive stops) and downscaled only,
+to a maximum side of 768. Non-code materials are
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); retain attribution.
+
+```json
+{"data": {"PerceptionTest": {"class": "PerceptionTestLocal", "dataset": "PerceptionTest",
+  "data_root": "/perception-test", "nframe": 16, "smoke": true}}}
+```

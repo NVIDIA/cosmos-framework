@@ -8,3 +8,6 @@
 /examples/**/checkpoints
 /examples/**/output
 /examples/**/datasets
+
+# Ludus is a separate package with its own third-party license.
+/packages/ludus-renderer

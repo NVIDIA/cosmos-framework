@@ -1,19 +1,31 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import contextlib
+import http.server
 import json
 import os
+import sys
+import threading
+import types
+import urllib.parse
+import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from cosmos_framework.inference.args import DEFAULT_CHECKPOINT, DEFAULT_CHECKPOINT_NAME, OmniSetupOverrides
+from cosmos_framework.inference.common import args as common_args
 from cosmos_framework.inference.common.args import (
     CheckpointConfig,
     CheckpointOverrides,
     CheckpointType,
     ConfigArgs,
     ConfigFileType,
+    _HFRedirectHandler,
+    _is_hf_url,
+    _may_send_hf_token,
     download_file,
 )
 from cosmos_framework.inference.common.config import deserialize_config_dict
@@ -129,6 +141,155 @@ def test_download_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert json.loads(Path(f"{download_path}.meta").read_text()) == {
         "url": download_url_2,
     }
+
+
+@pytest.mark.parametrize(
+    ("url", "is_hf", "may_send_token"),
+    [
+        ("https://huggingface.co/a/b/resolve/main/x", True, True),
+        ("https://cdn-lfs.huggingface.co/x", True, True),
+        ("HTTPS://HuggingFace.CO/x", True, True),
+        ("http://huggingface.co/x", True, False),
+        ("s3://huggingface.co/x", True, False),
+        ("https://other.example/huggingface.co/x", False, False),
+        ("https://huggingface.co.other.example/x", False, False),
+        ("https://otherhuggingface.co/x", False, False),
+        ("https://huggingface.co@other.example/x", False, False),
+    ],
+)
+def test_hf_url_matches_parsed_host(url: str, is_hf: bool, may_send_token: bool):
+    assert _is_hf_url(url) is is_hf
+    assert _may_send_hf_token(url) is may_send_token
+
+
+@pytest.mark.parametrize(
+    ("url", "branch"),
+    [
+        ("https://huggingface.co/a/b/resolve/main/x.bin", "hf"),
+        ("https://other.example/huggingface.co/x.bin", "obstore"),
+        ("https://huggingface.co.other.example/x.bin", "obstore"),
+    ],
+)
+def test_download_dispatches_on_hf_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str, branch: str):
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(common_args, "_download_file_hf", lambda url, path: calls.append(("hf", url)))
+    fake_obstore = types.SimpleNamespace(
+        store=types.SimpleNamespace(from_url=lambda base_url: base_url),
+        get=lambda store, file_name: calls.append(("obstore", f"{store}/{file_name}")) or [b"data"],
+    )
+    monkeypatch.setitem(sys.modules, "obstore", fake_obstore)
+
+    common_args._download_file_url_once(url, tmp_path / "out.bin")
+
+    assert calls == [(branch, url)]
+
+
+def test_hf_download_upgrades_http_to_https(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    monkeypatch.setattr(common_args, "_download_file_hf", lambda url, path: calls.append(url))
+
+    common_args._download_file_url_once("http://huggingface.co/a/b/resolve/main/x.bin?download=true", tmp_path / "x")
+
+    assert calls == ["https://huggingface.co/a/b/resolve/main/x.bin?download=true"]
+
+
+@pytest.mark.parametrize(
+    ("newurl", "keeps_token"),
+    [
+        ("https://huggingface.co/a/b/resolve/main/y", True),
+        ("https://cdn-lfs.huggingface.co/x", True),
+        ("https://other.example/x", False),
+        ("http://huggingface.co/x", False),
+    ],
+)
+def test_hf_redirect_handler_drops_token_off_hf(newurl: str, keeps_token: bool):
+    req = urllib.request.Request(
+        "https://huggingface.co/a/b/resolve/main/x", headers={"Authorization": "Bearer test-token"}
+    )
+    # 'Request' normalizes header keys with 'str.capitalize', which leaves 'Authorization' unchanged.
+    assert req.has_header("Authorization")
+
+    new_req = _HFRedirectHandler().redirect_request(req, None, 302, "Found", {}, newurl)
+
+    assert new_req is not None
+    assert new_req.full_url == newurl
+    assert new_req.get_header("Authorization") == ("Bearer test-token" if keeps_token else None)
+
+
+@contextlib.contextmanager
+def _local_http_server(host: str, *, redirect_to: str | None = None, body: bytes = b"") -> Iterator[tuple[str, list]]:
+    """Serve GET requests on ``host`` at an ephemeral port.
+
+    Yields the base URL and the ``Authorization`` header seen on each request. With ``redirect_to``, every request
+    gets a 302 to the same path on that base URL; otherwise it gets ``body``.
+    """
+    auth_headers: list[str | None] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            auth_headers.append(self.headers.get("Authorization"))
+            if redirect_to is not None:
+                self.send_response(302)
+                self.send_header("Location", f"{redirect_to}{self.path}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        def log_message(self, format, *args) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer((host, 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://{host}:{server.server_address[1]}", auth_headers
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@pytest.fixture
+def _no_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep requests to the local test servers off any configured proxy."""
+    for name in ("no_proxy", "NO_PROXY"):
+        monkeypatch.setenv(name, "*")
+
+
+@pytest.mark.usefixtures("_no_proxy")
+def test_hf_token_dropped_on_redirect_to_other_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Treat 'localhost' as the Hugging Face host; the redirect goes to '127.0.0.1', a different host.
+    monkeypatch.setattr(common_args, "_is_hf_url", lambda url: urllib.parse.urlsplit(url).hostname == "localhost")
+    monkeypatch.setattr(common_args, "_may_send_hf_token", common_args._is_hf_url)
+    monkeypatch.setenv("HF_TOKEN", "test-token")
+    path = tmp_path / "out.bin"
+
+    with _local_http_server("127.0.0.1", body=b"file from B") as (url_b, auth_b):
+        with _local_http_server("localhost", redirect_to=url_b) as (url_a, auth_a):
+            common_args._download_file_hf(f"{url_a}/a/b/resolve/main/x.bin", path)
+
+    assert auth_a == ["Bearer test-token"]
+    assert auth_b == [None]
+    assert path.read_bytes() == b"file from B"
+
+
+@pytest.mark.usefixtures("_no_proxy")
+def test_hf_token_not_sent_over_http(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Treat the local server as a Hugging Face host; the real '_may_send_hf_token' still requires https.
+    monkeypatch.setattr(common_args, "_is_hf_url", lambda url: True)
+    # Call the downloader directly: the dispatcher would upgrade the URL to https first.
+    monkeypatch.setenv("HF_TOKEN", "test-token")
+    path = tmp_path / "out.bin"
+
+    with _local_http_server("127.0.0.1", body=b"data") as (url, auth_headers):
+        common_args._download_file_hf(f"{url}/x.bin", path)
+
+    assert auth_headers == [None]
+    assert path.read_bytes() == b"data"
 
 
 def test_parse_checkpoint_path(tmp_path: Path):

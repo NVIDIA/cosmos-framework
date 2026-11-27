@@ -2,7 +2,7 @@
 import json
 import re
 
-import Levenshtein
+from rapidfuzz.distance import Levenshtein
 import numpy as np
 
 # --- SCRM Logic ---

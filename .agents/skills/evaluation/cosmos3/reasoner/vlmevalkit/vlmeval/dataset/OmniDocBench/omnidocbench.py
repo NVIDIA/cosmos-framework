@@ -204,7 +204,8 @@ class end2end_evaluator():
         pred = sum(read_order_pred, [])
         pred = [x for x in pred if x]
         if len(pred) > 0 or len(gt) > 0:
-            import Levenshtein
+            from rapidfuzz.distance import Levenshtein
+
             edit = Levenshtein.distance(gt, pred)/ max(len(pred), len(gt))
             return {
                 'gt': gt,

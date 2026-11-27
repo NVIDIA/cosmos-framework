@@ -229,6 +229,8 @@ python -m cosmos_framework.inference.ray.serve --parallelism-preset=latency -o o
 
 Then submit requests via curl, the submit CLI, or the Gradio UI.
 
+The server has no authentication and listens on `127.0.0.1` by default. Don't expose it beyond the host without an authenticating proxy. The debug-replay fields `pickle_file` and `tensors_file` are CLI-only; the server rejects requests that set them.
+
 ### Q: How do I fix a torch.compile error during inference?
 
 Add a command-line argument `--no-use-torch-compile`

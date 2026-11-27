@@ -17,9 +17,30 @@ jobs:
         with:
           lfs: true
       - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
       - uses: astral-sh/setup-uv@v7
         with:
           # Keep in step with [tool.uv].constraint-dependencies in pyproject.toml.
           version: "0.11.29"
       - run: uvx pre-commit@4.5.1 run -a -c ci/.pre-commit-config-base.yaml
       - run: uvx pre-commit@4.5.1 run -a
+      - name: Verify license audit fixes
+        run: |
+          python ci/check_removed_license_dependencies.py
+          uv build --no-sources --out-dir "$RUNNER_TEMP/license-dist/framework"
+          python ci/check_license_artifacts.py . "$RUNNER_TEMP/license-dist/framework"
+          uv build --no-sources --out-dir "$RUNNER_TEMP/license-dist/ludus" packages/ludus-renderer
+          python ci/check_license_artifacts.py packages/ludus-renderer "$RUNNER_TEMP/license-dist/ludus"
+      - name: Verify Ludus is excluded from the Docker build context
+        run: |
+          image_root="$RUNNER_TEMP/license-image-context"
+          docker buildx build --file - --output "type=local,dest=$image_root" . <<'DOCKERFILE'
+          FROM scratch
+          COPY packages/ /packages/
+          DOCKERFILE
+          test -f "$image_root/packages/transformers-cosmos3/pyproject.toml"
+          if test -e "$image_root/packages/ludus-renderer"; then
+            echo "Ludus must be excluded from the Framework Docker build context." >&2
+            exit 1
+          fi

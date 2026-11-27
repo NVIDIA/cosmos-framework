@@ -6,7 +6,7 @@ import time
 from collections import defaultdict, deque
 
 import evaluate
-import Levenshtein
+from rapidfuzz.distance import Levenshtein
 import pandas as pd
 from apted import APTED, Config
 from apted.helpers import Tree
