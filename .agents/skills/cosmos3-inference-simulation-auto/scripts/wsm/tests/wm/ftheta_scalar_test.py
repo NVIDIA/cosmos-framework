@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from cosmos_auto.wm import pcd_utils
 from cosmos_auto.wm.camera.ftheta import FThetaCamera, eval_polynomial_derivative
@@ -33,3 +34,13 @@ def test_scalar_ftheta_polynomial_derivative() -> None:
     coeffs = [3.0, 2.0, 5.0]
     assert pcd_utils.eval_polynomial_derivative(0.0, coeffs) == 2.0
     assert pcd_utils.eval_polynomial_derivative(2.0, coeffs) == 22.0
+
+
+def test_forward_polynomial_with_negative_slope_inside_the_image_is_rejected() -> None:
+    # fw(t) = 1000 t - 3000 t^3 + 2500 t^5 has fw'(t) < 0 for t in (0.371, 0.763) and
+    # fw' > 0 again past that, so two different ray angles project to the same image radius.
+    intrinsics = np.array(
+        [640, 360, 1280, 720, 0, 1000, 0, -3000, 0, 2500, 0], dtype=np.float32
+    )
+    with pytest.raises(ArithmeticError, match="within image interior"):
+        FThetaCamera.from_numpy(intrinsics, device="cpu")
